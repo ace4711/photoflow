@@ -1,4 +1,3 @@
-import AppKit
 import Vision
 
 /// Uses Apple Vision's on-device classifier to tag real estate photos
@@ -91,26 +90,18 @@ actor VisionTaggingService {
     }
 
     /// Classify a photo and return real estate tags.
-    /// Vision's perform() is synchronous and blocks the calling thread, so we
-    /// dispatch it to a GCD thread to avoid starving Swift's cooperative pool.
+    /// Uses Vision's modern async `ClassifyImageRequest` (macOS 15+) — `perform(on:)`
+    /// is itself async and non-blocking, so unlike the old `VNClassifyImageRequest`/
+    /// `VNImageRequestHandler` pair, no manual GCD dispatch is needed to keep it off
+    /// Swift's cooperative thread pool.
     func tagPhoto(at url: URL) async -> PhotoTags? {
-        guard let cgImage = loadCGImage(from: url) else { return nil }
-
-        let results: [VNClassificationObservation]? = await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let request = VNClassifyImageRequest()
-                let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-                do {
-                    try handler.perform([request])
-                    continuation.resume(returning: request.results)
-                } catch {
-                    print("Vision classification failed: \(error)")
-                    continuation.resume(returning: nil)
-                }
-            }
+        let results: [ClassificationObservation]
+        do {
+            results = try await ClassifyImageRequest().perform(on: url)
+        } catch {
+            print("Vision classification failed: \(error)")
+            return nil
         }
-
-        guard let results else { return nil }
 
         // Filter to observations with meaningful confidence
         let significant = results.filter { $0.confidence > 0.1 }
@@ -214,11 +205,6 @@ actor VisionTaggingService {
     }
 
     // MARK: - Helpers
-
-    private func loadCGImage(from url: URL) -> CGImage? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        return CGImageSourceCreateImageAtIndex(source, 0, nil)
-    }
 
     private func determinePrimaryCategory(tags: [String], rawLabels: [(String, Double)]) -> String {
         // Check if tags lean toward exterior or interior
