@@ -10,6 +10,27 @@ struct PreviewCullView: View {
     @State private var showNotes: Bool = false
     @State private var dictPulse: Bool = false
 
+    // MARK: - "Föreslå gallring" (Fas 3b)
+
+    /// Single-level undo buffer for the last "Föreslå gallring" batch — stores
+    /// each affected photo's decision *before* the suggestion was applied, so
+    /// `z` can restore exactly that (and only that) batch. A manual accept/
+    /// reject on any photo doesn't touch this buffer; `z` always undoes the
+    /// most recent `s` press, not general undo.
+    @State private var lastSuggestionUndo: [(id: String, wasAccepted: Bool, wasRejected: Bool)]?
+    @State private var suggestionMessage: String?
+    @State private var suggestionMessageTask: Task<Void, Never>?
+
+    /// Normalized (0...1) quality-score cutoff for the filmstrip's "low
+    /// quality" warning icon. Calibrated loosely against the real Exempelgatan 7
+    /// preview session (Fas 3b, see FORBATTRINGAR.md): raw Vision aesthetics
+    /// scores there ranged ~0.28...0.85 (median 0.56), i.e. ~0.64...0.93
+    /// normalized — 0.7 sits below the median and flags roughly the bottom
+    /// quarter without being the calibrated duplicate-clustering threshold
+    /// (that one has real precision/recall data behind it; this is a rough
+    /// "worth a second look" cutoff and can be tuned later).
+    private static let lowQualityThreshold = 0.7
+
     private let audio = AudioService.shared
 
     var currentPhoto: PhotoItem? {
@@ -46,6 +67,14 @@ struct PreviewCullView: View {
             withAnimation { showNotes.toggle() }
             return .handled
         }
+        .onKeyPress(characters: CharacterSet(charactersIn: "s")) { _ in
+            suggestCulling()
+            return .handled
+        }
+        .onKeyPress(characters: CharacterSet(charactersIn: "z")) { _ in
+            undoLastSuggestion()
+            return .handled
+        }
         .onAppear {
             let outDir = pipeline.outputDirectory ?? AppSettings.shared.outputDirectory
             notesManager.setup(
@@ -68,6 +97,28 @@ struct PreviewCullView: View {
         .overlay(alignment: .bottom) {
             CountdownOverlay()
                 .padding(.bottom, 20)
+        }
+        .overlay(alignment: .top) {
+            suggestionBanner
+                .padding(.top, 12)
+        }
+    }
+
+    // MARK: - "Föreslå gallring" banner
+
+    @ViewBuilder
+    private var suggestionBanner: some View {
+        if let suggestionMessage {
+            Text(suggestionMessage)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(Color.orange.opacity(0.92))
+                .cornerRadius(10)
+                .shadow(color: .black.opacity(0.3), radius: 4)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .onTapGesture { withAnimation { self.suggestionMessage = nil } }
         }
     }
 
@@ -176,6 +227,12 @@ struct PreviewCullView: View {
 
                 dictationButtonFS
                 Spacer()
+                fsSymbol(icon: "wand.and.stars", label: "S", color: .white, action: suggestCulling)
+                Spacer()
+                if lastSuggestionUndo != nil {
+                    fsSymbol(icon: "arrow.uturn.backward.circle", label: "Z", color: .white, action: undoLastSuggestion)
+                    Spacer()
+                }
                 fsSymbol(icon: "arrow.down.right.and.arrow.up.left", label: "F", color: .white, action: { withAnimation { isFullscreen = false } })
                 Spacer()
                 fsSymbol(icon: "rectangle.portrait.and.arrow.right", label: "ESC", color: .orange, action: finishCulling)
@@ -294,6 +351,14 @@ struct PreviewCullView: View {
                     Spacer()
                 }
 
+                symbolButton(icon: "wand.and.stars", label: "S", color: .secondary, action: suggestCulling)
+                Spacer()
+
+                if lastSuggestionUndo != nil {
+                    symbolButton(icon: "arrow.uturn.backward.circle", label: "Z", color: .secondary, action: undoLastSuggestion)
+                    Spacer()
+                }
+
                 symbolButton(icon: "arrow.up.left.and.arrow.down.right", label: "F", color: .secondary, action: { withAnimation(.easeInOut(duration: 0.25)) { isFullscreen.toggle() } })
                 Spacer()
                 symbolButton(icon: "rectangle.portrait.and.arrow.right", label: "ESC", color: .orange, action: finishCulling)
@@ -363,6 +428,16 @@ struct PreviewCullView: View {
                     }
                 }
             }
+
+            // Vision-kvalitetsindikatorer (bottom-right): dubblettgrupp / låg kvalitet
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    qualityIndicatorIcons(for: photo)
+                        .offset(x: -3, y: -3)
+                }
+            }
         }
         .padding(3)
         .background(
@@ -422,6 +497,102 @@ struct PreviewCullView: View {
         if photo.accepted { return .green.opacity(0.6) }
         if photo.rejected { return .red.opacity(0.6) }
         return .clear
+    }
+
+    // MARK: - Vision-kvalitetsbeslutsstöd (Fas 3b)
+
+    /// All photos sharing `photo`'s duplicate group (including `photo` itself),
+    /// in `allPhotos` order — empty when the photo has no duplicate group.
+    private func duplicateGroup(for photo: PhotoItem) -> [PhotoItem] {
+        guard let gid = photo.duplicateGroupID else { return [] }
+        return pipeline.allPhotos.filter { $0.duplicateGroupID == gid }
+    }
+
+    /// "2/3"-style position within the photo's duplicate group, `nil` if it
+    /// isn't in one.
+    private func duplicatePosition(for photo: PhotoItem) -> (index: Int, total: Int)? {
+        let group = duplicateGroup(for: photo)
+        guard group.count > 1, let idx = group.firstIndex(where: { $0.id == photo.id }) else { return nil }
+        return (idx + 1, group.count)
+    }
+
+    /// True when `photo` has the lowest `sharpness` among its duplicate group
+    /// (a hint that it's the blurriest of a set of otherwise-identical shots).
+    private func isBlurriestInDuplicateGroup(_ photo: PhotoItem) -> Bool {
+        let group = duplicateGroup(for: photo)
+        guard group.count > 1, let mySharpness = photo.sharpness else { return false }
+        let minSharpness = group.compactMap(\.sharpness).min()
+        return minSharpness == mySharpness
+    }
+
+    @ViewBuilder
+    private func qualityIndicatorIcons(for photo: PhotoItem) -> some View {
+        HStack(spacing: 2) {
+            if photo.duplicateGroupID != nil {
+                Image(systemName: "square.on.square.fill")
+                    .font(.system(size: 9))
+                    .foregroundColor(.white)
+                    .padding(3)
+                    .background(Circle().fill(Color.blue.opacity(0.85)))
+            }
+            if let q = photo.qualityScore, q < Self.lowQualityThreshold {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 9))
+                    .foregroundColor(.white)
+                    .padding(3)
+                    .background(Circle().fill(Color.orange.opacity(0.85)))
+            }
+        }
+    }
+
+    /// Comma-formatted (Swedish) degrees string, e.g. "2,3".
+    private func swedishDegrees(_ value: Double) -> String {
+        String(format: "%.1f", value).replacingOccurrences(of: ".", with: ",")
+    }
+
+    private func hasQualityWarnings(_ photo: PhotoItem) -> Bool {
+        duplicatePosition(for: photo) != nil
+            || isBlurriestInDuplicateGroup(photo)
+            || (photo.horizonAngle.map { abs($0) > 1.0 } ?? false)
+            || photo.isUtility
+    }
+
+    @ViewBuilder
+    private func qualityWarningChips(for photo: PhotoItem) -> some View {
+        HStack(spacing: 8) {
+            if let pos = duplicatePosition(for: photo) {
+                warningChip(icon: "square.on.square", text: "Dubblett \(pos.index)/\(pos.total)", color: .blue)
+            }
+            if isBlurriestInDuplicateGroup(photo) {
+                warningChip(icon: "eye.trianglebadge.exclamationmark", text: "Suddig?", color: .orange)
+            }
+            if let angle = photo.horizonAngle, abs(angle) > 1.0 {
+                warningChip(icon: "level", text: "Skev horisont \(swedishDegrees(angle))°", color: .yellow)
+            }
+            if photo.isUtility {
+                warningChip(icon: "doc.text.image", text: "Nyttobild", color: .gray)
+            }
+        }
+    }
+
+    private func warningChip(icon: String, text: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon).font(.system(size: 10))
+            Text(text)
+        }
+        .font(.system(size: 11, weight: .medium))
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(Capsule().fill(color.opacity(0.35)))
+    }
+
+    private func qualityBadge(_ score: Double) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: "star.fill")
+                .font(.system(size: 11))
+                .foregroundColor(.yellow)
+            Text(String(format: "%.2f", score))
+        }
     }
 
     // MARK: - Dictation button with pulsing rings
@@ -518,8 +689,15 @@ struct PreviewCullView: View {
                 Text(photo.exposureDisplay)
                 Text("f/\(String(format: "%.1f", photo.fNumber))")
                 Text("ISO \(photo.iso)")
+                if let quality = photo.qualityScore {
+                    qualityBadge(quality)
+                }
             }
             .font(.system(.body, design: .monospaced))
+
+            if hasQualityWarnings(photo) {
+                qualityWarningChips(for: photo)
+            }
 
             if !photo.aiTags.isEmpty {
                 HStack(spacing: 6) {
@@ -585,6 +763,65 @@ struct PreviewCullView: View {
             pipeline.currentStep = .done
             pipeline.statusMessage = "Gallring klar! \(accepted) bilder accepterade, \(rejected) borttagna."
             audio.playAllDone()
+        }
+    }
+
+    // MARK: - "Föreslå gallring" (Fas 3b)
+
+    /// Marks (never deletes — deletion only happens in `finishCulling`) the
+    /// photos Vision considers worst: the sharpest/highest-quality photo in
+    /// each duplicate group is kept, the rest in that group are suggested for
+    /// rejection, and any `isUtility` photo is suggested regardless of
+    /// grouping. Never touches a photo the user already decided on. See
+    /// `PhotoQualityService.suggestCulling` for the pure decision logic.
+    private func suggestCulling() {
+        let candidates = pipeline.allPhotos.map { photo in
+            PhotoQualityService.CullCandidate(
+                id: photo.id,
+                isUtility: photo.isUtility,
+                qualityScore: photo.qualityScore,
+                sharpness: photo.sharpness,
+                duplicateGroupID: photo.duplicateGroupID,
+                isDecided: photo.accepted || photo.rejected
+            )
+        }
+        let suggestedIDs = PhotoQualityService.suggestCulling(candidates)
+
+        guard !suggestedIDs.isEmpty else {
+            showSuggestionMessage("Inga förslag att gallra — inga dubbletter eller nyttobilder kvar att bedöma.")
+            return
+        }
+
+        var undoBuffer: [(id: String, wasAccepted: Bool, wasRejected: Bool)] = []
+        for photo in pipeline.allPhotos where suggestedIDs.contains(photo.id) {
+            undoBuffer.append((photo.id, photo.accepted, photo.rejected))
+            pipeline.setDecision(photoID: photo.id, accepted: false, rejected: true)
+        }
+        lastSuggestionUndo = undoBuffer
+        pipeline.saveCullDecisions()
+        audio.playReject()
+        showSuggestionMessage("Föreslog \(undoBuffer.count) bilder för gallring (dubbletter/nyttobilder). Tryck z för att ångra.")
+    }
+
+    /// Undoes the most recent `suggestCulling()` batch only — restores exactly
+    /// the decisions those photos had immediately before the suggestion.
+    private func undoLastSuggestion() {
+        guard let undoBuffer = lastSuggestionUndo else { return }
+        for entry in undoBuffer {
+            pipeline.setDecision(photoID: entry.id, accepted: entry.wasAccepted, rejected: entry.wasRejected)
+        }
+        pipeline.saveCullDecisions()
+        lastSuggestionUndo = nil
+        showSuggestionMessage("Ångrade \(undoBuffer.count) förslag.")
+    }
+
+    private func showSuggestionMessage(_ text: String) {
+        withAnimation { suggestionMessage = text }
+        suggestionMessageTask?.cancel()
+        suggestionMessageTask = Task {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation { suggestionMessage = nil }
         }
     }
 }
