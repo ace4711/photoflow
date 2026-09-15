@@ -55,4 +55,39 @@ struct CalendarServiceTests {
     func extractBookingInfo_emptyTitle() {
         #expect(CalendarService.extractBookingInfo(from: "") == nil)
     }
+
+    // MARK: - geocodeAddress (Fas 3c: MKGeocodingRequest i stället för CLGeocoder)
+
+    /// Riktigt integrationstest mot en riktig svensk adress — verifierar att
+    /// `MKGeocodingRequest`-migreringen (ersätter deprecerade
+    /// `CLGeocoder.geocodeAddressString`) faktiskt fungerar, inklusive
+    /// ", Sverige"-tillägget. Miljöberoende (kräver nätverksåtkomst till
+    /// Apple Maps) — hoppar sig själv utan att fela om geokodningen misslyckas
+    /// (t.ex. ingen nätverksåtkomst i CI/sandlåda), precis som
+    /// `TranslationServiceTests`/`DictationServiceTests` hoppar när deras
+    /// on-device-förutsättningar saknas.
+    @Test("Riktig adress geokodas till rimliga koordinater i Stockholmsområdet")
+    func geocodeAddress_realAddress_returnsPlausibleCoordinate() async throws {
+        let service = CalendarService.shared
+        guard let coordinate = await service.geocodeAddress("Lindvägen 12, Tyresö") else {
+            // Miljöberoende (nätverk/Apple Maps-tillgänglighet) — inget testfel.
+            return
+        }
+        // Grov sanity-check: Stockholmsregionen, inte t.ex. (0, 0) eller en
+        // helt orimlig koordinat pga en trasig parsning.
+        #expect(coordinate.latitude > 55 && coordinate.latitude < 65)
+        #expect(coordinate.longitude > 10 && coordinate.longitude < 25)
+    }
+
+    @Test("Andra anropet med samma adress ger cachat resultat, inte ett nytt nätverksanrop")
+    func geocodeAddress_secondCall_usesCache() async throws {
+        let service = CalendarService.shared
+        guard let first = await service.geocodeAddress("Lindvägen 12, Tyresö") else {
+            // Miljöberoende — se ovan.
+            return
+        }
+        let second = await service.geocodeAddress("Lindvägen 12, Tyresö")
+        #expect(second?.latitude == first.latitude)
+        #expect(second?.longitude == first.longitude)
+    }
 }

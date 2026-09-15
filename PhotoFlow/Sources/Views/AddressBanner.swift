@@ -178,9 +178,13 @@ private struct CorrectionTarget: Identifiable {
 private struct IdentifiableMapItem: Identifiable {
     let id = UUID()
     let mapItem: MKMapItem
-    var coordinate: CLLocationCoordinate2D { mapItem.placemark.coordinate }
+    // `.placemark` deprecated macOS 26.0 (Fas 3c) — `.location`/`.address`
+    // are the non-deprecated replacements (verifierat i SDK:n,
+    // `MKMapItem.h`). `.address?.fullAddress` is the closest equivalent to
+    // the old `.placemark.title` (a full, formatted address string).
+    var coordinate: CLLocationCoordinate2D { mapItem.location.coordinate }
     var name: String? { mapItem.name }
-    var title: String? { mapItem.placemark.title }
+    var title: String? { mapItem.address?.fullAddress }
 }
 
 // MARK: - Address Correction View

@@ -1,6 +1,7 @@
 import CoreLocation
 import EventKit
 import Foundation
+import MapKit
 
 @MainActor
 class CalendarService {
@@ -288,21 +289,34 @@ class CalendarService {
 
     // MARK: - Geocoding
 
-    private let geocoder = CLGeocoder()
-
     /// Cached geocode results: address -> coordinates
     private var geocodeCache: [String: CLLocationCoordinate2D] = [:]
 
     /// Geocode an address string to GPS coordinates using Apple Maps.
+    ///
+    /// Uses `MKGeocodingRequest` (verifierat i SDK:n, Fas 3c:
+    /// `MapKit.framework/Versions/A/Headers/MKGeocodingRequest.h` — den
+    /// bridgas till Swift som en vanlig Objective-C-klass med en async
+    /// `mapItems` "getter" via `NS_SWIFT_ASYNC_NAME(getter:mapItems())`,
+    /// syns inte i `MapKit.swiftinterface` eftersom MapKit på macOS är ett
+    /// rent ObjC-ramverk med tunn Swift-overlay). Ersätter den deprecerade
+    /// `CLGeocoder.geocodeAddressString` (macOS 26.0). Samma beteende som
+    /// förut: ", Sverige" läggs till om det saknas, cache per adress, `nil`
+    /// vid miss/fel.
     func geocodeAddress(_ address: String) async -> CLLocationCoordinate2D? {
         if let cached = geocodeCache[address] { return cached }
 
         // Append ", Sverige" for better results on Swedish addresses
         let searchAddress = address.contains("Sverige") ? address : "\(address), Sverige"
 
+        guard let request = MKGeocodingRequest(addressString: searchAddress) else {
+            print("Geocoding failed for '\(address)': could not create MKGeocodingRequest")
+            return nil
+        }
+
         do {
-            let placemarks = try await geocoder.geocodeAddressString(searchAddress)
-            if let location = placemarks.first?.location?.coordinate {
+            let mapItems = try await request.mapItems
+            if let location = mapItems.first?.location.coordinate {
                 geocodeCache[address] = location
                 return location
             }
