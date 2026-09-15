@@ -437,11 +437,19 @@ class PipelineRunner: ObservableObject {
         if let lat = meta.latitude, let lon = meta.longitude {
             let latRef = lat >= 0 ? "N" : "S"
             let lonRef = lon >= 0 ? "E" : "W"
-            let prefix = isNEF ? "-XMP:" : "-"
-            lines.append("\(prefix)GPSLatitude=\(abs(lat))")
-            lines.append("\(prefix)GPSLatitudeRef=\(latRef)")
-            lines.append("\(prefix)GPSLongitude=\(abs(lon))")
-            lines.append("\(prefix)GPSLongitudeRef=\(lonRef)")
+            if isNEF {
+                // XMP:GPSLatitudeRef/GPSLongitudeRef don't exist as separate tags
+                // (verified with exiftool 13.50 — "doesn't exist or isn't writable").
+                // exiftool accepts a signed "value N/S/E/W" string directly on the
+                // XMP:GPSLatitude/GPSLongitude tags instead.
+                lines.append("-XMP:GPSLatitude=\(abs(lat)) \(latRef)")
+                lines.append("-XMP:GPSLongitude=\(abs(lon)) \(lonRef)")
+            } else {
+                lines.append("-GPSLatitude=\(abs(lat))")
+                lines.append("-GPSLatitudeRef=\(latRef)")
+                lines.append("-GPSLongitude=\(abs(lon))")
+                lines.append("-GPSLongitudeRef=\(lonRef)")
+            }
         }
 
         if let address = meta.address, !address.isEmpty {
@@ -462,10 +470,16 @@ class PipelineRunner: ObservableObject {
         }
 
         for tag in meta.aiTags {
+            // -=/+= idiom: removes the tag first if present, then re-adds it, so
+            // re-running this step doesn't pile up duplicate keywords (verified
+            // with exiftool 13.50 — plain += duplicates on every re-run).
             if isNEF {
+                lines.append("-XMP:Subject-=\(tag)")
                 lines.append("-XMP:Subject+=\(tag)")
             } else {
+                lines.append("-IPTC:Keywords-=\(tag)")
                 lines.append("-IPTC:Keywords+=\(tag)")
+                lines.append("-XMP:Subject-=\(tag)")
                 lines.append("-XMP:Subject+=\(tag)")
             }
         }

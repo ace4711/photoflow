@@ -106,14 +106,27 @@ struct PipelineRunnerMetadataTests {
         #expect(args.contains("-GPSLongitude=70.9"))
     }
 
-    @Test("GPS för NEF-sidecar använder XMP-prefixade taggar")
-    func gpsRef_nefUsesXMPPrefixedTags() {
+    @Test("GPS för NEF-sidecar skriver signerat värde med N/S/E/W, ingen separat Ref-tagg")
+    func gpsRef_nefUsesSignedValueWithDirectionSuffix() {
+        // XMP:GPSLatitudeRef/GPSLongitudeRef don't exist as writable tags (verified
+        // with exiftool 13.50); exiftool accepts "value N/S/E/W" on GPSLatitude/
+        // GPSLongitude directly instead.
         let nef = URL(fileURLWithPath: "/tmp/x.nef")
         let meta = IPTCFileMetadata(address: "A", eventTitle: nil, description: "A", latitude: 59.33, longitude: 18.06)
         let args = PipelineRunner.exiftoolArguments(for: nef, meta: meta)
-        #expect(args.contains("-XMP:GPSLatitudeRef=N"))
-        #expect(args.contains("-XMP:GPSLongitudeRef=E"))
-        #expect(!args.contains("-GPSLatitudeRef=N"))
+        #expect(args.contains("-XMP:GPSLatitude=59.33 N"))
+        #expect(args.contains("-XMP:GPSLongitude=18.06 E"))
+        #expect(!args.contains { $0.contains("GPSLatitudeRef") })
+        #expect(!args.contains { $0.contains("GPSLongitudeRef") })
+    }
+
+    @Test("GPS för NEF-sidecar ger S/W-suffix för negativa koordinater")
+    func gpsRef_nefNegativeUsesSouthWestSuffix() {
+        let nef = URL(fileURLWithPath: "/tmp/x.nef")
+        let meta = IPTCFileMetadata(address: "A", eventTitle: nil, description: "A", latitude: -33.86, longitude: -70.9)
+        let args = PipelineRunner.exiftoolArguments(for: nef, meta: meta)
+        #expect(args.contains("-XMP:GPSLatitude=33.86 S"))
+        #expect(args.contains("-XMP:GPSLongitude=70.9 W"))
     }
 
     @Test("Utan GPS skrivs inga GPS-taggar")
@@ -133,7 +146,9 @@ struct PipelineRunnerMetadataTests {
         let args = PipelineRunner.exiftoolArguments(for: jpg, meta: meta)
         #expect(!args.contains { $0.hasPrefix("-IPTC:Headline") })
         #expect(!args.contains { $0.hasPrefix("-XMP:Title") })
+        #expect(args.contains("-IPTC:Keywords-=kök"))
         #expect(args.contains("-IPTC:Keywords+=kök"))
+        #expect(args.contains("-XMP:Subject-=kök"))
         #expect(args.contains("-XMP:Subject+=kök"))
         #expect(args.contains("-IPTC:Caption-Abstract=En AI-beskrivning"))
     }
