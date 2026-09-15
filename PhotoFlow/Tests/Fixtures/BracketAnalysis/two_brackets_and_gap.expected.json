@@ -1,0 +1,137 @@
+{
+  "total_images": 11,
+  "total_groups": 4,
+  "groups": [
+    {
+      "group_id": 1,
+      "is_bracket": true,
+      "image_count": 3,
+      "files": [
+        "DSC_0100.NEF",
+        "DSC_0101.NEF",
+        "DSC_0102.NEF"
+      ],
+      "exposures": [
+        "1/4",
+        "1",
+        "4"
+      ],
+      "fnumber": 8.0,
+      "iso": 400,
+      "time_start": "09:00:00",
+      "time_end": "09:00:04",
+      "date_start": "2026-01-11 09:00:00",
+      "date_end": "2026-01-11 09:00:04",
+      "datetimes": [
+        "2026-01-11 09:00:00",
+        "2026-01-11 09:00:02",
+        "2026-01-11 09:00:04"
+      ],
+      "exposure_range_stops": 16.0,
+      "suggested_hdr_indices": [
+        0,
+        1,
+        2
+      ],
+      "unique_exposure_levels": 3
+    },
+    {
+      "group_id": 2,
+      "is_bracket": true,
+      "image_count": 3,
+      "files": [
+        "DSC_0103.NEF",
+        "DSC_0104.NEF",
+        "DSC_0105.NEF"
+      ],
+      "exposures": [
+        "1/4",
+        "1",
+        "4"
+      ],
+      "fnumber": 8.0,
+      "iso": 400,
+      "time_start": "09:00:06",
+      "time_end": "09:00:10",
+      "date_start": "2026-01-11 09:00:06",
+      "date_end": "2026-01-11 09:00:10",
+      "datetimes": [
+        "2026-01-11 09:00:06",
+        "2026-01-11 09:00:08",
+        "2026-01-11 09:00:10"
+      ],
+      "exposure_range_stops": 16.0,
+      "suggested_hdr_indices": [
+        0,
+        1,
+        2
+      ],
+      "unique_exposure_levels": 3
+    },
+    {
+      "group_id": 3,
+      "is_bracket": true,
+      "image_count": 3,
+      "files": [
+        "DSC_0200.NEF",
+        "DSC_0201.NEF",
+        "DSC_0202.NEF"
+      ],
+      "exposures": [
+        "1/4",
+        "1",
+        "4"
+      ],
+      "fnumber": 5.6,
+      "iso": 800,
+      "time_start": "10:00:00",
+      "time_end": "10:00:04",
+      "date_start": "2026-01-11 10:00:00",
+      "date_end": "2026-01-11 10:00:04",
+      "datetimes": [
+        "2026-01-11 10:00:00",
+        "2026-01-11 10:00:02",
+        "2026-01-11 10:00:04"
+      ],
+      "exposure_range_stops": 16.0,
+      "suggested_hdr_indices": [
+        0,
+        1,
+        2
+      ],
+      "unique_exposure_levels": 3
+    },
+    {
+      "group_id": 4,
+      "is_bracket": false,
+      "image_count": 2,
+      "files": [
+        "DSC_0203.NEF",
+        "DSC_0204.NEF"
+      ],
+      "exposures": [
+        "1",
+        "1"
+      ],
+      "fnumber": 5.6,
+      "iso": 800,
+      "time_start": "10:00:13",
+      "time_end": "10:00:15",
+      "date_start": "2026-01-11 10:00:13",
+      "date_end": "2026-01-11 10:00:15",
+      "datetimes": [
+        "2026-01-11 10:00:13",
+        "2026-01-11 10:00:15"
+      ],
+      "exposure_range_stops": 1.0,
+      "suggested_hdr_indices": [],
+      "unique_exposure_levels": 1
+    }
+  ],
+  "params": {
+    "max_time_gap": 15,
+    "min_bracket_size": 3
+  },
+  "bracket_groups_count": 3,
+  "single_groups_count": 1
+}

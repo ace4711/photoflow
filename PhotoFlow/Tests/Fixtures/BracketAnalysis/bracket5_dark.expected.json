@@ -1,0 +1,52 @@
+{
+  "total_images": 5,
+  "total_groups": 1,
+  "groups": [
+    {
+      "group_id": 1,
+      "is_bracket": true,
+      "image_count": 5,
+      "files": [
+        "DSC_0900.NEF",
+        "DSC_0901.NEF",
+        "DSC_0902.NEF",
+        "DSC_0903.NEF",
+        "DSC_0904.NEF"
+      ],
+      "exposures": [
+        "1/64",
+        "1/4",
+        "0.5",
+        "1",
+        "2"
+      ],
+      "fnumber": 11.0,
+      "iso": 200,
+      "time_start": "14:00:00",
+      "time_end": "14:00:08",
+      "date_start": "2026-01-14 14:00:00",
+      "date_end": "2026-01-14 14:00:08",
+      "datetimes": [
+        "2026-01-14 14:00:00",
+        "2026-01-14 14:00:02",
+        "2026-01-14 14:00:04",
+        "2026-01-14 14:00:06",
+        "2026-01-14 14:00:08"
+      ],
+      "exposure_range_stops": 128.0,
+      "suggested_hdr_indices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "unique_exposure_levels": 5
+    }
+  ],
+  "params": {
+    "max_time_gap": 15,
+    "min_bracket_size": 3
+  },
+  "bracket_groups_count": 1,
+  "single_groups_count": 0
+}
