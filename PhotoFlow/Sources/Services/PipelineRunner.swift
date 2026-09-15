@@ -371,6 +371,25 @@ class PipelineRunner: ObservableObject {
         return result.sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
+    /// Recursively find all files with the given extension under a directory.
+    /// Synchronous, so it's safe to call an NSEnumerator's iterator from
+    /// async contexts (FileManager.enumerator's makeIterator is unavailable there).
+    static func findFiles(withExtension ext: String, in directory: URL) -> [URL] {
+        var result: [URL] = []
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        for case let fileURL as URL in enumerator {
+            if fileURL.pathExtension.lowercased() == ext.lowercased() {
+                result.append(fileURL)
+            }
+        }
+        return result
+    }
+
     // MARK: - Step 1: DNG Conversion
 
     private func runDNGConversion(inputDir: URL) async throws {
@@ -394,12 +413,8 @@ class PipelineRunner: ObservableObject {
 
         // Check which DNG files already exist — search entire output dir (files may be in dng/ or address folders)
         var existingDNGNames = Set<String>()
-        if let enumerator = FileManager.default.enumerator(at: outputDir, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
-            for case let fileURL as URL in enumerator {
-                if fileURL.pathExtension.lowercased() == "dng" {
-                    existingDNGNames.insert(fileURL.deletingPathExtension().lastPathComponent.lowercased())
-                }
-            }
+        for fileURL in Self.findFiles(withExtension: "dng", in: outputDir) {
+            existingDNGNames.insert(fileURL.deletingPathExtension().lastPathComponent.lowercased())
         }
         let nefNames = Set(nefFiles.map { $0.deletingPathExtension().lastPathComponent.lowercased() })
         let missingDNG = nefNames.subtracting(existingDNGNames)
@@ -1706,12 +1721,8 @@ class PipelineRunner: ObservableObject {
 
         // Build DNG lookup: search entire output dir (files may be in dng/ staging or address folders)
         var dngLookup: [String: URL] = [:]
-        if let enumerator = FileManager.default.enumerator(at: outputDir, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
-            for case let fileURL as URL in enumerator {
-                if fileURL.pathExtension.lowercased() == "dng" {
-                    dngLookup[fileURL.deletingPathExtension().lastPathComponent] = fileURL
-                }
-            }
+        for fileURL in Self.findFiles(withExtension: "dng", in: outputDir) {
+            dngLookup[fileURL.deletingPathExtension().lastPathComponent] = fileURL
         }
 
         // Build filename -> URL lookup for recursive input
