@@ -4,7 +4,6 @@ import CoreLocation
 
 @MainActor
 class PipelineState: ObservableObject {
-    @Published var appMode: AppMode = .launcher
     @Published var currentStep: PipelineStep = .idle
     @Published var progress: Double = 0.0
     @Published var currentFileIndex: Int = 0
@@ -126,7 +125,6 @@ class PipelineState: ObservableObject {
     /// Correct a mismatched address with new name and GPS coordinates
     func correctAddress(at index: Int, newAddress: String, coordinate: CLLocationCoordinate2D) {
         guard index < allMatchedAddresses.count else { return }
-        let oldAddress = allMatchedAddresses[index].address
         allMatchedAddresses[index] = (address: newAddress, eventTitle: allMatchedAddresses[index].eventTitle, hasGPS: true, coordinate: coordinate)
         appendLog("Adress rättad: \(newAddress) (\(String(format: "%.6f", coordinate.latitude)), \(String(format: "%.6f", coordinate.longitude)))", type: .success)
         // Store corrected coordinates for metadata writing
