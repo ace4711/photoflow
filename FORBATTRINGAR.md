@@ -619,3 +619,136 @@ skrivning per fil, inte processstart). Skippat enligt uppgiftens egen
 - Ingen ny inställning lades till — bracket-parametrarna
   (`maxTimeGap`/`minBracketSize`) styrs fortfarande av samma
   `AppSettings` som förut, bara motorn under huven bytt ut.
+
+## Fas 2b – Struktur och Swift 6
+
+Utfört autonomt på branchen `forbattringar` medan användaren sov, ett steg i
+taget med bygge + tester gröna före varje commit. Ren strukturell/verktygs-
+uppgradering — **ingen avsiktlig beteendeändring**. Se `git log --oneline`
+för commit-för-commit-historik. Alla 66 tester fortfarande gröna.
+
+### 1. `PipelineRunner.swift` (~2460 rader) uppdelad i `Services/Pipeline/`
+
+Delades upp i en klass + 10 `extension PipelineRunner`-filer per
+ansvarsområde, plus en fristående hjälpfil:
+
+```
+Services/Pipeline/
+  PipelineRunner.swift          klass, lagrade egenskaper, init,
+                                 start/startPipeline, cancel/togglePause,
+                                 rerunStep, pipelineLog/logDecision,
+                                 cancellation-hjälpare, findNEFFiles/findFiles,
+                                 PipelineError
+  PipelineRunner+DNG.swift        runDNGConversion
+  PipelineRunner+Brackets.swift   runBracketAnalysis, writeExifDebugCSV
+  PipelineRunner+Calendar.swift   matchCalendarBookings
+  PipelineRunner+SortFolders.swift  exportToAddressFolders,
+                                     deleteRejectedFiles,
+                                     organizeGroupsIntoFolders
+  PipelineRunner+Metadata.swift   exiftoolArguments, writeIPTCMetadata,
+                                   IPTCFileMetadata
+  PipelineRunner+Previews.swift   runPreviewGeneration
+  PipelineRunner+AITagging.swift  runAITagging
+  PipelineRunner+HDR.swift        runHDRMerge, reMergeHDR, mertensFusionPython
+  PipelineRunner+Lightroom.swift  sendToLightroom, waitForLightroomCompletion
+  PipelineRunner+LoadSession.swift  loadExistingSession, loadBracketGroups
+  ProcessRunner.swift             runProcess, ProcessCancellationBox
+```
+
+Verifierat rent mekaniskt (ingen logikändring): en sorterad content-diff
+mellan den gamla filen och alla nya filer sammanslagna visade bara två typer
+av skillnader — `private` → internal (utan modifierare) på det som nu
+korsar filgränser, och ett par nya förklarande kommentarer.
+
+Lagrade egenskaper (`state`, `audio`, `currentTask`, `pipelineLogHandle`,
+`pipelineTask`, `calendarMappings`, `aiTagResults`) måste ligga kvar i
+huvudklassen — extensions kan inte ha lagrade instansegenskaper — och är nu
+`internal` i stället för `private` eftersom extension-filerna i andra filer
+behöver komma åt dem. Funktioner som bara anropas inom sin egen nya fil
+(`waitForLightroomCompletion`, `mertensFusionPython`) förblev `private`.
+
+`project.yml`s `sources: [Sources]` täcker redan undermappar rekursivt, så
+ingen ändring behövdes där — bara `xcodegen generate` för att plocka upp de
+nya filerna.
+
+**Inte gjort**: `Views/StepCardView.swift` (482 rader, 2 top-level-typer) och
+`Views/SettingsView.swift` (460 rader, 9 top-level-typer) delades **inte**
+upp — uppgiften märkte detta som valfritt ("bara om enkelt"), och båda
+filerna är redan under 500 rader (långt under `PipelineRunner`s ~2460), så
+vinsten bedömdes vara liten jämfört med den obligatoriska Swift 6-
+migreringen nedan.
+
+### 2. Swift 6-språkläge
+
+`SWIFT_VERSION` satt till `"6.0"` i `project.yml` (`settings.base`, gäller
+både `PhotoFlow`- och `PhotoFlowTests`-targeten).
+
+En fullt manuell migrering (annotera vart och ett av de ~10
+`ObservableObject`-singlarna — `AppSettings`, `AudioService`,
+`CalendarService`, `DependencyManager`, `PipelineState`, `WatchService`
+m.fl. — plus alla deras anropsställen) gav vid ett första försök en lång
+svans av mekaniska "is not concurrency-safe"-fel utan verkligt värde:
+PhotoFlow är i praktiken ett helt UI-drivet enfönsterverktyg där i princip
+allt redan konceptuellt hör hemma på huvudtråden. Uppgiften öppnade
+uttryckligen för detta scenario, så i stället användes Xcode 27:s
+"default actor isolation"-inställningar:
+
+```yaml
+SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+SWIFT_APPROACHABLE_CONCURRENCY: YES
+```
+
+Verifierat innan användning att båda finns i denna toolchains `Swift.xcspec`
+(`grep -rl SWIFT_DEFAULT_ACTOR_ISOLATION` i
+`XCBBuildService.bundle/.../Swift.xcspec`, som listar `nonisolated`/
+`MainActor` som giltiga värden och mappar `MainActor` till kompilatorflaggan
+`-default-isolation=MainActor`) och att `swiftc -swift-version 6
+-default-isolation MainActor` faktiskt accepteras av toolchainen.
+
+Detta reducerade felen från en bred klass av fel över hela modulen till 6
+konkreta ställen — kod som **medvetet** körs utanför huvudtråden och som
+annars tyst skulle ha dragits tillbaka dit av default-isoleringen (vilket
+hade varit en riktig beteendeändring, t.ex. bildavkodning på huvudtråden).
+Dessa fick riktiga fixar, inte mekaniska:
+
+- **`ExifReader`** (enum, helt rent/stateless): märkt `nonisolated` — läser
+  EXIF parallellt över flera `Task`er i en `TaskGroup` för prestanda vid
+  hundratals bilder.
+- **`ImageLoader`** i `Views/LocalImageView.swift` (enum, rent/stateless):
+  märkt `nonisolated` — RAW/JPEG-avkodning anropas medvetet från
+  `DispatchQueue.global` för att inte blockera huvudtråden/UI:t.
+- **`ToolLocator`** (enum): märkt `nonisolated` — anropas både från
+  `@MainActor`-kod (`PipelineRunner`) och från `DependencyManager`s
+  `Task.detached`-bakgrundskontroller. Dess memoiseringscache
+  `cachedPython3WithOpenCV` märkt `nonisolated(unsafe)` med kommentar (en
+  idempotent cache — en race innebär bara att två anropare båda startar
+  python3 och räknar fram samma resultat, exakt vad som redan kunde hända
+  ofarligt före Swift 6).
+- **`ProcessCancellationBox`** (`ProcessRunner.swift`): märkt `nonisolated`
+  — den är redan `@unchecked Sendable` och skyddad av en egen `NSLock`
+  precis för att kunna anropas från vilken isoleringskontext som helst
+  (bakgrundskön i `runProcess` + `withTaskCancellationHandler`s `onCancel`,
+  som kan köra synkront på valfri tråd innan huvudoperationen ens startat).
+- **`WatchService`**: `NSWorkspace`-notifikationscallbacken skickade en
+  icke-`Sendable` `Notification` in i en `@MainActor`-`Task`. Fixat genom
+  att plocka ut den (Sendable) `URL`:en i den icke-isolerade callbacken
+  **innan** `Task`-hoppet, i stället för att fånga hela notifikationen.
+
+Build grön i Swift 6-läge, inga fel eller nya varningar — bara de sedan
+tidigare kända `CLGeocoder`/`placemark`-deprecationerna (se Fas 0, punkt 2;
+rörs inte i denna fas). Alla 66 tester gröna, inklusive testmålet
+`PhotoFlowTests` som verifierat bygger i Swift 6
+(`EFFECTIVE_SWIFT_VERSION = 6` i `xcodebuild -showBuildSettings`).
+
+### Manuell testning användaren bör göra
+- Ingen — detta är en ren struktur-/verktygsuppgradering utan avsiktlig
+  beteendeändring. Kör appen som vanligt; om något beter sig annorlunda är
+  det en bugg i denna fas (jämför mot `git show <commit innan Fas 2b>` för
+  att hitta rätt fil/rad).
+
+### Kvarstående / inte gjort i Fas 2b
+- `Views/StepCardView.swift`/`Views/SettingsView.swift` inte uppdelade, se
+  motivering ovan under punkt 1.
+- 0 varningar i egen kod uppnått, förutom de kända
+  CLGeocoder/placemark-deprecationerna (åtgärdas i en senare fas, som
+  tidigare faser också dokumenterat).
