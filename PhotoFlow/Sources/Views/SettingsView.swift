@@ -1,0 +1,460 @@
+import SwiftUI
+
+struct SettingsView: View {
+    @ObservedObject var settings = AppSettings.shared
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            TabView {
+                DirectoriesTab(settings: settings)
+                    .tabItem { Label("Mappar", systemImage: "folder") }
+                    .tag(0)
+
+                PipelineTab(settings: settings)
+                    .tabItem { Label("Pipeline", systemImage: "gearshape.2") }
+                    .tag(1)
+
+                WatchTab(settings: settings)
+                    .tabItem { Label("Bevakning", systemImage: "eye") }
+                    .tag(2)
+
+                AudioTab(settings: settings)
+                    .tabItem { Label("Ljud", systemImage: "speaker.wave.2") }
+                    .tag(3)
+
+                SystemCheckTab()
+                    .tabItem { Label("System", systemImage: "checkmark.shield") }
+                    .tag(4)
+            }
+            .padding(.top, 8)
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Klar") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .keyboardShortcut(.return)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+            .background(Color(nsColor: .controlBackgroundColor))
+        }
+    }
+}
+
+// MARK: - Directories
+
+struct DirectoriesTab: View {
+    @ObservedObject var settings: AppSettings
+
+    var body: some View {
+        Form {
+            Section {
+                DirectoryPicker(
+                    label: "Inputmapp (NEF-filer)",
+                    url: settings.inputDirectory,
+                    onSelect: { settings.inputDirectory = $0 }
+                )
+
+                DirectoryPicker(
+                    label: "Outputmapp (bearbetade filer)",
+                    url: settings.outputDirectory,
+                    onSelect: { settings.outputDirectory = $0 }
+                )
+
+                Text("Om ingen outputmapp väljs skapas 'processed' i inputmappen.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+struct DirectoryPicker: View {
+    let label: String
+    let url: URL?
+    let onSelect: (URL) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.headline)
+
+            HStack {
+                if let url {
+                    Image(systemName: "folder.fill")
+                        .foregroundColor(.accentColor)
+                    Text(url.path)
+                        .font(.system(.body, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else {
+                    Text("Ingen mapp vald")
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                Button("Välj...") {
+                    let panel = NSOpenPanel()
+                    panel.canChooseFiles = false
+                    panel.canChooseDirectories = true
+                    panel.allowsMultipleSelection = false
+                    if panel.runModal() == .OK, let selected = panel.url {
+                        onSelect(selected)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Pipeline
+
+struct PipelineTab: View {
+    @ObservedObject var settings: AppSettings
+
+    var body: some View {
+        Form {
+            Section("Bracket-detektering") {
+                HStack {
+                    Text("Max tidslucka mellan bilder i grupp")
+                    Spacer()
+                    TextField("", value: $settings.maxTimeGap, format: .number)
+                        .frame(width: 60)
+                        .textFieldStyle(.roundedBorder)
+                    Text("sekunder")
+                        .foregroundColor(.secondary)
+                }
+
+                HStack {
+                    Text("Minsta antal bilder för bracket")
+                    Spacer()
+                    TextField("", value: $settings.minBracketSize, format: .number)
+                        .frame(width: 60)
+                        .textFieldStyle(.roundedBorder)
+                    Text("bilder")
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            Section("HDR-sammanslagning") {
+                Toggle("Aktivera HDR-merge (Mertens exposure fusion)", isOn: $settings.hdrMergeEnabled)
+
+                if settings.hdrMergeEnabled {
+                    Text("Bracket-grupper slås ihop automatiskt med Mertens exposure fusion. Resultatet visas i granskningsvyn.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("HDR-steget och bracket-granskning hoppas över. Alla bilder går direkt till gallring.")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
+
+            Section("AI-taggning") {
+                Toggle("Tagga bilder med Apple Vision", isOn: $settings.aiTaggingEnabled)
+
+                if settings.aiTaggingEnabled {
+                    Text("Varje bild analyseras av Apples Vision-modell och taggas med rumstyp (Kök, Badrum, Vardagsrum...), interiör/exteriör och andra mäklarrelevanta taggar. Taggarna skrivs som IPTC-nyckelord.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("Ingen automatisk bildtaggning.")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
+
+            Section("Kalenderintegration") {
+                Toggle("Matcha bilder mot kalenderbokningar", isOn: $settings.calendarMatchEnabled)
+
+                if settings.calendarMatchEnabled {
+                    Text("Bilderna matchas mot iCal-bokningar baserat på fotograferingstid. Accepterade bilder organiseras i mappar namngivna efter bokningens adress.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("Ingen adressorganisering — alla bilder hamnar i samma outputmapp.")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
+
+            Section("Progress") {
+                Toggle("Detaljerad progress", isOn: $settings.detailedProgress)
+                Text("Visar input-bilder och HDR-resultat live under bearbetning.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Section("Previews") {
+                HStack {
+                    Text("JPEG-kvalitet")
+                    Spacer()
+                    TextField("", value: $settings.previewQuality, format: .number)
+                        .frame(width: 60)
+                        .textFieldStyle(.roundedBorder)
+                    Text("(1-100)")
+                        .foregroundColor(.secondary)
+                }
+
+                HStack {
+                    Text("Max dimension")
+                    Spacer()
+                    TextField("", value: $settings.previewMaxDimension, format: .number)
+                        .frame(width: 60)
+                        .textFieldStyle(.roundedBorder)
+                    Text("pixlar")
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// MARK: - Watch
+
+struct WatchTab: View {
+    @ObservedObject var settings: AppSettings
+
+    var body: some View {
+        Form {
+            Section("Bevakning") {
+                HStack {
+                    Text("Kontrollintervall")
+                    Spacer()
+                    TextField("", value: $settings.watchIntervalSeconds, format: .number)
+                        .frame(width: 60)
+                        .textFieldStyle(.roundedBorder)
+                    Text("sekunder")
+                        .foregroundColor(.secondary)
+                }
+
+                Toggle("Starta pipeline automatiskt vid nya filer", isOn: $settings.autoStartPipeline)
+            }
+
+            Section("Information") {
+                Text("I bevakningsläge övervakas inputmappen och alla anslutna volymer (SD-kort) för nya NEF-filer. När nya filer hittas kan pipelinen startas automatiskt.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// MARK: - Audio
+
+struct AudioTab: View {
+    @ObservedObject var settings: AppSettings
+
+    var body: some View {
+        Form {
+            Section("Ljud och tal") {
+                Toggle("Systemljud (steg klart, fel, etc)", isOn: $settings.soundEnabled)
+                Toggle("Talsyntes (röstmeddelanden)", isOn: $settings.speechEnabled)
+            }
+
+            Section("Testa") {
+                HStack(spacing: 12) {
+                    Button("Steg klart") { AudioService.shared.playStepComplete() }
+                    Button("Behöver hjälp") { AudioService.shared.playNeedsAttention() }
+                    Button("Fel") { AudioService.shared.playError() }
+                    Button("Allt klart") { AudioService.shared.playAllDone() }
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// MARK: - System Check
+
+struct SystemCheckTab: View {
+    @StateObject private var deps = DependencyManager.shared
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if deps.checks.isEmpty && !deps.isChecking {
+                VStack(spacing: 16) {
+                    Image(systemName: "checkmark.shield")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text("Kontrollera att alla systemberoenden är installerade")
+                        .foregroundColor(.secondary)
+                    Button("Kör kontroll") { deps.runChecks() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    VStack(spacing: 12) {
+                        ForEach(deps.checks) { check in
+                            DependencyRow(check: check, deps: deps)
+                        }
+                    }
+                    .padding(20)
+                }
+
+                Divider()
+
+                HStack {
+                    if deps.allCriticalOK {
+                        Label("Alla nödvändiga verktyg är installerade", systemImage: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                            .font(.system(.body, weight: .medium))
+                    } else if deps.hasMissing {
+                        Label("Verktyg saknas — installera nedan", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundColor(.red)
+                            .font(.system(.body, weight: .medium))
+                    } else if !deps.checks.isEmpty {
+                        Label("Alla verktyg OK (valfria saknas)", systemImage: "checkmark.circle")
+                            .foregroundColor(.orange)
+                            .font(.system(.body, weight: .medium))
+                    }
+                    Spacer()
+                    Button("Kontrollera igen") { deps.runChecks() }
+                        .disabled(deps.isChecking)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+                .background(Color(nsColor: .controlBackgroundColor))
+            }
+
+            if deps.isChecking {
+                ProgressView()
+                    .padding()
+            }
+        }
+        .onAppear { deps.runChecks() }
+    }
+}
+
+struct DependencyCheck: Identifiable {
+    let id = UUID()
+    let name: String
+    let description: String
+    let status: DependencyStatus
+    let detail: String?
+    let version: String?
+    var importance: DependencyImportance = .required
+    var installMethod: DependencyManager.InstallMethod? = nil
+}
+
+enum DependencyStatus {
+    case ok, warning, missing
+}
+
+enum DependencyImportance {
+    case required, optional
+}
+
+struct DependencyRow: View {
+    let check: DependencyCheck
+    @ObservedObject var deps: DependencyManager
+
+    private var isInstalling: Bool { deps.isInstalling == check.name }
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(statusColor.opacity(0.15))
+                    .frame(width: 36, height: 36)
+                Image(systemName: statusIcon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(statusColor)
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(check.name)
+                        .font(.system(.body, weight: .semibold))
+                    if check.importance == .optional {
+                        Text("valfri")
+                            .font(.system(.caption2, weight: .medium))
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.secondary.opacity(0.1))
+                            .cornerRadius(3)
+                    }
+                    if let version = check.version {
+                        Text(version)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.secondary.opacity(0.1))
+                            .cornerRadius(4)
+                    }
+                }
+                Text(check.description)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                if let detail = check.detail {
+                    Text(detail)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundColor(check.status == .missing ? .red : .secondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                }
+            }
+
+            Spacer()
+
+            // Install button for missing tools
+            if check.status == .missing, check.installMethod != nil {
+                if isInstalling {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Button {
+                        if check.name == "Homebrew" {
+                            deps.installHomebrew()
+                        } else {
+                            deps.install(check)
+                        }
+                    } label: {
+                        Label("Installera", systemImage: "arrow.down.circle")
+                            .font(.system(.caption, weight: .semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(check.importance == .required ? .red : .orange)
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(statusColor.opacity(0.3), lineWidth: 1)
+        )
+    }
+
+    private var statusColor: Color {
+        switch check.status {
+        case .ok: return .green
+        case .warning: return .orange
+        case .missing: return check.importance == .required ? .red : .orange
+        }
+    }
+
+    private var statusIcon: String {
+        switch check.status {
+        case .ok: return "checkmark.circle.fill"
+        case .warning: return "exclamationmark.triangle.fill"
+        case .missing: return "xmark.circle.fill"
+        }
+    }
+}
