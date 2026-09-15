@@ -1,4 +1,5 @@
 import SwiftUI
+import Translation
 
 struct DictationPanelView: View {
     let photoId: String
@@ -81,13 +82,14 @@ struct DictationPanelView: View {
                 .onAppear { startPulse() }
             }
 
-            // Translating indicator
+            // Translating indicator (visar statusText — t.ex. nedladdning av
+            // språkmodell — när den finns, annars en generisk "översätter"-text)
             if translator.isTranslating {
                 HStack(spacing: 6) {
                     ProgressView()
                         .scaleEffect(0.5)
                         .frame(width: 12, height: 12)
-                    Text("Översätter till \(selectedLanguage.other.displayName)...")
+                    Text(translator.statusText ?? "Översätter till \(selectedLanguage.other.displayName)...")
                         .font(.caption2)
                         .foregroundColor(.orange)
                 }
@@ -191,6 +193,13 @@ struct DictationPanelView: View {
         }
         .padding(10)
         .background(Color(nsColor: .controlBackgroundColor))
+        // Apples Translation-ramverk: sessionen skapas/uppdateras av SwiftUI
+        // varje gång `translator.configuration` ändras eller ogiltigförklaras
+        // (se `TranslationService.translate`/`invalidate()`), och stängs ner
+        // automatiskt när vyn försvinner.
+        .translationTask(translator.configuration) { session in
+            await translator.performPendingTranslation(using: session)
+        }
         .onChange(of: photoId) { _, _ in
             loadExistingNote()
         }
