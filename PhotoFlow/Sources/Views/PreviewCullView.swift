@@ -511,24 +511,6 @@ struct PreviewCullView: View {
         .frame(width: 80)
     }
 
-    private func actionButton(icon: String, label: String, shortcut: String, color: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 3) {
-                Image(systemName: icon)
-                    .font(.system(size: 36))
-                    .foregroundColor(color)
-                Text(label)
-                    .font(.system(.caption, weight: .medium))
-                    .foregroundColor(.white)
-                Text(shortcut)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-        }
-        .buttonStyle(.plain)
-        .frame(width: 100)
-    }
-
     private func photoInfoBar(for photo: PhotoItem) -> some View {
         VStack(spacing: 4) {
             HStack(spacing: 24) {
@@ -591,19 +573,6 @@ struct PreviewCullView: View {
         navigate(1)
     }
 
-    private func skipPhoto() {
-        navigate(1)
-    }
-
-    private func togglePhoto() {
-        guard pipeline.currentCullIndex < pipeline.allPhotos.count else { return }
-        let wasAccepted = pipeline.allPhotos[pipeline.currentCullIndex].accepted
-        pipeline.allPhotos[pipeline.currentCullIndex].accepted = !wasAccepted
-        pipeline.allPhotos[pipeline.currentCullIndex].rejected = wasAccepted
-        if wasAccepted { audio.playReject() } else { audio.playAccept() }
-        pipeline.saveCullDecisions()
-    }
-
     private func finishCulling() {
         let accepted = pipeline.allPhotos.filter { $0.accepted }.count
         let rejected = pipeline.allPhotos.filter { $0.rejected }.count
@@ -643,20 +612,3 @@ struct StatPill: View {
     }
 }
 
-// Keep backward compat
-struct StatBadge: View {
-    let label: String
-    let count: Int
-    let color: Color
-
-    var body: some View {
-        VStack(spacing: 2) {
-            Text("\(count)")
-                .font(.system(size: 18, weight: .bold, design: .monospaced))
-                .foregroundColor(color)
-            Text(label)
-                .font(.caption2)
-                .foregroundColor(.secondary)
-        }
-    }
-}

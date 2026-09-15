@@ -71,14 +71,6 @@ class DependencyManager: ObservableObject {
             installMethod: .brew(formula: "python3")
         ),
         ToolDef(
-            name: "Adobe Photoshop 2025",
-            description: "HDR Merge to HDR Pro",
-            importance: .optional,
-            checkPaths: ["/Applications/Adobe Photoshop 2025/Adobe Photoshop 2025.app"],
-            versionArgs: nil,
-            installMethod: .download(url: "https://www.adobe.com/products/photoshop.html")
-        ),
-        ToolDef(
             name: "Adobe Lightroom Classic",
             description: "HDR-sammanslagning (alternativ)",
             importance: .optional,
@@ -102,12 +94,14 @@ class DependencyManager: ObservableObject {
         isChecking = true
 
         Task.detached { [tools] in
-            var results: [DependencyCheck] = []
+            var mutableResults: [DependencyCheck] = []
 
             for tool in tools {
                 let result = Self.checkTool(tool)
-                results.append(result)
+                mutableResults.append(result)
             }
+
+            let results = mutableResults
 
             await MainActor.run {
                 self.checks = results
@@ -121,15 +115,6 @@ class DependencyManager: ObservableObject {
         if let path = tool.checkPaths.first, path.contains(".app") {
             let exists = FileManager.default.fileExists(atPath: path)
 
-            // Special Photoshop check: also verify Merge To HDR script
-            var extraDetail: String? = nil
-            if tool.name == "Adobe Photoshop 2025" && exists {
-                let mergeScript = "/Applications/Adobe Photoshop 2025/Presets/Scripts/Merge To HDR.jsx"
-                if !FileManager.default.fileExists(atPath: mergeScript) {
-                    extraDetail = "Merge To HDR.jsx saknas i Presets/Scripts"
-                }
-            }
-
             let appPath = tool.checkPaths.first!
                 .components(separatedBy: ".app/").first.map { $0 + ".app" } ?? tool.checkPaths.first!
             let version = getAppVersion(appPath)
@@ -137,8 +122,8 @@ class DependencyManager: ObservableObject {
             return DependencyCheck(
                 name: tool.name,
                 description: tool.description,
-                status: exists ? (extraDetail != nil ? .warning : .ok) : .missing,
-                detail: exists ? (extraDetail ?? path) : installHint(tool),
+                status: exists ? .ok : .missing,
+                detail: exists ? path : installHint(tool),
                 version: version,
                 importance: tool.importance,
                 installMethod: tool.installMethod
