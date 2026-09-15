@@ -39,7 +39,7 @@ enum DashboardStep: Int, CaseIterable, Identifiable {
         case .generatePreviews: return "JPEG-förhandsvisning"
         case .findCalendarInfo: return "Kalender & adress"
         case .writeIPTCTags: return "GPS & IPTC-taggar"
-        case .aiTagging: return "Vision-klassificering"
+        case .aiTagging: return "Vision-analys"
         case .createHDR: return "Bracket → HDR"
         case .manualReview: return AppSettings.shared.hdrMergeEnabled ? "Brackets & gallring" : "Gallring"
         case .moveToFolders: return "Adress-kataloger"

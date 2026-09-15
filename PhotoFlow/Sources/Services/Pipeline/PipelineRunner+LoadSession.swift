@@ -63,6 +63,14 @@ extension PipelineRunner {
             pipelineLog("Laddade AI-taggar för \(loadedAITags.count) bilder")
         }
 
+        // Load persisted Vision quality analysis (Fas 3b), falling back to disk
+        // when this run hasn't computed it in-memory yet (e.g. loading an
+        // existing session without re-running the pipeline).
+        let loadedQuality = PhotoQualityService.load(from: outputDir) ?? [:]
+        if !loadedQuality.isEmpty {
+            pipelineLog("Laddade Vision-kvalitetsanalys för \(loadedQuality.count) bilder")
+        }
+
         // Load persisted cull decisions
         let cullDecisions = state.loadCullDecisions()
         if !cullDecisions.isEmpty {
@@ -154,6 +162,13 @@ extension PipelineRunner {
                 if let tagResult {
                     photo.aiTags = tagResult.tags
                     photo.aiDescription = tagResult.description
+                }
+                if let quality = photoQualityResults[baseName] ?? loadedQuality[baseName] {
+                    photo.qualityScore = quality.qualityScore
+                    photo.isUtility = quality.isUtility
+                    photo.horizonAngle = quality.horizonAngleDegrees
+                    photo.sharpness = quality.sharpness
+                    photo.duplicateGroupID = quality.duplicateGroupID
                 }
                 photos.append(photo)
                 allPhotos.append(photo)

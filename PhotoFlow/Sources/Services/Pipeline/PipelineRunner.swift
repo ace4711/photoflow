@@ -24,6 +24,11 @@ class PipelineRunner: ObservableObject {
     /// Cached AI tags: filename -> PhotoTags
     var aiTagResults: [String: VisionTaggingService.PhotoTags] = [:]
 
+    /// Cached Vision quality analysis (Fas 3b): filename -> Result. Populated
+    /// by `runAITagging()`/`runVisionQualityAnalysis()`, read back in
+    /// `loadBracketGroups` to fill in `PhotoItem`'s quality fields.
+    var photoQualityResults: [String: PhotoQualityService.Result] = [:]
+
     // internal: called from other PipelineRunner extension files.
     func pipelineLog(_ message: String) {
         let formatter = DateFormatter()
@@ -197,12 +202,18 @@ class PipelineRunner: ObservableObject {
             }
             pipelineLog("<<< Kalendermatchning klar")
 
-            // Step: AI-tag photos (temporarily disabled to unblock pipeline)
-            // TODO: Re-enable AI tagging once pipeline flow is verified end-to-end
-            do {
+            // Step: AI-tag photos + Vision-baserad kvalitetsanalys (Fas 3b)
+            try await checkCancellationAndWaitIfPaused()
+            pipelineLog(">>> Steg: AI-taggning / Vision-analys")
+            if AppSettings.shared.aiTaggingEnabled {
+                state.updateStep(.aiTagging, phase: .active)
+                try await runAITagging()
+                state.completeStep(.aiTagging, count: aiTagResults.count)
+            } else {
                 state.updateStep(.aiTagging, phase: .disabled)
-                state.appendStepLog(.aiTagging, "AI-taggning temporärt avaktiverad", type: .info)
+                state.appendStepLog(.aiTagging, "AI-taggning/Vision-analys avaktiverad i installningar", type: .info)
             }
+            pipelineLog("<<< AI-taggning / Vision-analys klar")
 
             try await checkCancellationAndWaitIfPaused()
             if hdrEnabled {
@@ -345,9 +356,10 @@ class PipelineRunner: ObservableObject {
                 state.completeStep(step)
 
             case .aiTagging:
-                // Delete saved tags to force re-tagging
+                // Delete saved tags/quality analysis to force re-run of both
                 if let outputDir = state.outputDirectory {
                     try? FileManager.default.removeItem(at: outputDir.appendingPathComponent("ai_tags.json"))
+                    try? FileManager.default.removeItem(at: outputDir.appendingPathComponent("photo_quality.json"))
                 }
                 try await runAITagging()
                 state.completeStep(step)
