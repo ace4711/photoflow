@@ -16,8 +16,16 @@ class WatchService: ObservableObject {
     private let settings = AppSettings.shared
     private let audio = AudioService.shared
 
-    /// Files we've already triggered processing for this session
-    private var processedFiles: Set<String> = []
+    /// Files we've already triggered processing for, identified by content (not
+    /// just filename — a Nikon restarts its counter at DSC_0001 after a card
+    /// format/reuse, so filename alone silently ignored genuinely new photos with
+    /// a reused name) and persisted to disk so an app restart doesn't forget and
+    /// re-trigger processing for an entire already-handled card.
+    private let processedFiles = ProcessedFilesStore(
+        fileURL: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("PhotoFlow/processed_files.json")
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("PhotoFlow-processed_files.json")
+    )
 
     var onNewFilesDetected: ((_ sourceDir: URL, _ files: [URL]) -> Void)?
 
@@ -204,7 +212,7 @@ class WatchService: ObservableObject {
             return
         }
 
-        let unprocessedNEFs = allNEFs.filter { !processedFiles.contains($0.lastPathComponent) }
+        let unprocessedNEFs = allNEFs.filter { !processedFiles.isProcessed(source: $0.deletingLastPathComponent().path, key: Self.fileKey(for: $0)) }
 
         if allNEFs.isEmpty {
             log("Kontroll: Inga NEF-filer i \(dir.lastPathComponent) (inkl undermappar)")
@@ -244,8 +252,9 @@ class WatchService: ObservableObject {
 
         // Mark as processed so we don't trigger again
         for f in unprocessedNEFs {
-            processedFiles.insert(f.lastPathComponent)
+            processedFiles.markProcessed(source: f.deletingLastPathComponent().path, key: Self.fileKey(for: f))
         }
+        processedFiles.save()
 
         // Trigger callback - use nefSourceDir (the folder containing the actual NEF files)
         if settings.autoStartPipeline {
@@ -271,7 +280,9 @@ class WatchService: ObservableObject {
 
         var nefFiles: [URL] = []
         while let fileURL = enumerator.nextObject() as? URL {
-            if fileURL.pathExtension.uppercased() == "NEF" && !processedFiles.contains(fileURL.lastPathComponent) {
+            guard fileURL.pathExtension.uppercased() == "NEF" else { continue }
+            let source = fileURL.deletingLastPathComponent().path
+            if !processedFiles.isProcessed(source: source, key: Self.fileKey(for: fileURL)) {
                 nefFiles.append(fileURL)
             }
         }
@@ -283,12 +294,95 @@ class WatchService: ObservableObject {
             newFilesFound = nefFiles.count
             audio.speak("Minneskort hittat med \(nefFiles.count) nya bilder")
 
-            for f in nefFiles { processedFiles.insert(f.lastPathComponent) }
+            for f in nefFiles {
+                processedFiles.markProcessed(source: f.deletingLastPathComponent().path, key: Self.fileKey(for: f))
+            }
+            processedFiles.save()
             onNewFilesDetected?(dcim, nefFiles)
         }
     }
 
     private func handleNewVolume(_ volumeURL: URL) {
         searchVolumeForNEFs(volumeURL)
+    }
+
+    /// A content-derived identity key for a file: "filename|size|mtime". Using
+    /// just the filename (the old behavior) breaks the moment a camera restarts
+    /// its counter — a Nikon reformatted or overwritten card starts again at
+    /// DSC_0001, same name as a long-since-processed file, but completely
+    /// different content — and the name-only check silently ignored the new
+    /// photo forever. Uses `URLResourceValues` (file size + modification date);
+    /// no EXIF read (e.g. DateTimeOriginal) is needed for this.
+    nonisolated static func fileKey(for url: URL) -> String {
+        let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        let size = values?.fileSize ?? -1
+        let mtime = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
+        return "\(url.lastPathComponent)|\(size)|\(mtime)"
+    }
+}
+
+/// Persists which files (identified by `WatchService.fileKey(for:)`, scoped per
+/// source directory) have already triggered pipeline processing, so quitting and
+/// relaunching the app doesn't forget and re-trigger auto-processing for an
+/// entire already-handled SD card or input folder.
+///
+/// Not `@MainActor`-isolated on purpose — it does its own locking-free simple
+/// mutation and is only ever touched from `WatchService` (which is `@MainActor`),
+/// but keeping it a plain class makes it constructible/testable in a plain
+/// `@Test` without actor isolation ceremony.
+final class ProcessedFilesStore {
+    private struct Record: Codable {
+        let source: String
+        let key: String
+    }
+
+    /// Hard cap on total persisted entries (across all sources combined) so the
+    /// file can't grow forever across many cards/sessions over time.
+    static let maxEntries = 50_000
+
+    private let fileURL: URL
+    private var records: [Record] = []
+    private var lookup: Set<String> = []
+
+    init(fileURL: URL) {
+        self.fileURL = fileURL
+        load()
+    }
+
+    private static func combinedKey(source: String, key: String) -> String {
+        "\(source)\u{1F}\(key)"
+    }
+
+    private func load() {
+        guard let data = try? Data(contentsOf: fileURL),
+              let decoded = try? JSONDecoder().decode([Record].self, from: data) else { return }
+        records = decoded
+        lookup = Set(decoded.map { Self.combinedKey(source: $0.source, key: $0.key) })
+    }
+
+    func isProcessed(source: String, key: String) -> Bool {
+        lookup.contains(Self.combinedKey(source: source, key: key))
+    }
+
+    func markProcessed(source: String, key: String) {
+        let combined = Self.combinedKey(source: source, key: key)
+        guard !lookup.contains(combined) else { return }
+        records.append(Record(source: source, key: key))
+        lookup.insert(combined)
+
+        // Trim oldest entries (across all sources) once over the cap.
+        if records.count > Self.maxEntries {
+            let overflow = records.count - Self.maxEntries
+            for dropped in records.prefix(overflow) {
+                lookup.remove(Self.combinedKey(source: dropped.source, key: dropped.key))
+            }
+            records.removeFirst(overflow)
+        }
+    }
+
+    func save() {
+        guard let data = try? JSONEncoder().encode(records) else { return }
+        try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: fileURL)
     }
 }

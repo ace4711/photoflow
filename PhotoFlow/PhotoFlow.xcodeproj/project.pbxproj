@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		031801251F874CE82ABEFAC8 /* AppSettingsSDCardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B8DD6E89E2EB246C06AA2F /* AppSettingsSDCardTests.swift */; };
 		03A356792358F22F5CF85514 /* PipelineRunnerMetadataTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DEE083780895ED14CBEB130 /* PipelineRunnerMetadataTests.swift */; };
 		0A920AE3F7F2BF2E2C1A141A /* NotesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A744F8E9CC36AC9DFDE19C79 /* NotesManager.swift */; };
 		0BC4E6F7B5881C02478E834F /* TranslationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 946EF029FC6B8E82370D3CED /* TranslationService.swift */; };
@@ -35,6 +36,7 @@
 		9AEB695371EDAEC78EFAD571 /* LocalImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A170910AAC2BAD6773C4FBB /* LocalImageView.swift */; };
 		9D8F4DE0885D55B7C8280318 /* StepCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D180E348EDC56158B0BF798D /* StepCardView.swift */; };
 		A38504921BB482E4F3D59BBE /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34E6CD8744670D864F6EE6C3 /* DashboardView.swift */; };
+		AA1852DBA57FA0051A3FF9EC /* WatchServiceFileIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC9242645046144625EF653B /* WatchServiceFileIdentityTests.swift */; };
 		BAFC8EE66AAFCD940587B052 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57074BFC0A2871C3D4A731BF /* SettingsView.swift */; };
 		BC940806996D910CA009348B /* VisionTaggingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C75DCF5203EC0F7258AF011 /* VisionTaggingService.swift */; };
 		CA69A9936A1575D09D4FE8CF /* PipelineStateCullDecisionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AB4187FD228E28ADF0414F2 /* PipelineStateCullDecisionsTests.swift */; };
@@ -59,6 +61,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		01B8DD6E89E2EB246C06AA2F /* AppSettingsSDCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsSDCardTests.swift; sourceTree = "<group>"; };
 		0AB4187FD228E28ADF0414F2 /* PipelineStateCullDecisionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineStateCullDecisionsTests.swift; sourceTree = "<group>"; };
 		0ED1FEAB2805AD66CD0BCFEE /* PreviewCullView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewCullView.swift; sourceTree = "<group>"; };
 		230AF67C14F78CC9A5F63D1F /* CalendarServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarServiceTests.swift; sourceTree = "<group>"; };
@@ -90,6 +93,7 @@
 		A744F8E9CC36AC9DFDE19C79 /* NotesManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesManager.swift; sourceTree = "<group>"; };
 		AF63168D1774C3566A1890FF /* DependencyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DependencyManager.swift; sourceTree = "<group>"; };
 		B05548288B2EBB830BA02C5E /* ToolLocator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolLocator.swift; sourceTree = "<group>"; };
+		CC9242645046144625EF653B /* WatchServiceFileIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchServiceFileIdentityTests.swift; sourceTree = "<group>"; };
 		D180E348EDC56158B0BF798D /* StepCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StepCardView.swift; sourceTree = "<group>"; };
 		D894C147AD10AEB84D67A008 /* PhotoNote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoNote.swift; sourceTree = "<group>"; };
 		D9A94CA77623E8D9E58A80B9 /* CountdownOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CountdownOverlay.swift; sourceTree = "<group>"; };
@@ -145,6 +149,7 @@
 			isa = PBXGroup;
 			children = (
 				5679D93E6E18C8F178CFC636 /* AddressFolderLayoutTests.swift */,
+				01B8DD6E89E2EB246C06AA2F /* AppSettingsSDCardTests.swift */,
 				230AF67C14F78CC9A5F63D1F /* CalendarServiceTests.swift */,
 				9DEE083780895ED14CBEB130 /* PipelineRunnerMetadataTests.swift */,
 				0AB4187FD228E28ADF0414F2 /* PipelineStateCullDecisionsTests.swift */,
@@ -152,6 +157,7 @@
 				8F5619320F3617DDF430B6C8 /* ProcessCancellationBoxTests.swift */,
 				522CA5C3C17A8E64E615BF3F /* StepStatusTests.swift */,
 				34F9FCB4579FF92CB23EE797 /* ToolLocatorTests.swift */,
+				CC9242645046144625EF653B /* WatchServiceFileIdentityTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -283,6 +289,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				697AD790BAFB2EC4F9081715 /* AddressFolderLayoutTests.swift in Sources */,
+				031801251F874CE82ABEFAC8 /* AppSettingsSDCardTests.swift in Sources */,
 				76AD25703B7CD22D2AF084E4 /* CalendarServiceTests.swift in Sources */,
 				03A356792358F22F5CF85514 /* PipelineRunnerMetadataTests.swift in Sources */,
 				CA69A9936A1575D09D4FE8CF /* PipelineStateCullDecisionsTests.swift in Sources */,
@@ -290,6 +297,7 @@
 				0F80E6F85550AF9B6387D636 /* ProcessCancellationBoxTests.swift in Sources */,
 				1E93AFB7726AF98B211ECFF2 /* StepStatusTests.swift in Sources */,
 				61DD9A6E20F903CBD3F19F27 /* ToolLocatorTests.swift in Sources */,
+				AA1852DBA57FA0051A3FF9EC /* WatchServiceFileIdentityTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

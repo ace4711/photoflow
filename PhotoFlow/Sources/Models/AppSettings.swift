@@ -45,13 +45,37 @@ class AppSettings: ObservableObject {
         }
     }
 
-    // Known SD card mount points
+    // Known SD card mount points.
+    //
+    // Previously excluded only the literal volume name "Macintosh HD" — breaks for
+    // any differently-named boot volume (common: a custom name, a Time Machine
+    // clone, or any other non-card external drive mounted under /Volumes). Now
+    // uses actual volume properties instead of a name guess.
     var sdCardSearchPaths: [URL] {
-        let volumes = URL(fileURLWithPath: "/Volumes")
+        let volumesDir = URL(fileURLWithPath: "/Volumes")
+        let resourceKeys: [URLResourceKey] = [.volumeIsRemovableKey, .volumeIsEjectableKey, .volumeIsRootFileSystemKey]
         guard let contents = try? FileManager.default.contentsOfDirectory(
-            at: volumes, includingPropertiesForKeys: [.isVolumeKey],
+            at: volumesDir, includingPropertiesForKeys: resourceKeys,
             options: .skipsHiddenFiles
         ) else { return [] }
-        return contents.filter { $0.lastPathComponent != "Macintosh HD" }
+        return contents.filter { url in
+            let values = try? url.resourceValues(forKeys: Set(resourceKeys))
+            let hasDCIM = FileManager.default.fileExists(atPath: url.appendingPathComponent("DCIM").path)
+            return Self.isCandidateSDCardVolume(
+                removable: values?.volumeIsRemovable,
+                ejectable: values?.volumeIsEjectable,
+                isRootFileSystem: values?.volumeIsRootFileSystem,
+                hasDCIM: hasDCIM
+            )
+        }
+    }
+
+    /// Pure decision logic for `sdCardSearchPaths`, factored out so it's testable
+    /// without touching the real filesystem/`/Volumes`.
+    static func isCandidateSDCardVolume(removable: Bool?, ejectable: Bool?, isRootFileSystem: Bool?, hasDCIM: Bool) -> Bool {
+        // Never treat the boot volume as an SD card, no matter what it's named.
+        guard isRootFileSystem != true else { return false }
+        guard (removable ?? false) || (ejectable ?? false) else { return false }
+        return hasDCIM
     }
 }
