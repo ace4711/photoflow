@@ -262,3 +262,186 @@ som decimaler efter "0.".
   manuell verifiering av det extraherade python-skriptet (se "Beslut"
   ovan) — ett riktigt test hade krävt att mocka `runProcess`/`Process`,
   vilket bedömdes vara för stort ingrepp för denna fas.
+
+## Fas 1b – Tillstånd, avbrytning och bevakning
+
+Utfört autonomt på branchen `forbattringar` medan användaren sov, en punkt i
+taget med bygge + tester gröna före varje commit. Se `git log --oneline` för
+commit-för-commit-historik (en commit per punkt nedan). 60 tester totalt
+efter denna fas, alla gröna.
+
+### 0. exiftool-argument: fel GPS-taggar för NEF, dubblerade nyckelord
+Verifierat med exiftool 13.50 via kommandoradsexperiment i scratchpad innan
+fix (se commit för de exakta kommandona):
+
+- `XMP:GPSLatitudeRef`/`XMP:GPSLongitudeRef` finns inte som skrivbara taggar
+  ("doesn't exist or isn't writable" — bekräftat). `exiftoolArguments`
+  skriver nu i stället ett signerat värde direkt på
+  `XMP:GPSLatitude`/`XMP:GPSLongitude`, t.ex. `-XMP:GPSLatitude=59.33 N` —
+  verifierat att exiftool tolkar detta korrekt (läses tillbaka som rätt
+  gradminutsekund + väderstreck). Icke-NEF-filer (DNG/preview/HDR) var
+  redan korrekta (de har riktiga `GPSLatitudeRef`/`GPSLongitudeRef`-taggar)
+  och rördes inte.
+- `Keywords+=`/`Subject+=` dubblerade nyckelordet varje gång
+  metadatasteget kördes om (verifierat: två körningar gav `"tagA, tagA"`).
+  Använder nu exiftools `-=tag` följt av `+=tag`-idiom (både
+  `IPTC:Keywords` och `XMP:Subject`), som är dedupe-säkert vid upprepade
+  körningar.
+
+### 1. Gallringsbeslut fanns i två separata kopior
+`BracketGroup` hade en egen `[PhotoItem]`-kopia (`photos`), skild från
+`PipelineState.allPhotos`. `BracketReviewView` ändrade bara gruppens kopia,
+`PreviewCullView` bara `allPhotos`, `deleteRejectedFiles` läste bara
+`allPhotos`, och `saveCullDecisions` fick manuellt slå ihop båda — två
+sanningar som kunde gå isär (ett beslut satt i ena vyn syntes inte
+garanterat i den andra, eller föll bort helt vid save/load).
+
+- `BracketGroup` lagrar nu bara `photoIDs: [String]`, aldrig egna
+  `PhotoItem`-kopior.
+- Ny `PipelineState`-API: `photos(in:)` löser upp en grupps foton från
+  `allPhotos` via ett O(1) id→index-register (byggs om i `allPhotos`s
+  `didSet`), plus `setDecision(photoID:accepted:rejected:)`,
+  `setAlgorithmSuggested(photoID:suggested:)`, `selectedCount(in:)`,
+  `allReviewed(_:)`, `label(for:)` — ersätter de gamla
+  `BracketGroup`-beräknade egenskaperna.
+- `PipelineRunner` (`loadBracketGroups`, `exportToAddressFolders`,
+  `reMergeHDR`, `sendToLightroom`) och `BracketReviewView` uppdaterade till
+  den nya API:n. `DashboardView.clearAllReviewData` behöver bara nollställa
+  `allPhotos` nu (ingen andra kopia att synka).
+- `saveCullDecisions` läser bara `allPhotos` (den enda sanningen).
+
+### 2. Avbryt/Pausa gjorde ingenting på riktigt
+`cancel()` terminerade bara den enskilda `Process` som råkade köra just då,
+och `startPipeline` fortsatte oavbrutet till nästa steg. Paus kontrollerades
+dessutom bara inuti HDR-loopen.
+
+- `PipelineRunner` äger nu pipelinens `Task` (`pipelineTask`) via en ny
+  `func start(inputDir:outputDir:)` — `RunnerWrapper.start`
+  (`ContentView.swift`) delegerar till den i stället för att skapa en egen,
+  ospårbar `Task`. `cancel()` anropar `pipelineTask?.cancel()`.
+- `runProcess` ombyggd med `withTaskCancellationHandler` + en ny
+  `ProcessCancellationBox`: när `Task` cancelleras terminerar den processen
+  som körs (eller vägrar starta nästa om den redan cancellerats innan den
+  hunnit skapas), och kastar `CancellationError`.
+- `Task.checkCancellation()` + `waitIfPaused()` (paus-loopen bryter nu även
+  vid cancellering, i stället för att snurra för evigt om man avbryter
+  medan pausad) mellan varje steg i `startPipeline`, samt inuti
+  DNG-chunk-loopen, exiftool-chunk-loopen (`writeIPTCMetadata`),
+  HDR-loopen och symlink-sorteringsloopen (var 50:e fil i
+  `exportToAddressFolders`).
+- Vid avbrott: aktiva steg markeras `.idle` med loggraden "Avbrutet",
+  `isRunning`/`isPaused` nollställs, inga "klar"-ljud spelas.
+
+### 3. Bevakningen kände bara igen filer på namn
+`WatchService.processedFiles` var en `Set<String>` av `lastPathComponent`.
+En Nikon som formaterats om (eller ett återanvänt kort) börjar om på
+DSC_0001 — samma namn som en redan bearbetad bild men helt annat innehåll —
+så nya bilder ignorerades tyst för alltid.
+
+- Filer identifieras nu via `WatchService.fileKey(for:)`
+  (`"filnamn|storlek|mtime"`, via `URLResourceValues` — inget EXIF-läsning
+  behövs).
+- Redan hanterade nycklar persisteras per källmapp i
+  `~/Library/Application Support/PhotoFlow/processed_files.json` (ny
+  `ProcessedFilesStore`-klass, begränsad till senaste 50 000 posterna
+  totalt), så att en omstart av appen inte glömmer och triggar om ett helt
+  redan hanterat kort.
+- `AppSettings.sdCardSearchPaths` exkluderade bara volymen med namnet
+  "Macintosh HD" (trasigt för en annorlunda namngiven bootvolym eller andra
+  icke-kort-diskar under `/Volumes`). Filtrerar nu på riktiga
+  volymegenskaper: utesluter root-filsystemet (`volumeIsRootFileSystem`)
+  och kräver att volymen är removable/ejectable OCH har en DCIM-mapp
+  (`AppSettings.isCandidateSDCardVolume(...)`).
+
+### 4. Manuellt rättade koordinater sparades inte
+`correctAddress` lagrade den rättade koordinaten bara i minnet
+(`correctedCoordinates`), och `saveCalendarMatches` skrev bara adressfältet
+till `calendar_matches.json`. Vid omladdning (`matchCalendarBookings`
+skip-grenen) geokodades adressen alltså på nytt — och eftersom rättelsen
+görs just för att den automatiska geokodningen blev fel, kastades
+korrigeringen bort och samma fel-GPS kom tillbaka.
+`exportToAddressFolders`/`writeIPTCMetadata` geokodade dessutom alltid på
+nytt själva och brydde sig aldrig om `correctedCoordinates`.
+
+- `saveCalendarMatches` skriver nu `"latitude"`/`"longitude"`/
+  `"corrected": true` per post när en rättning finns för adressen.
+- `matchCalendarBookings` skip-grenen läser tillbaka de fälten: rättade
+  poster fyller `correctedCoordinates`/`allMatchedAddresses` direkt och
+  geokodas aldrig om.
+- `exportToAddressFolders` och `writeIPTCMetadata` kollar
+  `state.correctedCoordinates[adress]` först och använder den koordinaten
+  i stället för att geokoda på nytt.
+- `correctAddress` tar nu bort en redan skriven `metadata_written.json` (om
+  den finns) och loggar det, så `writeIPTCMetadata` körs om nästa gång i
+  stället för att låta fel-GPS/adress stå kvar permanent i redan taggade
+  filer.
+
+### Beslut/avgränsningar i denna fas
+- Punkt 4: `calendarMappings` (den privata listan i `PipelineRunner` som
+  styr adressmappnamn och foto-till-bokning-matchning) uppdateras inte
+  förrän kalenderstegets skip-gren läser om `calendar_matches.json` — en
+  adressrättning under samma session ändrar alltså GPS direkt men
+  mappnamnet uppdateras först vid nästa "kör om"/omstart av kalenderteget.
+  Detta gäller adress-**texten** (mappnamnet), inte koordinaten som denna
+  punkt handlar om, och bedömdes vara utanför scope (en större
+  om-sortering av redan placerade filer mitt i en session).
+- `matchCalendarBookings`s skip-grens geokodnings-hoppa-över-logik (punkt
+  4) och `exportToAddressFolders`/`writeIPTCMetadata`s
+  `correctedCoordinates`-användning har ingen direkt Swift-enhetstest på
+  `PipelineRunner`-nivå — de kräver kalenderåtkomst/riktig geokodning för
+  att köra. Verifierat i stället genom `PipelineStateAddressCorrectionTests`
+  (persistensen i `PipelineState`, som är den delade sanningskällan båda
+  kodvägarna läser) samt manuell kodgranskning av de nya grenarna.
+- Ingen ny inställning lades till för någon av punkterna — alla fyra är
+  buggfixar av avsett/redan existerande beteende (gallringsbeslut ska vara
+  konsekventa, avbryt ska avbryta, bevakning ska inte tappa filer, en
+  rättning ska hålla i sig), inte nya valfria funktioner som ändrar
+  pipelinens beteende.
+
+### Manuell testning användaren bör göra
+1. **exiftool-GPS på NEF-sidecar**: kör metadatasteget på en session med
+   GPS, öppna en `.xmp`-sidecar i `<adress> ÖVRIGA` med
+   `exiftool -G1 -a <fil>.xmp` och kontrollera att GPS-latitud/longitud
+   visas med rätt väderstreck (inga varningar om saknade Ref-taggar i
+   loggen).
+2. **Nyckelordsdubbletter**: kör AI-taggning + metadatasteget två gånger på
+   samma session och kontrollera med
+   `exiftool -IPTC:Keywords -XMP:Subject <fil>` att taggarna inte
+   dubbleras.
+3. **Gallring i båda vyerna**: acceptera/avvisa några bilder i
+   bracket-granskningen, gå vidare till gallringsvyn och kontrollera att
+   samma bilder redan är markerade där (och tvärtom).
+4. **Avbryt mitt i en körning**: starta pipelinen på en större mapp, tryck
+   "Avbryt" medan DNG-konvertering eller metadataskrivning pågår.
+   Kontrollera att processen (`ps aux | grep -i "dng converter\|exiftool"`)
+   faktiskt dör, att steget visar "Avbrutet" i loggen, och att inget
+   klart-ljud spelas.
+5. **Pausa/återuppta**: samma sak med "Pausa" — kontrollera att
+   framstegsindikatorn fryser och att "Fortsätt" faktiskt fortsätter
+   arbetet (inte bara händelsevis råkar se ut så).
+6. **Bevakning med återanvänt SD-kort**: bearbeta ett kort, formatera om
+   det (eller kopiera samma bilder till en tom mapp med samma filnamn men
+   annat innehåll), koppla in igen och verifiera att bevakningen upptäcker
+   det som nya filer. Kontrollera
+   `~/Library/Application Support/PhotoFlow/processed_files.json` växer.
+7. **Bevakning överlever omstart**: bearbeta ett kort, stäng appen helt,
+   starta om den och koppla in samma (oförändrade) kort igen — det ska
+   INTE trigga om bearbetning av samma bilder.
+8. **SD-kortsfilter**: kontrollera att en icke-kort extern disk (t.ex. en
+   vanlig USB-hårddisk utan DCIM-mapp) inte dyker upp i
+   bevaknings-loggen som en kandidat.
+9. **Adressrättning**: kör kalendermatchning, rätta en felaktig adress i
+   adressbanderollen, kör om (eller starta om appen och ladda samma
+   session), och kontrollera att den rättade GPS-positionen används i
+   `<adress>`-mappens filer (inte den ursprungliga felaktiga geokodningen).
+   Om metadata redan hunnit skrivas innan rättningen, kontrollera i loggen
+   att `metadata_written.json` togs bort och att steget körs om.
+
+### Kvarstående / inte gjort i Fas 1b
+- Se "Beslut/avgränsningar" ovan för punkt 4:s begränsning kring
+  `calendarMappings`/mappnamn inom samma session.
+- Ingen direkt `PipelineRunner`-nivå-test för avbryt/pausa (kräver att
+  mocka `Process`/externa verktyg som `Adobe DNG Converter`/`exiftool`,
+  vilket bedömdes vara för stort ingrepp) — verifierat i stället med
+  `ProcessCancellationBoxTests` (den isolerade cancellation-bryggan) och
+  manuell testning (se ovan).
