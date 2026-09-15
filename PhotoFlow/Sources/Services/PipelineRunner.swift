@@ -763,10 +763,16 @@ class PipelineRunner: ObservableObject {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
 
+        // Use every photo's own capture time when available (per-file "datetimes"),
+        // not just the group's start time — a group can span several minutes, which
+        // previously made every photo in it match the same single calendar event
+        // even when some of them actually fell just outside its window.
         var photoDates: [Date] = []
         for group in groups {
-            if let dateStr = group["date_start"] as? String,
-               let date = dateFormatter.date(from: dateStr) {
+            if let dateStrs = group["datetimes"] as? [String], !dateStrs.isEmpty {
+                photoDates.append(contentsOf: dateStrs.compactMap { dateFormatter.date(from: $0) })
+            } else if let dateStr = group["date_start"] as? String,
+                      let date = dateFormatter.date(from: dateStr) {
                 photoDates.append(date)
             }
         }
@@ -1854,6 +1860,11 @@ class PipelineRunner: ObservableObject {
             let timeEnd = (groupData["time_end"] as? String) ?? ""
             let dateStartStr = (groupData["date_start"] as? String) ?? ""
             let groupDate = dateFormatter.date(from: dateStartStr) ?? Date()
+            // Per-file capture times, when available — old bracket_groups.json files
+            // (written before this field existed) fall back to the group's start date
+            // for every photo, same as before.
+            let perFileDateStrings = (groupData["datetimes"] as? [String]) ?? []
+            let perFileDates = perFileDateStrings.map { dateFormatter.date(from: $0) }
             let expRange = (groupData["exposure_range_stops"] as? Double) ?? 0
             let suggestedIndices = (groupData["suggested_hdr_indices"] as? [Int]) ?? []
             let suggestedSet = Set(suggestedIndices)
@@ -1893,6 +1904,12 @@ class PipelineRunner: ObservableObject {
                 let isAccepted = savedDecision == "accepted"
                 let isRejected = savedDecision == "rejected"
 
+                // Prefer this photo's own capture time over the group's start time —
+                // a bracket/single group can span several minutes, and using the
+                // group start for every photo made calendar matching pick the wrong
+                // address for photos taken near a booking boundary.
+                let photoDate = (i < perFileDates.count ? perFileDates[i] : nil) ?? groupDate
+
                 var photo = PhotoItem(
                     id: photoId,
                     filename: filename,
@@ -1903,7 +1920,7 @@ class PipelineRunner: ObservableObject {
                     exposureSeconds: expSeconds,
                     fNumber: fNumber,
                     iso: iso,
-                    dateTime: groupDate,
+                    dateTime: photoDate,
                     accepted: isAccepted,
                     algorithmSuggested: autoSelect
                 )
@@ -2093,10 +2110,13 @@ class PipelineRunner: ObservableObject {
                 except: fn = 0
                 try: iso = int(row.get('ISO', '0'))
                 except: iso = 0
-                subsec = row.get('SubSecTimeOriginal', '0')
-                try: subsec_val = int(subsec)
-                except: subsec_val = 0
-                precise_ts = dt.timestamp() + subsec_val / 100.0
+                # SubSecTimeOriginal can have 1-3 digits ("5" = .5s, "50" = .50s,
+                # "500" = .500s) — treat it as decimal digits after "0.", not as an
+                # integer count of centiseconds (which broke for 1- and 3-digit values).
+                subsec_digits = ''.join(ch for ch in row.get('SubSecTimeOriginal', '') if ch.isdigit())
+                try: subsec_val = float('0.' + subsec_digits) if subsec_digits else 0.0
+                except: subsec_val = 0.0
+                precise_ts = dt.timestamp() + subsec_val
                 images.append({'filename': row['FileName'], 'datetime': dt, 'exposure': exp,
                     'fnumber': fn, 'iso': iso, 'exposure_str': row.get('ExposureTime', ''),
                     'precise_ts': precise_ts})
@@ -2230,6 +2250,7 @@ class PipelineRunner: ObservableObject {
                 'time_end': g[-1]['datetime'].strftime('%H:%M:%S'),
                 'date_start': g[0]['datetime'].strftime('%Y-%m-%d %H:%M:%S'),
                 'date_end': g[-1]['datetime'].strftime('%Y-%m-%d %H:%M:%S'),
+                'datetimes': [x['datetime'].strftime('%Y-%m-%d %H:%M:%S') for x in g],
                 'exposure_range_stops': round(er, 1),
                 'suggested_hdr_indices': hdr_indices,
                 'unique_exposure_levels': len(unique_evs)}
