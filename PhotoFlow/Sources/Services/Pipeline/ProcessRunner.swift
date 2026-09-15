@@ -129,7 +129,13 @@ extension PipelineRunner {
 /// cancelled, runs synchronously before the operation closure even starts — so
 /// `register`/`cancel` need their own lock rather than relying on `runProcess`'s
 /// background queue for safety.
-final class ProcessCancellationBox: @unchecked Sendable {
+// nonisolated: this box is called from *every* isolation domain on purpose —
+// `runProcess`'s background DispatchQueue.global closure, and
+// `withTaskCancellationHandler`'s `onCancel`, which can run synchronously on
+// any thread, including before the operation closure starts. It provides its
+// own thread safety via `lock` (hence `@unchecked Sendable`), so it must not
+// be pulled onto the main actor by SWIFT_DEFAULT_ACTOR_ISOLATION.
+nonisolated final class ProcessCancellationBox: @unchecked Sendable {
     private let lock = NSLock()
     private var process: Process?
     private var cancelled = false

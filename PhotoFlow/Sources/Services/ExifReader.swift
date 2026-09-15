@@ -54,7 +54,13 @@ enum ExifReaderError: LocalizedError {
 /// single batched `exiftool -csv -FileName -ExposureTime -@ -` call; every
 /// other field is read via ImageIO. See FORBATTRINGAR.md ("Fas 2a") for the
 /// full comparison.
-enum ExifReader {
+// Pure/stateless (no actor-isolated state) and deliberately run off the main
+// actor: `readAll` fans out ImageIO reads across up to `maxConcurrentReads`
+// concurrent tasks for throughput on multi-hundred-photo shoots. Under
+// SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor this would otherwise be inferred
+// MainActor-isolated, silently serializing all that work back onto the main
+// thread.
+nonisolated enum ExifReader {
     /// Cap on simultaneous ImageIO reads — plenty of parallelism without
     /// spawning hundreds of threads for a multi-hundred-photo shoot.
     private static let maxConcurrentReads = 8

@@ -160,7 +160,11 @@ struct ProgressiveImageView: View {
 
 // MARK: - Shared image loading
 
-enum ImageLoader {
+// Pure/stateless image decoding, deliberately called from background
+// DispatchQueue.global contexts (see call sites below) so RAW/JPEG decoding
+// doesn't block the main thread. Under SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor
+// this would otherwise be inferred MainActor-isolated.
+nonisolated enum ImageLoader {
     static func downsampledImage(at url: URL, maxDimension: CGFloat) -> NSImage? {
         guard FileManager.default.fileExists(atPath: url.path),
               let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }

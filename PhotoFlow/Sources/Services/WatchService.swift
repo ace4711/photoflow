@@ -137,12 +137,13 @@ class WatchService: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] notification in
+            // Extract the (Sendable) URL from the notification here, in the
+            // nonisolated callback, rather than capturing the whole (non-Sendable)
+            // Notification into the @MainActor Task below.
+            guard let volumeURL = notification.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL else { return }
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                if let volumeURL = notification.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL {
-                    self.log("Nytt media anslutet: \(volumeURL.lastPathComponent)")
-                    self.handleNewVolume(volumeURL)
-                }
+                self?.log("Nytt media anslutet: \(volumeURL.lastPathComponent)")
+                self?.handleNewVolume(volumeURL)
             }
         }
 

@@ -8,8 +8,20 @@ options:
 
 settings:
   base:
-    SWIFT_VERSION: "5.9"
+    SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "26.0"
+    # PhotoFlow is an almost entirely single-window, UI-driven personal tool —
+    # nearly every type (ObservableObject state, services) is already meant to
+    # run on the main actor. A fully manual Swift 6 migration (annotating each
+    # of the ~10 singletons + all their call sites) produced a long tail of
+    # mechanical "not concurrency-safe" errors with no behavioral value, so we
+    # use Xcode 27's default-actor-isolation escape hatch instead (see
+    # FORBATTRINGAR.md, Fas 2b) — verified present in this toolchain's
+    # Swift.xcspec before use. The few real background-work spots (Process
+    # execution in ProcessRunner.swift) already isolate explicitly via
+    # `nonisolated`/a locked box, so this doesn't hide any actual data races.
+    SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    SWIFT_APPROACHABLE_CONCURRENCY: YES
 
 targets:
   PhotoFlow:
