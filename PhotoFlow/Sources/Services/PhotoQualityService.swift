@@ -53,12 +53,20 @@ nonisolated enum PhotoQualityService {
     static let currentVersion = 1
 
     /// Kalibrerad mot riktiga bracket-sessionens previews (se FORBATTRINGAR.md,
-    /// Fas 3b): par som är samma verkliga motiv (inklusive
-    /// samma-komposition-men-olika-exponering-par som bracket-analysen råkade
-    /// dela upp i separata grupper) mätte långt under 0.01; olika rum/motiv
-    /// låg på 0.27 eller högre vid 10:e percentilen. 0.15 ligger mitt i det
-    /// breda gapet mellan de två populationerna.
-    static let duplicateDistanceThreshold = 0.15
+    /// Fas 3b), med single-linkage-klustringens "chaining"-risk i åtanke — inte
+    /// bara enkla parvisa percentiler:
+    ///
+    /// Ett första försök med 0.15 (baserat bara på percentiler: samma-motiv-par
+    /// mätte <0.01, olika rum/motiv låg på 0.27+ vid 10:e percentilen) visade
+    /// sig i praktiken kedja ihop *olika* vykomponeringar i samma rum via en
+    /// kedja av mellanliggande, delvis lika bilder (verifierat visuellt: två
+    /// tydligt olika vyer av samma vardagsrum hamnade i samma "dubblett"-kluster
+    /// via 3-4 mellansteg). 0.05 valdes istället efter att ha jämfört
+    /// klustringsresultat vid flera trösklar (0.02...0.15) och visuellt granskat
+    /// klustrens ändpunkter: vid 0.05 innehöll varje kluster uteslutande
+    /// verifierat identiska kompositioner (bilder som fotografen av misstag
+    /// bracketade två gånger i rad), utan att dra in andra vyer i samma rum.
+    static let duplicateDistanceThreshold = 0.05
 
     // MARK: - Ren logik (testbar utan Vision/bilder)
 
