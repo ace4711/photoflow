@@ -32,6 +32,8 @@ targets:
         CODE_SIGNING_REQUIRED: NO
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.photography"
         INFOPLIST_KEY_NSCalendarsUsageDescription: "PhotoFlow läser din kalender för att matcha fotograferingar med bokningsadresser och organisera filerna i adressmappar."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "PhotoFlow använder mikrofonen för att spela in röstanteckningar till bilder."
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "PhotoFlow använder taligenkänning för att transkribera röstanteckningar till text."
     entitlements:
       path: PhotoFlow.entitlements
       properties:

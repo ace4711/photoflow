@@ -7,22 +7,23 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0A920AE3F7F2BF2E2C1A141A /* NotesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A744F8E9CC36AC9DFDE19C79 /* NotesManager.swift */; };
+		0BC4E6F7B5881C02478E834F /* TranslationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 946EF029FC6B8E82370D3CED /* TranslationService.swift */; };
 		0D48002A6E2A57144C384E9A /* CalendarService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CFA4B712D2C1C7EB5465997 /* CalendarService.swift */; };
 		0F6B2A6A185C80AEDD89611B /* PhotoItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81818FB45B057F04C0487565 /* PhotoItem.swift */; };
 		294D4CAC2A5036B5A358B0AF /* LaunchModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AC2E556B6BD2CA657E8FD43 /* LaunchModeView.swift */; };
 		2E6B87610B4551C5B2B978B1 /* AudioService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97F73B1E75EF61D038F41B3C /* AudioService.swift */; };
 		38A042D3F5195C20B210C8A3 /* DashboardStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC6DB1ED9A17258B186DA24A /* DashboardStep.swift */; };
 		429A79924D4794EF23FC9379 /* WatchService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD8B3E2EDBB94C385E77AC28 /* WatchService.swift */; };
+		513BB703639F818E84E1920A /* PhotoNote.swift in Sources */ = {isa = PBXBuildFile; fileRef = D894C147AD10AEB84D67A008 /* PhotoNote.swift */; };
+		5286C11972938728901F1FE8 /* DictationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEC3191F1157C25BEECE9449 /* DictationService.swift */; };
 		53445F47593D16D384D53128 /* WatchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A432AA258005E8C0A206EA /* WatchView.swift */; };
 		65BF33C26FC4038D88720266 /* PreviewCullView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ED1FEAB2805AD66CD0BCFEE /* PreviewCullView.swift */; };
 		6E72A8D41A6CB0B986CAAF42 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5741822D3A108DFE01C65016 /* ContentView.swift */; };
 		70BDAEDAF1F167AF3DCDEB16 /* StepStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE736FC6AE961F0303A83433 /* StepStatus.swift */; };
-		4A33E63BBE44F38156156517 /* PhotoNote.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82888249A19A2A5DA045CDAA /* PhotoNote.swift */; };
-		2DFBDF84644DCFE32B6F9348 /* DictationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ECDE0103F546AC5485C56D9 /* DictationService.swift */; };
-		AE3B7AAEFA98220C34604D4D /* TranslationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08A77DBC6F4562EC6D9D3CBB /* TranslationService.swift */; };
-		6CADA6E434FBEDD8FDCD5584 /* NotesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0C3AAE2428628C1C555F04B /* NotesManager.swift */; };
-		E8DD6EBCEF67FDAC65A659E4 /* DictationPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DAE6A66E271B62755CC94DA /* DictationPanelView.swift */; };
 		70D6B6BC07D487CE12288CB2 /* PipelineState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78FB5F4124C051FBCF5BAA73 /* PipelineState.swift */; };
+		7187E7AB4A00672596608C12 /* DictationPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C306A8E7A0E0E6FE3F26EA3 /* DictationPanelView.swift */; };
+		73EEFBCCB85532865E3F63E9 /* DependencyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF63168D1774C3566A1890FF /* DependencyManager.swift */; };
 		75AAE4D2FD5931E697F5B2A0 /* PipelineStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B5C78734D65FD86D57C916F /* PipelineStep.swift */; };
 		7FDCC5061DC5692B6EB8DC3B /* PipelineProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BDD602C0F3FBBB4CCF84CA6 /* PipelineProgressView.swift */; };
 		807FC75A47B225F6EBE18C8B /* PipelineRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A80F2C5311915769B9C28DC /* PipelineRunner.swift */; };
@@ -39,7 +40,6 @@
 		DE054EA5F41BBFB3ED6F9697 /* BracketReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7B2958CAA674C585FF19619 /* BracketReviewView.swift */; };
 		FA497D8851D429850EF87A22 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9CA38B372E1E952057138D8D /* Assets.xcassets */; };
 		FEC5BFF1850289A0D6530DDC /* BracketGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80B78757C80052743BF6680B /* BracketGroup.swift */; };
-		AA1122334455667788990011 /* DependencyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB1122334455667788990011 /* DependencyManager.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -58,25 +58,25 @@
 		81818FB45B057F04C0487565 /* PhotoItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoItem.swift; sourceTree = "<group>"; };
 		83D7AE05B80A7B44D2B244CB /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
 		8A170910AAC2BAD6773C4FBB /* LocalImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalImageView.swift; sourceTree = "<group>"; };
+		8C306A8E7A0E0E6FE3F26EA3 /* DictationPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationPanelView.swift; sourceTree = "<group>"; };
 		93E76E73EA4ED4FEA06A9AEB /* PhotoFlowApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoFlowApp.swift; sourceTree = "<group>"; };
+		946EF029FC6B8E82370D3CED /* TranslationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationService.swift; sourceTree = "<group>"; };
 		97F73B1E75EF61D038F41B3C /* AudioService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioService.swift; sourceTree = "<group>"; };
 		9B5C78734D65FD86D57C916F /* PipelineStep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineStep.swift; sourceTree = "<group>"; };
 		9CA38B372E1E952057138D8D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		9E004565387636287CADBBEE /* PhotoFlow.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PhotoFlow.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A744F8E9CC36AC9DFDE19C79 /* NotesManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesManager.swift; sourceTree = "<group>"; };
+		AF63168D1774C3566A1890FF /* DependencyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DependencyManager.swift; sourceTree = "<group>"; };
 		D180E348EDC56158B0BF798D /* StepCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StepCardView.swift; sourceTree = "<group>"; };
+		D894C147AD10AEB84D67A008 /* PhotoNote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoNote.swift; sourceTree = "<group>"; };
 		D9A94CA77623E8D9E58A80B9 /* CountdownOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CountdownOverlay.swift; sourceTree = "<group>"; };
 		DC6DB1ED9A17258B186DA24A /* DashboardStep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardStep.swift; sourceTree = "<group>"; };
+		DEC3191F1157C25BEECE9449 /* DictationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationService.swift; sourceTree = "<group>"; };
 		E7B2958CAA674C585FF19619 /* BracketReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BracketReviewView.swift; sourceTree = "<group>"; };
 		F2A432AA258005E8C0A206EA /* WatchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchView.swift; sourceTree = "<group>"; };
 		F59167C3EF5ADC97D2062D84 /* AddressBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddressBanner.swift; sourceTree = "<group>"; };
 		FD8B3E2EDBB94C385E77AC28 /* WatchService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchService.swift; sourceTree = "<group>"; };
 		FE736FC6AE961F0303A83433 /* StepStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StepStatus.swift; sourceTree = "<group>"; };
-		82888249A19A2A5DA045CDAA /* PhotoNote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoNote.swift; sourceTree = "<group>"; };
-		9ECDE0103F546AC5485C56D9 /* DictationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationService.swift; sourceTree = "<group>"; };
-		08A77DBC6F4562EC6D9D3CBB /* TranslationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationService.swift; sourceTree = "<group>"; };
-		E0C3AAE2428628C1C555F04B /* NotesManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesManager.swift; sourceTree = "<group>"; };
-		3DAE6A66E271B62755CC94DA /* DictationPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationPanelView.swift; sourceTree = "<group>"; };
-		BB1122334455667788990011 /* DependencyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DependencyManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -108,13 +108,13 @@
 				5741822D3A108DFE01C65016 /* ContentView.swift */,
 				D9A94CA77623E8D9E58A80B9 /* CountdownOverlay.swift */,
 				34E6CD8744670D864F6EE6C3 /* DashboardView.swift */,
+				8C306A8E7A0E0E6FE3F26EA3 /* DictationPanelView.swift */,
 				6AC2E556B6BD2CA657E8FD43 /* LaunchModeView.swift */,
 				8A170910AAC2BAD6773C4FBB /* LocalImageView.swift */,
 				2BDD602C0F3FBBB4CCF84CA6 /* PipelineProgressView.swift */,
 				0ED1FEAB2805AD66CD0BCFEE /* PreviewCullView.swift */,
 				57074BFC0A2871C3D4A731BF /* SettingsView.swift */,
 				D180E348EDC56158B0BF798D /* StepCardView.swift */,
-				3DAE6A66E271B62755CC94DA /* DictationPanelView.swift */,
 				F2A432AA258005E8C0A206EA /* WatchView.swift */,
 			);
 			path = Views;
@@ -136,10 +136,10 @@
 				80B78757C80052743BF6680B /* BracketGroup.swift */,
 				DC6DB1ED9A17258B186DA24A /* DashboardStep.swift */,
 				81818FB45B057F04C0487565 /* PhotoItem.swift */,
+				D894C147AD10AEB84D67A008 /* PhotoNote.swift */,
 				78FB5F4124C051FBCF5BAA73 /* PipelineState.swift */,
 				9B5C78734D65FD86D57C916F /* PipelineStep.swift */,
 				FE736FC6AE961F0303A83433 /* StepStatus.swift */,
-				82888249A19A2A5DA045CDAA /* PhotoNote.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -149,13 +149,13 @@
 			children = (
 				97F73B1E75EF61D038F41B3C /* AudioService.swift */,
 				7CFA4B712D2C1C7EB5465997 /* CalendarService.swift */,
+				AF63168D1774C3566A1890FF /* DependencyManager.swift */,
+				DEC3191F1157C25BEECE9449 /* DictationService.swift */,
+				A744F8E9CC36AC9DFDE19C79 /* NotesManager.swift */,
 				2A80F2C5311915769B9C28DC /* PipelineRunner.swift */,
+				946EF029FC6B8E82370D3CED /* TranslationService.swift */,
 				7C75DCF5203EC0F7258AF011 /* VisionTaggingService.swift */,
 				FD8B3E2EDBB94C385E77AC28 /* WatchService.swift */,
-				E0C3AAE2428628C1C555F04B /* NotesManager.swift */,
-				08A77DBC6F4562EC6D9D3CBB /* TranslationService.swift */,
-				9ECDE0103F546AC5485C56D9 /* DictationService.swift */,
-				BB1122334455667788990011 /* DependencyManager.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -236,10 +236,15 @@
 				D28FF223F4DD2E06F13914CE /* CountdownOverlay.swift in Sources */,
 				38A042D3F5195C20B210C8A3 /* DashboardStep.swift in Sources */,
 				A38504921BB482E4F3D59BBE /* DashboardView.swift in Sources */,
+				73EEFBCCB85532865E3F63E9 /* DependencyManager.swift in Sources */,
+				7187E7AB4A00672596608C12 /* DictationPanelView.swift in Sources */,
+				5286C11972938728901F1FE8 /* DictationService.swift in Sources */,
 				294D4CAC2A5036B5A358B0AF /* LaunchModeView.swift in Sources */,
 				9AEB695371EDAEC78EFAD571 /* LocalImageView.swift in Sources */,
+				0A920AE3F7F2BF2E2C1A141A /* NotesManager.swift in Sources */,
 				D4E8B25EF56984E792860C17 /* PhotoFlowApp.swift in Sources */,
 				0F6B2A6A185C80AEDD89611B /* PhotoItem.swift in Sources */,
+				513BB703639F818E84E1920A /* PhotoNote.swift in Sources */,
 				7FDCC5061DC5692B6EB8DC3B /* PipelineProgressView.swift in Sources */,
 				807FC75A47B225F6EBE18C8B /* PipelineRunner.swift in Sources */,
 				70D6B6BC07D487CE12288CB2 /* PipelineState.swift in Sources */,
@@ -248,15 +253,10 @@
 				BAFC8EE66AAFCD940587B052 /* SettingsView.swift in Sources */,
 				9D8F4DE0885D55B7C8280318 /* StepCardView.swift in Sources */,
 				70BDAEDAF1F167AF3DCDEB16 /* StepStatus.swift in Sources */,
-				E8DD6EBCEF67FDAC65A659E4 /* DictationPanelView.swift in Sources */,
-				6CADA6E434FBEDD8FDCD5584 /* NotesManager.swift in Sources */,
-				AE3B7AAEFA98220C34604D4D /* TranslationService.swift in Sources */,
-				2DFBDF84644DCFE32B6F9348 /* DictationService.swift in Sources */,
-				4A33E63BBE44F38156156517 /* PhotoNote.swift in Sources */,
+				0BC4E6F7B5881C02478E834F /* TranslationService.swift in Sources */,
 				BC940806996D910CA009348B /* VisionTaggingService.swift in Sources */,
 				429A79924D4794EF23FC9379 /* WatchService.swift in Sources */,
 				53445F47593D16D384D53128 /* WatchView.swift in Sources */,
-				AA1122334455667788990011 /* DependencyManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -340,9 +340,9 @@
 				INFOPLIST_KEY_CFBundleDisplayName = PhotoFlow;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_NSCalendarsUsageDescription = "PhotoFlow läser din kalender för att matcha fotograferingar med bokningsadresser och organisera filerna i adressmappar.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "PhotoFlow använder mikrofonen för att spela in röstanteckningar till bilder.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "PhotoFlow använder taligenkänning för att transkribera röstanteckningar till text.";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -424,9 +424,9 @@
 				INFOPLIST_KEY_CFBundleDisplayName = PhotoFlow;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_NSCalendarsUsageDescription = "PhotoFlow läser din kalender för att matcha fotograferingar med bokningsadresser och organisera filerna i adressmappar.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "PhotoFlow använder mikrofonen för att spela in röstanteckningar till bilder.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "PhotoFlow använder taligenkänning för att transkribera röstanteckningar till text.";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
