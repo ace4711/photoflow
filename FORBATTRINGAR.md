@@ -1158,3 +1158,228 @@ Vision — **betydligt fler än väntat**, se "Manuell testning" nedan.
   `lint/*/processed/previews/`-mapparna, som är betydligt större) på grund
   av tidsåtgången för Vision-analys av flera hundra/tusen bilder i den här
   miljön — kalibreringen vilar på en (visuellt väl verifierad) session.
+
+## Fas 3c – Tal, översättning och geokodning på enheten
+
+Utfört autonomt på branchen `forbattringar` medan användaren sov, ett steg i
+taget med bygge + tester gröna före varje commit. Se `git log --oneline` för
+commit-för-commit-historik. 108 tester totalt efter denna fas, alla gröna.
+
+Mål: modernisera de tre sista stora deprecerade/tredjeparts-API:erna i
+appen — Google Translate-anropet i `TranslationService`, `SFSpeechRecognizer`
+i `DictationService`, och `CLGeocoder`/`MKMapItem.placemark` i
+`CalendarService`/`AddressBanner` — samt en liten justering av
+"Föreslå gallring" från Fas 3b.
+
+### 0. "Föreslå gallring" föreslår bara dubbletter som standard
+
+Fas 3b:s kalibrering visade att Vision flaggade **34 %** av en riktig
+fastighetssession som `isUtility` — för högt för att automatiskt föreslå
+gallring av dem. Ny inställning `AppSettings.cullSuggestUtility` (standard
+**av**) styr om `s`-förslaget i `PreviewCullView` även tar med
+`isUtility`-bilder. Dubbletter (behåll bästa i varje grupp) föreslås alltid,
+oavsett inställningen.
+
+`PhotoQualityService.suggestCulling` returnerar nu en `CullSuggestion`
+(`duplicates`/`utility`, uppdelat) i stället för en platt `Set<String>`, så
+bekräftelsebannern i gallringsvyn kan visa exakt vad som föreslogs
+("Föreslog 3 bilder för gallring (3 dubbletter)" eller "... (2 dubbletter,
+1 nyttobild)"). Ny toggle + förklarande text i `SettingsView`s
+AI-taggning-sektion.
+
+### 1. Översättning på enheten (`TranslationService`)
+
+Ersätter POST till Googles inofficiella `translate.googleapis.com` med
+Apples on-device Translation-ramverk. **Google-anropet är helt borttaget**
+— ingen anteckningstext lämnar enheten längre, och inget tyst
+fallback-till-Google om något går fel.
+
+- `TranslationSession` skapas via SwiftUI-modifieraren
+  `.translationTask(configuration:action:)` i `DictationPanelView` (den
+  enda vägen som kan trigga en riktig modellnedladdning via systemets UI —
+  verifierat i SDK:n att den bor i cross-import-overlayen
+  `_Translation_SwiftUI`, som blir tillgänglig automatiskt när `Translation`
+  och `SwiftUI` importeras i samma fil). `TranslationService` äger en
+  `@Published TranslationSession.Configuration?` som modifieraren
+  observerar; `translate(_:from:to:)` sätter/`invalidate()`:ar
+  configurationen och väntar på en `CheckedContinuation` som löses in av
+  `performPendingTranslation(using:)` när SwiftUI levererar en session.
+- `LanguageAvailability().status(from:to:)` kollas innan varje översättning:
+  `.supported` (modellen finns men är inte nedladdad) visar "Laddar ner
+  språkmodell (X)…" och triggar `session.prepareTranslation()`;
+  `.unsupported` ger ett tydligt svenskt felmeddelande i panelen i stället
+  för att tyst falla tillbaka på något annat. `TranslationError`-fallen
+  (t.ex. `.unsupportedLanguagePairing`, `.notInstalled`) mappas till svensk
+  text.
+- Löste en Swift 6-concurrency-fälla: att skicka den icke-`Sendable`
+  `TranslationSession` från `.translationTask`s closure till en
+  `@MainActor`-metod gav "sending session risks causing data races" —
+  löst genom att märka parametern `sending TranslationSession` i
+  `performPendingTranslation(using:)`.
+- **Tester** (`TranslationServiceTests`): `LanguageAvailability`s
+  statusmaskin (körs i en `Task.detached` så den icke-`Sendable` typen
+  aldrig behöver korsa en aktörsgräns) plus ett riktigt rundtrippstest via
+  `TranslationSession(installedSource:target:)` (fungerar eftersom sv->en
+  råkar redan vara nedladdat på utvecklingsmaskinen som denna fas kördes
+  på) — översatte "Kylskåpet i köket är trasigt." till "The refrigerator in
+  the kitchen is broken." Hoppar sig själv utan att fela om modellen saknas
+  på maskinen som kör testet.
+
+### 2. Diktering på enheten (`DictationService`)
+
+Ersätter `SFSpeechRecognizer` med det nya `SpeechAnalyzer`-API:t.
+
+**Viktigt SDK-fynd som INTE var uppenbart från dokumentationen** och som
+krävde verklig testkörning (inte bara läsning av `.swiftinterface`) för att
+upptäcka: `Speech.framework` har två olika "transcriber"-moduler för
+`SpeechAnalyzer` — `SpeechTranscriber` (tänkt för
+kvalitetstranskribering av inspelat/längre tal) och `DictationTranscriber`
+(tänkt för live-diktering, samma användningsfall som appens gamla
+`SFSpeechAudioBufferRecognitionRequest`). Testat i scratchpad:
+`SpeechTranscriber.supportedLocales` innehåller **inte** svenska (45 språk,
+inget `sv-SE`) i den här SDK-versionen, medan
+`DictationTranscriber.supportedLocales` gör det (54 språk, inklusive
+`sv-SE`, bekräftat via `supportedLocale(equivalentTo:)` ->
+`sv_SE (fixed sv_SE)`). Appen dikterar i huvudsak svenska —
+`DictationTranscriber` används, `SpeechTranscriber` hade tyst gjort svensk
+diktering omöjlig.
+
+- **Flöde**: `AVAudioEngine`s mikrofon-tapp konverterar varje buffert
+  (`AVAudioConverter`) till `SpeechAnalyzer`s bästa kompatibla format och
+  matar in dem i en `AsyncStream<AnalyzerInput>` som
+  `SpeechAnalyzer.start(inputSequence:)` konsumerar.
+  `DictationTranscriber(locale:contentHints:transcriptionOptions:
+  reportingOptions:attributeOptions:)` konfigureras explicit med
+  `.punctuation` (matchar gamla `addsPunctuation = true`),
+  `.volatileResults` (löpande delresultat, matchar gamla
+  `shouldReportPartialResults = true`) och `.frequentFinalization`
+  (finaliserar oftare — snabbare "commit", mindre risk att tappa text vid
+  ett avbrott mitt i en lång mening).
+- **Textmodellen**: verifierat i scratchpad (syntetiskt svenskt tal via
+  `say -v Alva`, matat genom EXAKT samma
+  AVAudioConverter+AsyncStream-väg som produktionskoden, inte bara den
+  enklare `inputAudioFile`-genvägen) att varje resultats `text` bara är den
+  NYA textbiten sedan senaste finalisering — inte hela sessionens text om
+  och om igen. `liveTranscript` byggs därför som
+  `finalizedText (ackumulerad) + senaste flyktiga texten`
+  (`DictationService.accumulate`, ren/testad funktion), samma
+  "visa allt hittills"-modell `SFSpeechRecognitionResult.bestTranscription`
+  gav förut.
+- **Stoppordet** ("stopp"/"stop") upptäcks fortfarande snabbt: samma
+  scratchpad-körning visade att "stopp" dyker upp i ett **flyktigt**
+  resultat (`isFinal=false`) innan finalisering, inte fördröjt till nästa
+  `isFinal`. Utbrutet till en ren funktion
+  (`DictationService.stripTrailingStopWord`).
+- **Modellnedladdning**: `AssetInventory.status(forModules:)` +
+  `assetInstallationRequest(supporting:)` laddar ner språkmodellen om den
+  saknas (samma mönster som `TranslationService`), med svensk statustext
+  ("Laddar ner språkmodell (X)…") i `DictationPanelView`.
+- **Behållet oförändrat**: publikt kontrakt (`liveTranscript`,
+  `stoppedByVoice`, `isRecording`, `authorized`, `error`), så
+  `DictationPanelView` inte behövde skrivas om i grunden.
+  `SFSpeechRecognizer.requestAuthorization` behålls för
+  behörighetsflödet (samma TCC-behörighet, kostar inget att fortsätta
+  använda).
+- **Tester** (`DictationServiceTests`): rena tester av
+  `accumulate`/`stripTrailingStopWord`, plus ett riktigt integrationstest
+  mot en committad ljudfixtur (`Tests/Fixtures/Dictation/
+  kylskapet_trasigt_stopp_sv.m4a`, 17 KB, syntetiskt svenskt tal genererat
+  med `say -v Alva`) som kör hela produktionsvägen genom `SpeechAnalyzer`
+  och verifierar att transkriberingen faktiskt hittar texten och
+  stoppordet. Hoppar sig själv utan att fela om `sv-SE` inte är
+  tillgängligt på maskinen som kör testet.
+
+### 3. Geokodning via MapKit (`CalendarService`/`AddressBanner`)
+
+Ersätter deprecerade `CLGeocoder.geocodeAddressString` och
+`MKMapItem.placemark` med `MKGeocodingRequest`/`MKMapItem.location`/
+`.address`.
+
+`MKGeocodingRequest`/`MKMapItem.location`/`.address` syns **inte** i
+`MapKit.swiftinterface` — MapKit på macOS är i grunden ett
+Objective-C-ramverk med en tunn Swift-overlay, så bara genuint
+Swift-native symboler listas där. Verifierat direkt mot
+Objective-C-headrarna (`MKGeocodingRequest.h`, `MKMapItem.h`,
+`MKAddress.h`) och testat i scratchpad mot en riktig adress
+("Lindvägen 12, Tyresö, Sverige") innan produktionskoden skrevs:
+`MKGeocodingRequest(addressString:)?.mapItems` (async throws,
+`NS_SWIFT_ASYNC_NAME(getter:mapItems())` — anropas som en async property,
+inte en metod) gav samma koordinat som `CLGeocoder` gjorde.
+
+- `CalendarService.geocodeAddress`: samma beteende som förut (", Sverige"
+  läggs till om det saknas, cache per adress, `nil` vid miss/fel) — bara
+  motorn under huven bytt.
+- `AddressBanner.IdentifiableMapItem`: `.placemark.coordinate` ->
+  `.location.coordinate`, `.placemark.title` -> `.address?.fullAddress`
+  (närmaste motsvarighet — en fullständig, formaterad adressträng).
+- **Resultat: 0 deprecationsvarningar i egen kod** på en fullständigt ren
+  build (verifierat med `rm -rf` av derived-data-mappen + omkörd `build`) —
+  de kvarstående CLGeocoder/placemark-varningarna som funnits sedan Fas 0
+  är nu åtgärdade.
+- **Tester** (`CalendarServiceTests`): två riktiga integrationstester mot
+  en riktig svensk adress (geokodning ger en koordinat i
+  Stockholmsregionen, andra anropet med samma adress återanvänder cachen i
+  stället för att slå mot nätverket igen) — hoppar sig själva utan att
+  fela om nätverket/Apple Maps inte är tillgängligt på maskinen som kör
+  testet.
+
+### Manuell testning användaren bör göra
+
+1. **Diktering, första gången ett språk används på en ny maskin/efter en
+   ren installation**: kontrollera att "Laddar ner språkmodell (Svenska)…"
+   visas i `DictationPanelView` medan `DictationTranscriber`s språkmodell
+   laddas ner, och att inspelningen sedan fungerar normalt efteråt. Testat
+   här bara mot en maskin där modellen redan var tillgänglig (status
+   `.supported`, men installation lyckades utan explicit nedladdningssteg)
+   — en riktig "kall" nedladdning (status `.unsupported`/en maskin utan
+   modellen alls) kunde inte framtvingas i den här miljön.
+2. **Diktering, riktigt tal**: den här fasen verifierades grundligt med
+   **syntetiskt** tal (`say`), inte en riktig mänsklig röst genom en riktig
+   mikrofon. Testa särskilt: (a) att "stopp"/"stop" fortfarande avslutar
+   inspelningen snabbt i praktiken (syntetisk taltest visade att ordet dyker
+   upp i ett flyktigt resultat innan finalisering, men riktigt tal/en riktig
+   mikrofon kan bete sig annorlunda), (b) längre, sammanhängande diktering
+   över flera meningar med naturliga pauser (kontrollera att
+   `finalizedText`-ackumuleringen inte tappar eller dubblerar text vid
+   pauserna), (c) engelsk diktering (`en-US`, bara svenska testades i
+   scratchpad-experimenten, om än `en-US` bekräftades finnas i
+   `DictationTranscriber.supportedLocales`).
+3. **Översättning, första gången ett språkpar används**: om `sv`->`en` inte
+   redan är nedladdat på din maskin, kontrollera att "Laddar ner
+   språkmodell (English)…" visas i panelen och att översättningen fungerar
+   efteråt. Testat här bara med ett språkpar som redan var nedladdat på
+   utvecklingsmaskinen — kunde inte framtvinga en riktig "kall" nedladdning
+   i den här miljön.
+4. **Översättningsfel**: testa gärna att koppla från nätverket helt inte
+   är relevant längre (allt är on-device), men om Apples översättnings-
+   ramverk av någon anledning inte kan slutföra en översättning, kontrollera
+   att felmeddelandet i panelen är begripligt och att appen inte hänger
+   kvar i "Översätter..."-läge.
+5. **"Föreslå gallring" med `cullSuggestUtility` påslaget**: slå på
+   inställningen och kör "Föreslå gallring" på en session med
+   `isUtility`-flaggade bilder — kontrollera att bekräftelsetexten korrekt
+   räknar upp både dubbletter och nyttobilder separat.
+6. **Adressbanderollens kartvy** (`AddressCorrectionView`): kontrollera att
+   sökresultatens underrubrik (tidigare `.placemark.title`, nu
+   `.address?.fullAddress`) fortfarande visar en läsbar, fullständig adress
+   för svenska sökträffar.
+
+### Kvarstående / inte gjort i Fas 3c
+
+- Ingen riktig "kall" modellnedladdning (varken tal eller översättning)
+  kunde framtvingas i den här miljön — båda scratchpad-verifieringarna
+  kördes på en maskin där språkmodellerna redan var (helt eller delvis)
+  tillgängliga. Nedladdningskodvägarna (`AssetInventory`/
+  `LanguageAvailability` + statustext) skrevs enligt SDK:ns dokumenterade
+  kontrakt men är inte verifierade end-to-end mot en riktig nedladdning.
+- Diktering testades bara med syntetiskt genererat tal (`say -v Alva`),
+  aldrig en riktig mänsklig röst via en riktig mikrofon i den här GUI-lösa
+  miljön — se "Manuell testning", punkt 2.
+- `DictationTranscriber`s exakta finaliserings-/paus-beteende
+  (hur ofta `.frequentFinalization` faktiskt finaliserar under en lång,
+  sammanhängande, riktig diktering med naturliga pauser) är bara verifierat
+  med korta, syntetiska testfraser — se "Manuell testning", punkt 2b.
+- `MKReverseGeocodingRequest` (motsvarande reverse-geocoding-ersättning för
+  `CLGeocoder.reverseGeocodeLocation`) undersöktes i SDK:n men används inte
+  någonstans i appen idag (ingen kod reverse-geocodar) — inget att
+  migrera, bara dokumenterat för fullständighetens skull.
