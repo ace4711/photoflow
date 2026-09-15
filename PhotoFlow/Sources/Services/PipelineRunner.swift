@@ -506,10 +506,22 @@ class PipelineRunner: ObservableObject {
         state.totalFiles = nefFiles.count
         state.statusMessage = "Konverterar \(nefFiles.count) NEF-filer till DNG..."
 
-        // Check which DNG files already exist — search entire output dir (files may be in dng/ or address folders)
+        // Check which DNG files already exist in the dng/ staging folder only.
+        // Address folders also contain DNG entries, but those are symlinks back into
+        // this same staging folder — scanning outputDir recursively double-counted
+        // them (harmless for the count itself, but meant a fresh dng/ folder with
+        // stale address-folder symlinks pointing at now-deleted files could still
+        // report "all exist"). Regular files only, so a symlink can never masquerade
+        // as a real conversion result.
         var existingDNGNames = Set<String>()
-        for fileURL in Self.findFiles(withExtension: "dng", in: outputDir) {
-            existingDNGNames.insert(fileURL.deletingPathExtension().lastPathComponent.lowercased())
+        if let entries = try? FileManager.default.contentsOfDirectory(
+            at: dngDir, includingPropertiesForKeys: [.isSymbolicLinkKey], options: [.skipsHiddenFiles]
+        ) {
+            for fileURL in entries where fileURL.pathExtension.lowercased() == "dng" {
+                let isSymlink = (try? fileURL.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink ?? false
+                guard !isSymlink else { continue }
+                existingDNGNames.insert(fileURL.deletingPathExtension().lastPathComponent.lowercased())
+            }
         }
         let nefNames = Set(nefFiles.map { $0.deletingPathExtension().lastPathComponent.lowercased() })
         let missingDNG = nefNames.subtracting(existingDNGNames)
@@ -570,7 +582,7 @@ class PipelineRunner: ObservableObject {
         }
 
         let finalDNGFiles = try FileManager.default.contentsOfDirectory(at: dngDir, includingPropertiesForKeys: nil)
-            .filter { $0.pathExtension == "dng" }
+            .filter { $0.pathExtension.lowercased() == "dng" }
         let finalCount = finalDNGFiles.count
 
         // Log each converted file
@@ -1337,17 +1349,23 @@ class PipelineRunner: ObservableObject {
 
         let nefFiles = findNEFFiles(in: inputDir)
 
-        // Check if all previews already exist
-        let existingPreviews = (try? FileManager.default.contentsOfDirectory(at: previewDir, includingPropertiesForKeys: nil))?
-            .filter { $0.pathExtension.lowercased() == "jpg" }.count ?? 0
-        if existingPreviews >= nefFiles.count {
+        // Check if all previews already exist — compare basenames, not counts.
+        // A raw count comparison ("existingPreviews >= nefFiles.count") can pass
+        // even when the previews on disk don't actually match the current NEF set
+        // (e.g. leftover previews from a differently-named batch), which then
+        // skipped generation for NEFs that had no preview at all.
+        let existingPreviewNames = Set((try? FileManager.default.contentsOfDirectory(at: previewDir, includingPropertiesForKeys: nil))?
+            .filter { $0.pathExtension.lowercased() == "jpg" }
+            .map { $0.deletingPathExtension().lastPathComponent } ?? [])
+        let nefBaseNames = Set(nefFiles.map { $0.deletingPathExtension().lastPathComponent })
+        if nefBaseNames.isSubset(of: existingPreviewNames) {
             logDecision(step: "preview_generation", decision: "skipped", details: [
                 "reason": "all_exist",
-                "existingCount": "\(existingPreviews)",
+                "existingCount": "\(existingPreviewNames.count)",
                 "nefCount": "\(nefFiles.count)"
             ])
-            state.appendLog("Alla \(existingPreviews) previews finns redan — hoppar over.", type: .info)
-            state.appendStepLog(.generatePreviews, "Alla \(existingPreviews) previews finns redan — hoppar over", type: .info)
+            state.appendLog("Alla \(nefFiles.count) previews finns redan — hoppar over.", type: .info)
+            state.appendStepLog(.generatePreviews, "Alla \(nefFiles.count) previews finns redan — hoppar over", type: .info)
             state.progress = 1.0
             return
         }
