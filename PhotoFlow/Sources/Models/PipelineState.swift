@@ -200,8 +200,12 @@ class PipelineState: ObservableObject {
         appendLog("Adress rättad: \(newAddress) (\(String(format: "%.6f", coordinate.latitude)), \(String(format: "%.6f", coordinate.longitude)))", type: .success)
         // Store corrected coordinates for metadata writing
         correctedCoordinates[newAddress] = coordinate
-        // Persist correction to calendar_matches.json
+        // Persist correction (address + lat/lon + a "corrected" flag) to
+        // calendar_matches.json so it survives a restart — previously only the
+        // address text was written, so re-geocoding on the next load silently
+        // threw the manual GPS correction away again.
         saveCalendarMatches()
+        invalidateWrittenMetadataIfNeeded()
     }
 
     /// Write current address matches back to calendar_matches.json so corrections survive restarts.
@@ -213,16 +217,32 @@ class PipelineState: ObservableObject {
         guard let savedData = try? Data(contentsOf: matchesFile),
               var savedJSON = try? JSONSerialization.jsonObject(with: savedData) as? [[String: Any]] else { return }
 
-        // Update addresses from current in-memory state
+        // Update addresses (and, when corrected, GPS coordinates) from current in-memory state
         for (index, match) in allMatchedAddresses.enumerated() {
-            if index < savedJSON.count {
-                savedJSON[index]["address"] = match.address
+            guard index < savedJSON.count else { continue }
+            savedJSON[index]["address"] = match.address
+            if let coord = correctedCoordinates[match.address] {
+                savedJSON[index]["latitude"] = coord.latitude
+                savedJSON[index]["longitude"] = coord.longitude
+                savedJSON[index]["corrected"] = true
             }
         }
 
         if let jsonData = try? JSONSerialization.data(withJSONObject: savedJSON, options: .prettyPrinted) {
             try? jsonData.write(to: matchesFile)
         }
+    }
+
+    /// If metadata was already written before this correction, the marker must be
+    /// removed so `writeIPTCMetadata` runs again next time — otherwise the wrong
+    /// GPS/address that prompted the correction would stay baked into the already
+    /// tagged files forever.
+    private func invalidateWrittenMetadataIfNeeded() {
+        guard let outputDir = outputDirectory else { return }
+        let marker = outputDir.appendingPathComponent("metadata_written.json")
+        guard FileManager.default.fileExists(atPath: marker.path) else { return }
+        try? FileManager.default.removeItem(at: marker)
+        appendLog("Metadata var redan skriven — tar bort markören så den skrivs om med den rättade adressen/GPS-positionen.", type: .warning)
     }
 
     /// Corrected coordinates from manual address corrections

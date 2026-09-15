@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import CoreLocation
 
 @MainActor
 class PipelineRunner: ObservableObject {
@@ -827,6 +828,11 @@ class PipelineRunner: ObservableObject {
             let dateFormatter = ISO8601DateFormatter()
             calendarMappings = []
             state.allMatchedAddresses = []
+            // Addresses with a manually-corrected coordinate saved in the JSON
+            // (see PipelineState.correctAddress/saveCalendarMatches) — these must
+            // never be silently re-geocoded, since the whole point of a manual
+            // correction is that automatic geocoding got it wrong.
+            var correctedAddresses: Set<String> = []
             for entry in savedJSON {
                 guard let address = entry["address"] as? String,
                       let eventTitle = entry["event_title"] as? String,
@@ -835,7 +841,16 @@ class PipelineRunner: ObservableObject {
                       let start = dateFormatter.date(from: startStr),
                       let end = dateFormatter.date(from: endStr) else { continue }
                 calendarMappings.append((address: address, eventTitle: eventTitle, photoDateRange: start...end))
-                state.allMatchedAddresses.append((address: address, eventTitle: eventTitle, hasGPS: false, coordinate: nil))
+
+                let isCorrected = (entry["corrected"] as? Bool) ?? false
+                if isCorrected, let lat = entry["latitude"] as? Double, let lon = entry["longitude"] as? Double {
+                    let coord = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                    state.correctedCoordinates[address] = coord
+                    correctedAddresses.insert(address)
+                    state.allMatchedAddresses.append((address: address, eventTitle: eventTitle, hasGPS: true, coordinate: coord))
+                } else {
+                    state.allMatchedAddresses.append((address: address, eventTitle: eventTitle, hasGPS: false, coordinate: nil))
+                }
             }
             state.matchedAddress = state.allMatchedAddresses.first?.address
             state.matchedEventTitle = state.allMatchedAddresses.first?.eventTitle
@@ -848,10 +863,16 @@ class PipelineRunner: ObservableObject {
             for mapping in calendarMappings {
                 state.appendStepLog(.findCalendarInfo, "Match: \"\(mapping.address)\" — \(mapping.eventTitle)", type: .success)
             }
-            // Geocode cached addresses to show GPS status
+            // Geocode cached addresses to show GPS status — skip any address with a
+            // saved manual correction, using its corrected coordinate instead.
             let calendar = CalendarService.shared
             _ = await calendar.requestAccess()
             for (idx, mapping) in calendarMappings.enumerated() {
+                if correctedAddresses.contains(mapping.address) {
+                    let coord = state.correctedCoordinates[mapping.address]
+                    state.appendStepLog(.findCalendarInfo, "GPS (manuellt rättad): \"\(mapping.address)\" → \(String(format: "%.4f", coord?.latitude ?? 0)), \(String(format: "%.4f", coord?.longitude ?? 0))", type: .success)
+                    continue
+                }
                 let coord = await calendar.geocodeAddress(mapping.address)
                 if let coord {
                     state.appendStepLog(.findCalendarInfo, "GPS hittad: \"\(mapping.address)\" → \(String(format: "%.4f", coord.latitude)), \(String(format: "%.4f", coord.longitude))", type: .success)
@@ -992,8 +1013,21 @@ class PipelineRunner: ObservableObject {
         for mapping in calendarMappings {
             let address = calendar.addressFolder(for: mapping.photoDateRange.lowerBound, mappings: calendarMappings) ?? mapping.address
             if addressMeta[address] == nil {
-                let coord = await calendar.geocodeAddress(mapping.address)
                 let bookingInfo = CalendarService.extractBookingInfo(from: mapping.eventTitle)
+                // A manually corrected coordinate (PipelineState.correctAddress) must
+                // win over automatic geocoding — that correction exists specifically
+                // because geocoding got this address wrong.
+                if let corrected = state.correctedCoordinates[mapping.address] {
+                    addressMeta[address] = (lat: corrected.latitude, lon: corrected.longitude, bookingInfo: bookingInfo)
+                    state.appendLog("Använder manuellt rättad GPS för \"\(mapping.address)\" → \(String(format: "%.6f", corrected.latitude)), \(String(format: "%.6f", corrected.longitude))", type: .success)
+                    state.appendStepLog(.moveToFolders, "Manuellt rättad GPS: \"\(mapping.address)\" → \(String(format: "%.6f", corrected.latitude)), \(String(format: "%.6f", corrected.longitude))")
+                    if let idx = state.allMatchedAddresses.firstIndex(where: { $0.address == mapping.address }) {
+                        state.allMatchedAddresses[idx].hasGPS = true
+                        state.allMatchedAddresses[idx].coordinate = corrected
+                    }
+                    continue
+                }
+                let coord = await calendar.geocodeAddress(mapping.address)
                 if let coord {
                     addressMeta[address] = (lat: coord.latitude, lon: coord.longitude, bookingInfo: bookingInfo)
                     state.appendLog("Geokodade \"\(mapping.address)\" → \(String(format: "%.6f", coord.latitude)), \(String(format: "%.6f", coord.longitude))", type: .success)
@@ -1244,8 +1278,14 @@ class PipelineRunner: ObservableObject {
             for mapping in calendarMappings {
                 let address = calendar.addressFolder(for: mapping.photoDateRange.lowerBound, mappings: calendarMappings) ?? mapping.address
                 if meta[address] == nil {
-                    let coord = await calendar.geocodeAddress(mapping.address)
                     let bookingInfo = CalendarService.extractBookingInfo(from: mapping.eventTitle)
+                    // Same reasoning as exportToAddressFolders: a manual correction
+                    // must win over re-geocoding the (known-wrong) original address.
+                    if let corrected = state.correctedCoordinates[mapping.address] {
+                        meta[address] = (lat: corrected.latitude, lon: corrected.longitude, bookingInfo: bookingInfo)
+                        continue
+                    }
+                    let coord = await calendar.geocodeAddress(mapping.address)
                     if let coord {
                         meta[address] = (lat: coord.latitude, lon: coord.longitude, bookingInfo: bookingInfo)
                     } else {
