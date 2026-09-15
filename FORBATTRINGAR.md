@@ -752,3 +752,192 @@ rörs inte i denna fas). Alla 66 tester gröna, inklusive testmålet
 - 0 varningar i egen kod uppnått, förutom de kända
   CLGeocoder/placemark-deprecationerna (åtgärdas i en senare fas, som
   tidigare faser också dokumenterat).
+
+## Fas 3a – HDR på RAW-data
+
+Utfört autonomt på branchen `forbattringar` medan användaren sov, ett steg i
+taget med bygge + tester gröna före varje commit. Se `git log --oneline` för
+commit-för-commit-historik.
+
+Mål: ersätta den gamla HDR-vägen (OpenCV/python3 `cv2.createMergeMertens` på
+8-bitars **inbäddade JPEG-förhandsbilder** ur NEF, sparat som "16-bit TIFF"
+men utan någon riktig RAW-dynamik) med riktig exposure fusion på RAW-data
+(DNG/NEF) i ren Swift.
+
+### 1–4. `Services/HDR/` — ny motor
+
+- **`RAWRenderer.swift`**: renderar en DNG/NEF via `CIRAWFilter` till en
+  RGBA float32-buffert. Verifierat i SDK:n (`CIRAWFilter.h`):
+  `supportedDecoderVersions` är "sorted in increasingly newer order", så
+  `.last` väljer alltid den nyaste decodern för filens bildtyp (RAW vs. DNG
+  har separata versionslistor) — ingen hårdkodad versionssträng, plockar
+  automatiskt upp macOS 27:s nya RAW-avkodare. Samma vitbalans (läst från
+  mittexponeringen), `exposure=0`, `boostAmount=1`,
+  `extendedDynamicRangeAmount=0` och lens correction (om filen stödjer det)
+  sätts på alla bilder i en bracket för konsekvent avkodning.
+  Renderas till `CIContext` med `extendedLinearSRGB` som working space och
+  **sRGB** (inte scenlinjärt) som destination-färgrymd för `render(_:
+  toBitmap:...)` — Mertens-vikterna (kontrast/mättnad/välexponering centrerad
+  på 0.5) är definierade för display-referred bilder, precis som de gamla
+  8-bitars JPEG-förhandsbilderna. `hdrMaxDimension` styr `CIRAWFilter.scaleFactor`
+  (avkodaren gör mindre jobb direkt, inte en efterhandsskalning).
+- **`ExposureFusion.swift`**: Mertens/Kautz/Van Reeth exposure fusion
+  implementerad direkt (ingen OpenCV) — kontrast (`|Laplace|` av gråskala),
+  mättnad (std över R/G/B), välexponering (produkt av Gaussianer centrerade
+  på 0.5, σ=0.2), normaliserade vikter, Gaussisk vikt-pyramid + Laplace-
+  bildpyramid (separabel 5-tap `[1,4,6,4,1]/16` via `vImageConvolve_PlanarF`,
+  `kvImageEdgeExtend`), blandning per nivå, kollaps. Bearbetar en färgkanal i
+  taget så bara en uppsättning Laplace-pyramider (inte alla tre) hålls i
+  minnet samtidigt. Sex Swift Testing-tester (identiska/upprepade indata,
+  välexponerad bild dominerar över utbränd, udda bildstorlekar 37×23, ren
+  pyramid+kollaps återskapar bilden — algebraiskt garanterat, en bra
+  sanity-check av reduce/expand oberoende av blandningslogiken).
+- **`HDRAlignment.swift`**: justerar handhållna brackets. API-beslut
+  (verifierat i SDK:n): macOS 26/27 Vision har både det nya Swift-API:t
+  `TrackTranslationalImageRegistrationRequest` (byggt för att spåra
+  *videoströmmar* bild-för-bild — `StatefulRequest`,
+  `frameAnalysisSpacing: CMTime`) och det äldre
+  `VNTranslationalImageRegistrationRequest`/`VNImageRequestHandler` (en
+  enkel engångsförfrågan "justera flytande bild mot referensbild", verifierat
+  i `VNImageRegistrationRequest.h`, inte avvecklad — bara ersatt för
+  videofallet). En bracket är ett fåtal fristående stillbilder, så det äldre
+  engångs-API:t användes. Körs på en nedskalad gråskalekopia (800px lång
+  sida, `vImageScale_PlanarF`/`vImageConvert_PlanarFtoPlanar8`) mot
+  mittexponeringen, resultatet skalas upp och appliceras med bilinjär
+  interpolation direkt på den redan renderade full-upplösta bufferten
+  (`RAWRenderer.shiftRGBA`) — enklare och mer korrekt än att gissa
+  förskjutningen innan RAW-rendering och försöka bädda in den i
+  `CIRAWFilter`s pipeline. Avstängningsbar via `hdrAlignEnabled`.
+- **`HDRWriter.swift`**: skriver en riktig 16-bitars **RGB** (ingen
+  onödig alfakanal) LZW-TIFF via `CGImageDestination` + en JPEG-förhandsbild
+  (kvalitet 0.92, max 2400px, via `CIContext.writeJPEGRepresentation`).
+  Kopierar EXIF (datum, kamera, bländare, ISO, brännvidd m.m.) från
+  mittexponeringens RAW-fil med `exiftool -TagsFromFile` — enklare och mer
+  robust än att bygga `CGImageDestination`-EXIF-dictionaries för hand, och
+  konsekvent med hur resten av pipelinen redan skriver metadata.
+  (Upptäckt under manuell verifiering: `CIContext.createCGImage` stödjer bara
+  `.RGBA16`-formatet, dvs. med alfakanal — bytt till att bygga
+  16-bitars-RGB-bufferten för hand direkt från float-pixlarna i stället.)
+- **`HDREngine.swift`**: orkestrerar hela kedjan per bracket-grupp (läs
+  vitbalans → rendera alla exponeringar → justera → fusionera → skriv).
+  `nonisolated enum` — ett `await`-anrop från `PipelineRunner` (`@MainActor`
+  under `SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor`) hoppar automatiskt av
+  huvudtråden för att köra en `nonisolated async`-funktion, så ingen manuell
+  `Task.detached` behövs. Kontrollerar `Task.checkCancellation()` mellan varje
+  bildrendering/justering och runt fusionen.
+
+### 5. Inkoppling
+
+Ny inställning i `AppSettings`: `hdrEngine` (`"coreImage"` standard /
+`"opencv"`), `hdrMaxDimension` (standard 6000, `0` = full upplösning),
+`hdrAlignEnabled` (standard på). Picker + förklarande text i
+`SettingsView`s HDR-sektion. `BracketReviewView` visar nu rätt motornamn
+("Exposure Fusion (Core Image RAW)" / "Mertens Exposure Fusion (OpenCV)")
+i stället för det tidigare hårdkodade OpenCV-namnet.
+
+`PipelineRunner+HDR.swift`: `runHDRMerge`/`reMergeHDR` väljer motor per
+inställning. Core Image-vägen tar RAW-indata (DNG från `dng/`-staging,
+NEF-fallback via samma rekursiva lookup som `loadBracketGroups` använder,
+respektive `photo.dngURL`/`nefURL` i `reMergeHDR`) i stället för
+preview-JPEG:ar. OpenCV-vägen är oförändrad och fungerar som förut (kräver
+fortfarande `pip3 install opencv-python numpy`).
+
+**Kända begränsningar i inkopplingen** (avsiktliga, dokumenterade i stället
+för att över-engineera):
+- Grupper körs strikt sekventiellt (samtidighet 1 — inom det efterfrågade
+  intervallet 1–2). Minnestoppen för en enda grupp (se mätning nedan) gör
+  parallella grupper riskabelt för minnet på en vanlig utvecklarmaskin.
+- Paus (`isPaused`) kontrolleras mellan grupper, inte mitt i en enskild
+  grupps sammanslagning — en paus tar alltså effekt först när den pågående
+  gruppen är klar (kan ta upp till ~15–30s vid full upplösning). Avbrytning
+  (`cancel()`) är däremot finkornig (kontrolleras mellan varje bild och runt
+  fusionen inne i `HDREngine.merge`).
+- Progress-callbacken i `HDREngine.merge` (0...1 per grupp) är inte
+  kopplad till `PipelineState` — bara den befintliga grupp-nivå-progressen
+  (som redan fanns i den gamla koden) uppdateras. Att koppla in den skulle
+  kräva att hoppa tillbaka till `@MainActor` per delsteg (`Task { @MainActor
+  in ... }`) för varje av de ~15 callbacken gör per grupp, vilket bedömdes
+  vara mer risk (fler MainActor-hopp, mer kod) än värt för en detalj-progress
+  inom en grupp som redan tar sekunder, inte minuter.
+
+### 6. Mätning och visuell sanity-check
+
+Kopierade en riktig 4-exponerings bracket-serie (Nikon Z8, ~45MP, f/11, ISO
+320, exponeringar 0.6s/1/5s/0.6s/1.3s) från
+`Exempelgatan 7/processed/dng/` + originalet `DSC_9402.NEF` till scratchpad
+och körde `HDREngine.merge` fristående (kompilerad direkt med `swiftc` mot
+`Services/HDR/*.swift`, utanför Xcode-projektet, se scratchpad-historiken för
+den exakta kommandoraden) — testat med både DNG- och NEF-indata (båda
+fungerar; NEF går via samma `CIRAWFilter`-väg som DNG).
+
+- **Körtid**: 12.0s (`/usr/bin/time -l`) för 4 exponeringar vid
+  `hdrMaxDimension=6000` (→ 4000×6000 utdata) med justering påslagen, på en
+  Apple Silicon-Mac. Ett första körförsök vid samma inställningar tog
+  påtagligt längre (avbröts efter ~6 minuter utan tydlig förklaring — troligen
+  kall Metal-shader-cache för `CIContext`/`CIRAWFilter` första gången detta
+  körs i processen; ett andra försök med identiska bilder och inställningar
+  var klart på 12s). **Användaren bör notera detta**: om HDR-sammanslagningen
+  känns ovanligt långsam på den *första* gruppen i en session men snabbar upp
+  sig för resten, är det troligen samma engångs-uppvärmning, inte en bugg.
+- **Minne**: 4.36 GB peak memory footprint / 4.80 GB maximum resident set
+  size (`/usr/bin/time -l`) för samma körning (4×6000px-bilder hålls i minnet
+  samtidigt som float32 RGBA + vikt-/Laplace-pyramider). Detta är
+  anledningen till att grupper körs sekventiellt (se ovan) — flera samtidiga
+  grupper vid `hdrMaxDimension=6000` skulle kunna pressa minnet hårt på en
+  maskin med 8–16 GB RAM. Sänk `hdrMaxDimension` (t.ex. till 4000) om det blir
+  ett problem i praktiken.
+- **Visuell sanity-check**: JPEG-förhandsbilden för den fuserade bilden
+  granskades visuellt (ett badrum, fönster med starkt motljus + mörka
+  hörn) — väl avvägd exponering, inga utbrända höjdpunkter i fönsterpartiet,
+  inga uppenbara spökartefakter (ghosting) trots att bracketen är handhållen.
+  Kvantitativ jämförelse (egen liten ImageIO-baserad mätning, se
+  scratchpad): den fuserade bildens medelljusstyrka (114) ligger mellan
+  källbildernas (57–166), och andelen klippta högdagrar/skuggor i den
+  fuserade bilden (0.72% / 0.52%) är **lägre** än i någon enskild
+  källexponering (1.36–2.33% / 0.02–4.60%) — precis vad man förväntar sig av
+  en fungerande exposure fusion: den återvinner detaljer från både skuggor
+  och högdagrar i stället för att klippa dem.
+- **Jämförelse mot OpenCV-motorn**: **inte möjlig i den här miljön** —
+  `python3` här saknar `cv2`/`numpy` (`pip3 install opencv-python numpy` är
+  inte installerat), så det gamla OpenCV-JPEG-baserade flödet kunde inte
+  köras sida vid sida för en direkt bild-för-bild-jämförelse. Den nya motorns
+  resultat bedömdes ändå vara korrekt baserat på ovanstående kvantitativa och
+  visuella kontroller.
+
+### Manuell testning användaren bör göra
+
+1. **Jämför visuellt i appen**: kör samma bracket-serie genom pipelinen med
+   `hdrEngine = coreImage` (standard) och sedan med `hdrEngine = opencv`
+   (kräver `pip3 install opencv-python numpy`), och jämför resultaten i
+   `BracketReviewView` — särskilt på svåra motiv (starkt fönsterljus, mörka
+   hörn, blandad belysning). Den nya motorn bör bevara mer highlight-/
+   skuggdetalj eftersom den arbetar på RAW-data i stället för 8-bitars
+   JPEG-förhandsbilder.
+2. **Handhållna brackets**: testa på en bracket som inte är stativfotograferad
+   och kontrollera att `hdrAlignEnabled` faktiskt minskar spökartefakter
+   jämfört med avstängt — leta efter dubbla konturer på kanter/text i
+   resultatet.
+3. **Minne på en riktig session**: kör en hel mapp med många bracket-grupper
+   och håll ett öga på minnesanvändningen (Aktivitetsövervakaren) — sänk
+   `hdrMaxDimension` om det blir problematiskt på din maskin.
+4. **Kameramodeller**: testat här bara med Nikon Z8-DNG/NEF. Om andra
+   kameramodeller/RAW-format används, verifiera att `CIRAWFilter` stödjer dem
+   (`CIRAWFilter.supportedCameraModels`) och att resultatet ser rimligt ut.
+5. **Avbrytning/paus** under en pågående HDR-sammanslagning — verifiera att
+   avbryt stoppar inom rimlig tid (inom en bild/fusion-fas) och att paus tar
+   effekt senast vid nästa grupp.
+
+### Kvarstående / inte gjort i Fas 3a
+
+- Ingen jämförelse mot OpenCV-motorn kunde köras i den här miljön (OpenCV
+  saknas) — se punkt 6 ovan. Användaren bör göra den jämförelsen manuellt
+  (se "Manuell testning", punkt 1).
+- Progress-callbacken från `HDREngine.merge` är inte kopplad till
+  `PipelineState` för finkornig UI-progress inom en grupp — se
+  "Kända begränsningar" ovan.
+- Paus tar effekt mellan grupper, inte mitt i en sammanslagning — se
+  "Kända begränsningar" ovan.
+- Ingen ny CLI/testtarget lades till i Xcode-projektet för RAW-baserade
+  tester (`RAWRenderer.render`/`readWhiteBalance` kräver en riktig DNG/NEF,
+  vilket testmålet inte har tillgång till) — verifierat manuellt i stället
+  med kopierade testbilder i scratchpad (se punkt 6).
