@@ -596,18 +596,27 @@ class PipelineRunner: ObservableObject {
 
         guard let outputDir = state.outputDirectory else { throw PipelineError.toolNotFound("Ingen outputmapp") }
 
-        // Skip if bracket_groups.json already exists with matching file count
+        // Skip if bracket_groups.json already exists with matching file count AND
+        // matching analysis params — otherwise a settings change would silently
+        // keep using the old grouping.
         let groupsJSON = outputDir.appendingPathComponent("bracket_groups.json")
         let nefFiles = findNEFFiles(in: inputDir)
+        let maxTimeGap = AppSettings.shared.maxTimeGap
+        let minBracketSize = AppSettings.shared.minBracketSize
         if FileManager.default.fileExists(atPath: groupsJSON.path) {
             if let data = try? Data(contentsOf: groupsJSON),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let totalImages = json["total_images"] as? Int,
-               totalImages == nefFiles.count {
+               totalImages == nefFiles.count,
+               let params = json["params"] as? [String: Any],
+               (params["max_time_gap"] as? Int) == maxTimeGap,
+               (params["min_bracket_size"] as? Int) == minBracketSize {
                 logDecision(step: "bracket_analysis", decision: "skipped", details: [
-                    "reason": "json_exists_matching_count",
+                    "reason": "json_exists_matching_count_and_params",
                     "totalImages": "\(totalImages)",
-                    "nefCount": "\(nefFiles.count)"
+                    "nefCount": "\(nefFiles.count)",
+                    "maxTimeGap": "\(maxTimeGap)",
+                    "minBracketSize": "\(minBracketSize)"
                 ])
                 state.appendStepLog(.createHDR, "Bracket-analys redan klar (\(totalImages) filer) — hoppar over", type: .info)
                 state.appendLog("Bracket-analys redan klar — hoppar over.", type: .info)
@@ -651,7 +660,7 @@ class PipelineRunner: ObservableObject {
 
         _ = try await runProcess(
             executablePath: "/usr/bin/python3",
-            arguments: ["-c", pythonScript, exifCSV.path, groupsJSON.path, "15", "3"]
+            arguments: ["-c", pythonScript, exifCSV.path, groupsJSON.path, "\(maxTimeGap)", "\(minBracketSize)"]
         )
         pipelineLog("  bracket: python bracket-analys klar")
 
@@ -2192,7 +2201,8 @@ class PipelineRunner: ObservableObject {
 
             return indices
 
-        output = {'total_images': len(images), 'total_groups': len(groups), 'groups': []}
+        output = {'total_images': len(images), 'total_groups': len(groups), 'groups': [],
+            'params': {'max_time_gap': max_time_gap, 'min_bracket_size': min_bracket_size}}
         for i, g in enumerate(groups):
             exps = [x['exposure'] for x in g]
             er = max(exps) / max(min(exps), 0.0001) if min(exps) > 0 else 0
