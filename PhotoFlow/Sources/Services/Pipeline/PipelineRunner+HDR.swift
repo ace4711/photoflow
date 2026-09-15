@@ -1,7 +1,15 @@
 import Foundation
 
 extension PipelineRunner {
-    // MARK: - Step 4: HDR Merge (Mertens exposure fusion via OpenCV)
+    // MARK: - Step 4: HDR Merge
+    //
+    // Two engines, selectable via `AppSettings.hdrEngine` (Fas 3a):
+    // - "coreImage" (default): real exposure fusion on RAW data (DNG/NEF) via
+    //   `Services/HDR/` (CIRAWFilter + a from-scratch Mertens implementation
+    //   on Accelerate). Preserves RAW dynamic range instead of fusing 8-bit
+    //   embedded JPEG previews.
+    // - "opencv": the original path — Mertens fusion via python3/OpenCV on
+    //   the 8-bit embedded JPEG previews. Kept as a fallback/comparison engine.
 
     func runHDRMerge() async throws {
         guard let outputDir = state.outputDirectory else { return }
@@ -14,21 +22,34 @@ extension PipelineRunner {
               let groups = json["groups"] as? [[String: Any]] else { return }
 
         let previewDir = outputDir.appendingPathComponent("previews")
+        let dngDir = outputDir.appendingPathComponent("dng")
         let hdrDir = outputDir.appendingPathComponent("hdr")
         try FileManager.default.createDirectory(at: hdrDir, withIntermediateDirectories: true)
 
         let bracketGroups = groups.filter { ($0["is_bracket"] as? Bool) == true }
         guard !bracketGroups.isEmpty else { return }
 
+        let engine = AppSettings.shared.hdrEngine
+        let engineLabel = engine == "opencv" ? "Mertens exposure fusion (OpenCV)" : "Exposure fusion (Core Image RAW)"
+
         state.currentStep = .mergingHDR
-        state.statusMessage = "Slår ihop HDR-brackets (Mertens exposure fusion)..."
+        state.statusMessage = "Slår ihop HDR-brackets (\(engineLabel))..."
         state.totalFiles = bracketGroups.count
         state.currentFileIndex = 0
         state.progress = 0.0
-        state.appendLog("Startar HDR-sammanslagning med Mertens exposure fusion (\(bracketGroups.count) bracket-grupper)...", type: .info)
+        state.appendLog("Startar HDR-sammanslagning med \(engineLabel) (\(bracketGroups.count) bracket-grupper)...", type: .info)
+
+        // Recursive NEF lookup, used to resolve the RAW fallback when a file
+        // hasn't been converted to DNG yet (same pattern as loadBracketGroups).
+        var nefLookup: [String: URL] = [:]
+        if let inputDir = state.inputDirectory {
+            for url in findNEFFiles(in: inputDir) {
+                nefLookup[url.lastPathComponent] = url
+            }
+        }
 
         // Build list of groups to merge (skip already-done ones)
-        var groupsToMerge: [(groupId: Int, previewPaths: [String])] = []
+        var groupsToMerge: [(groupId: Int, previewPaths: [String], rawURLs: [URL])] = []
         for group in bracketGroups {
             let groupId = (group["group_id"] as? Int) ?? 0
             let files = (group["files"] as? [String]) ?? []
@@ -37,16 +58,29 @@ extension PipelineRunner {
             let hdrTiff = hdrDir.appendingPathComponent("hdr_group_\(groupId).tiff")
             if FileManager.default.fileExists(atPath: hdrTiff.path) { continue }
 
-            // Use preview JPEGs for fusion (full resolution embedded previews from NEF)
-            let previewPaths = suggestedIndices.compactMap { i -> String? in
+            let selectedFiles = suggestedIndices.compactMap { i -> String? in
                 guard i < files.count else { return nil }
-                let baseName = files[i].replacingOccurrences(of: ".NEF", with: "")
+                return files[i]
+            }
+
+            // Preview JPEGs (full-resolution embedded previews from NEF) — used by the OpenCV engine.
+            let previewPaths = selectedFiles.compactMap { filename -> String? in
+                let baseName = filename.replacingOccurrences(of: ".NEF", with: "")
                 let preview = previewDir.appendingPathComponent("\(baseName).jpg")
                 return FileManager.default.fileExists(atPath: preview.path) ? preview.path : nil
             }
 
-            guard previewPaths.count >= 2 else { continue }
-            groupsToMerge.append((groupId: groupId, previewPaths: previewPaths))
+            // RAW files (DNG preferred, NEF fallback) — used by the Core Image engine.
+            let rawURLs = selectedFiles.compactMap { filename -> URL? in
+                let baseName = filename.replacingOccurrences(of: ".NEF", with: "")
+                let dngURL = dngDir.appendingPathComponent("\(baseName).dng")
+                if FileManager.default.fileExists(atPath: dngURL.path) { return dngURL }
+                return nefLookup[filename]
+            }
+
+            let usable = engine == "opencv" ? previewPaths.count : rawURLs.count
+            guard usable >= 2 else { continue }
+            groupsToMerge.append((groupId: groupId, previewPaths: previewPaths, rawURLs: rawURLs))
         }
 
         if groupsToMerge.isEmpty {
@@ -58,15 +92,21 @@ extension PipelineRunner {
             return
         }
 
-        // Resolve python3+OpenCV once up front — failing per-group would produce
-        // "N misslyckades" instead of one clear "installera OpenCV" message.
-        let python3Path = try requirePython3WithOpenCV()
+        // Resolve the chosen engine's tool dependency once up front — failing
+        // per-group would produce "N misslyckades" instead of one clear message.
+        let python3Path = engine == "opencv" ? try requirePython3WithOpenCV() : nil
+        let exiftoolPath = try? requireExiftool()
 
-        // Write the Python fusion script
         let scriptPath = FileManager.default.temporaryDirectory.appendingPathComponent("photoflow_mertens.py")
-        let pyScript = mertensFusionPython()
-        try pyScript.write(to: scriptPath, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: scriptPath) }
+        if engine == "opencv" {
+            try mertensFusionPython().write(to: scriptPath, atomically: true, encoding: .utf8)
+        }
+        defer { if engine == "opencv" { try? FileManager.default.removeItem(at: scriptPath) } }
+
+        let hdrOptions = HDREngine.Options(
+            maxDimension: AppSettings.shared.hdrMaxDimension,
+            alignEnabled: AppSettings.shared.hdrAlignEnabled
+        )
 
         var successCount = 0
         var failCount = 0
@@ -74,28 +114,44 @@ extension PipelineRunner {
 
         for (idx, group) in groupsToMerge.enumerated() {
             try await checkCancellationAndWaitIfPaused()
-            state.statusMessage = "Exposure fusion: grupp \(group.groupId) (\(idx + 1)/\(groupsToMerge.count))..."
+            state.statusMessage = "\(engineLabel): grupp \(group.groupId) (\(idx + 1)/\(groupsToMerge.count))..."
             state.currentFileIndex = idx
             state.progress = Double(idx) / Double(groupsToMerge.count)
             state.updateStepProgress(.createHDR, processed: idx, total: groupsToMerge.count)
-            state.appendLog("HDR grupp \(group.groupId): \(group.previewPaths.count) bilder (Mertens fusion)...", type: .info)
+
+            let inputCount = engine == "opencv" ? group.previewPaths.count : group.rawURLs.count
+            state.appendLog("HDR grupp \(group.groupId): \(inputCount) bilder (\(engineLabel))...", type: .info)
 
             // Update detailed progress
             state.currentMergeGroupId = group.groupId
-            state.currentMergeInputURLs = group.previewPaths.map { URL(fileURLWithPath: $0) }
+            state.currentMergeInputURLs = engine == "opencv"
+                ? group.previewPaths.map { URL(fileURLWithPath: $0) }
+                : group.rawURLs
             state.currentMergeOutputURL = nil
 
             let outputPath = hdrDir.appendingPathComponent("hdr_group_\(group.groupId).tiff").path
             let previewPath = hdrDir.appendingPathComponent("hdr_group_\(group.groupId).jpg").path
 
-            let inputNames = group.previewPaths.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", ")
-            state.appendStepLog(.createHDR, "HDR grupp \(group.groupId): mergar \(group.previewPaths.count) bilder (\(inputNames))...")
+            let inputNames = (engine == "opencv" ? group.previewPaths.map { URL(fileURLWithPath: $0).lastPathComponent } : group.rawURLs.map(\.lastPathComponent)).joined(separator: ", ")
+            state.appendStepLog(.createHDR, "HDR grupp \(group.groupId): mergar \(inputCount) bilder (\(inputNames))...")
 
             do {
-                let output = try await runProcess(
-                    executablePath: python3Path,
-                    arguments: [scriptPath.path, outputPath] + group.previewPaths
-                )
+                if engine == "opencv" {
+                    guard let python3Path else { throw PipelineError.toolNotFound("python3 med OpenCV saknas") }
+                    _ = try await runProcess(
+                        executablePath: python3Path,
+                        arguments: [scriptPath.path, outputPath] + group.previewPaths
+                    )
+                } else {
+                    try await HDREngine.merge(
+                        rawURLs: group.rawURLs,
+                        options: hdrOptions,
+                        tiffURL: URL(fileURLWithPath: outputPath),
+                        jpegURL: URL(fileURLWithPath: previewPath),
+                        exiftoolPath: exiftoolPath
+                    )
+                }
+
                 if FileManager.default.fileExists(atPath: outputPath) {
                     successCount += 1
                     let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputPath)[.size] as? Int) ?? 0
@@ -106,11 +162,11 @@ extension PipelineRunner {
                         ? URL(fileURLWithPath: previewPath)
                         : URL(fileURLWithPath: outputPath)
                     state.currentMergeOutputURL = showURL
-                    pipelineLog("  Grupp \(group.groupId): Mertens fusion klar (16-bit TIFF)")
+                    pipelineLog("  Grupp \(group.groupId): \(engineLabel) klar (16-bit TIFF)")
                 } else {
                     failCount += 1
                     state.appendStepLog(.createHDR, "HDR grupp \(group.groupId): ingen output skapad", type: .error)
-                    pipelineLog("  Grupp \(group.groupId): Ingen output skapad. \(output)")
+                    pipelineLog("  Grupp \(group.groupId): Ingen output skapad.")
                 }
             } catch {
                 failCount += 1
@@ -129,7 +185,7 @@ extension PipelineRunner {
 
         state.progress = 1.0
         if failCount == 0 {
-            state.appendLog("HDR-sammanslagning klar: \(successCount) grupper (Mertens fusion).", type: .success)
+            state.appendLog("HDR-sammanslagning klar: \(successCount) grupper (\(engineLabel)).", type: .success)
         } else {
             state.appendLog("HDR-sammanslagning: \(successCount) lyckades, \(failCount) misslyckades.", type: .warning)
         }
@@ -156,31 +212,49 @@ extension PipelineRunner {
         try? FileManager.default.removeItem(at: hdrJpeg)
         try? FileManager.default.removeItem(at: hdrTifOld)
 
-        // Use preview JPEGs for Mertens fusion
-        let previewPaths = selectedPhotos.compactMap { photo -> String? in
-            guard let url = photo.previewURL, FileManager.default.fileExists(atPath: url.path) else { return nil }
-            return url.path
-        }
-
-        guard previewPaths.count >= 2 else { return }
-
-        guard let python3Path = ToolLocator.python3WithOpenCV else {
-            state.appendLog("python3 med OpenCV (cv2) och numpy saknas — installera med: pip3 install opencv-python numpy", type: .error)
-            return
-        }
-
-        state.appendLog("Gör om HDR för grupp \(group.id) med \(previewPaths.count) bilder (Mertens fusion)...", type: .info)
-
-        let scriptPath = FileManager.default.temporaryDirectory.appendingPathComponent("photoflow_mertens.py")
-        let pyScript = mertensFusionPython()
-        try? pyScript.write(to: scriptPath, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: scriptPath) }
+        let engine = AppSettings.shared.hdrEngine
+        let engineLabel = engine == "opencv" ? "Mertens exposure fusion (OpenCV)" : "Exposure fusion (Core Image RAW)"
+        state.appendLog("Gör om HDR för grupp \(group.id) med \(selectedPhotos.count) bilder (\(engineLabel))...", type: .info)
 
         do {
-            _ = try await runProcess(
-                executablePath: python3Path,
-                arguments: [scriptPath.path, hdrTiff.path] + previewPaths
-            )
+            if engine == "opencv" {
+                let previewPaths = selectedPhotos.compactMap { photo -> String? in
+                    guard let url = photo.previewURL, FileManager.default.fileExists(atPath: url.path) else { return nil }
+                    return url.path
+                }
+                guard previewPaths.count >= 2 else {
+                    state.appendLog("Grupp \(group.id): för få förhandsbilder för OpenCV-fusion.", type: .warning)
+                    return
+                }
+                guard let python3Path = ToolLocator.python3WithOpenCV else {
+                    state.appendLog("python3 med OpenCV (cv2) och numpy saknas — installera med: pip3 install opencv-python numpy", type: .error)
+                    return
+                }
+                let scriptPath = FileManager.default.temporaryDirectory.appendingPathComponent("photoflow_mertens.py")
+                try mertensFusionPython().write(to: scriptPath, atomically: true, encoding: .utf8)
+                defer { try? FileManager.default.removeItem(at: scriptPath) }
+                _ = try await runProcess(
+                    executablePath: python3Path,
+                    arguments: [scriptPath.path, hdrTiff.path] + previewPaths
+                )
+            } else {
+                let rawURLs = selectedPhotos.compactMap { $0.dngURL ?? $0.nefURL }
+                guard rawURLs.count >= 2 else {
+                    state.appendLog("Grupp \(group.id): för få RAW-filer (DNG/NEF) för HDR.", type: .warning)
+                    return
+                }
+                let hdrOptions = HDREngine.Options(
+                    maxDimension: AppSettings.shared.hdrMaxDimension,
+                    alignEnabled: AppSettings.shared.hdrAlignEnabled
+                )
+                try await HDREngine.merge(
+                    rawURLs: rawURLs,
+                    options: hdrOptions,
+                    tiffURL: hdrTiff,
+                    jpegURL: hdrJpeg,
+                    exiftoolPath: try? requireExiftool()
+                )
+            }
         } catch {
             state.appendLog("Fusion misslyckades: \(error.localizedDescription)", type: .error)
         }
@@ -199,7 +273,7 @@ extension PipelineRunner {
         }
     }
 
-    /// Python script for Mertens exposure fusion via OpenCV.
+    /// Python script for Mertens exposure fusion via OpenCV (the "opencv" engine).
     /// Usage: python3 script.py output.jpg input1.jpg input2.jpg input3.jpg
     private func mertensFusionPython() -> String {
         """

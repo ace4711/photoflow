@@ -80,15 +80,16 @@ nonisolated enum RAWRenderer {
     ///   - maxDimension: target long-side size in pixels; `0` means full
     ///     native resolution. The actual `CIRAWFilter.scaleFactor` knob is used
     ///     (not a post-hoc resize) so the RAW decoder itself does less work.
-    ///   - translation: an optional pixel-space shift applied to the decoded
-    ///     image before the final render, used by `HDRAlignment` to correct
-    ///     for hand-held movement between exposures. `.zero` for the reference
-    ///     exposure and when alignment is disabled.
+    ///
+    /// Hand-held misalignment between exposures is *not* corrected here —
+    /// `HDRAlignment` measures it from the already-rendered buffers (so it
+    /// can compare exposures at identical scale) and `shiftRGBA` below
+    /// applies it afterwards, rather than this function re-entering
+    /// `CIRAWFilter` with a guessed shift.
     static func render(
         url: URL,
         whiteBalance: WhiteBalance?,
-        maxDimension: Int,
-        translation: CGPoint = .zero
+        maxDimension: Int
     ) throws -> RenderedImage {
         guard let filter = CIRAWFilter(imageURL: url) else {
             throw RendererError.cannotOpenRAW(url)
@@ -124,15 +125,11 @@ nonisolated enum RAWRenderer {
             }
         }
 
-        guard var outputImage = filter.outputImage else {
+        guard let outputImage = filter.outputImage else {
             throw RendererError.noOutputImage(url)
         }
 
         let renderExtent = outputImage.extent
-        if translation != .zero {
-            outputImage = outputImage.transformed(by: CGAffineTransform(translationX: translation.x, y: translation.y))
-        }
-
         let width = Int(renderExtent.width.rounded())
         let height = Int(renderExtent.height.rounded())
         guard width > 0, height > 0 else {

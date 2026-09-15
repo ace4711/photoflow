@@ -16,6 +16,18 @@ class AppSettings: ObservableObject {
     @AppStorage("maxTimeGap") var maxTimeGap: Int = 15
     @AppStorage("minBracketSize") var minBracketSize: Int = 3
     @AppStorage("hdrMergeEnabled") var hdrMergeEnabled: Bool = true
+    /// "coreImage" (default, Fas 3a): riktig exposure fusion på RAW-data i ren
+    /// Swift (`Services/HDR/`). "opencv": den äldre vägen — Mertens fusion via
+    /// python3/OpenCV på 8-bitars inbäddade JPEG-förhandsbilder
+    /// (`PipelineRunner+HDR.swift`), kvar som fallback om Core Image RAW-vägen
+    /// ger sämre resultat på en viss kamera/RAW-typ.
+    @AppStorage("hdrEngine") var hdrEngine: String = "coreImage"
+    /// Lång sida i pixlar för RAW-rendering inför HDR-fusion. `0` = full
+    /// sensorupplösning (kan bli mycket minneskrävande för stora brackets).
+    @AppStorage("hdrMaxDimension") var hdrMaxDimension: Int = 6000
+    /// Justerar handhållna brackets (Vision-baserad translationell
+    /// bildregistrering mot mittexponeringen) innan fusion.
+    @AppStorage("hdrAlignEnabled") var hdrAlignEnabled: Bool = true
     @AppStorage("detailedProgress") var detailedProgress: Bool = true
     @AppStorage("calendarMatchEnabled") var calendarMatchEnabled: Bool = true
     @AppStorage("calendarName") var calendarName: String = "Exempelkalender"

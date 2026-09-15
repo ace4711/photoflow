@@ -3,6 +3,7 @@ import SwiftUI
 struct BracketReviewView: View {
     @EnvironmentObject var pipeline: PipelineState
     @ObservedObject var runner: RunnerWrapper
+    @ObservedObject private var settings = AppSettings.shared
     @StateObject private var notesManager = NotesManager()
     @StateObject private var dictation = DictationService()
     @State private var selectedGroupIndex: Int = 0
@@ -26,6 +27,13 @@ struct BracketReviewView: View {
     var currentPhoto: PhotoItem? {
         guard selectedPhotoIndex < currentGroupPhotos.count else { return nil }
         return currentGroupPhotos[selectedPhotoIndex]
+    }
+
+    /// Reflects which HDR engine actually produced `mergedHDRPreviewURL` (see
+    /// `AppSettings.hdrEngine`) — previously hardcoded to "Mertens Exposure
+    /// Fusion (OpenCV)" even after Fas 3a added the Core Image RAW engine.
+    private var engineLabel: String {
+        settings.hdrEngine == "opencv" ? "Mertens Exposure Fusion (OpenCV)" : "Exposure Fusion (Core Image RAW)"
     }
 
     var body: some View {
@@ -255,7 +263,7 @@ struct BracketReviewView: View {
                                     .background(Color.orange)
                                     .cornerRadius(8)
 
-                                Label("Mertens Exposure Fusion", systemImage: "cpu")
+                                Label(engineLabel, systemImage: "cpu")
                                     .font(.caption.bold())
                                     .foregroundColor(.white)
                                     .padding(.horizontal, 10)
@@ -270,7 +278,7 @@ struct BracketReviewView: View {
                         Label("HDR - \(currentGroup.map { pipeline.selectedCount(in: $0) } ?? 0) exponeringar", systemImage: "photo.stack")
                             .font(.system(.body, design: .monospaced))
                         Text("·")
-                        Label("Mertens Exposure Fusion (OpenCV)", systemImage: "cpu")
+                        Label(engineLabel, systemImage: "cpu")
                             .font(.system(.body, design: .monospaced))
                         Button("Visa enskilda bilder (H)") {
                             showHDRPreview = false

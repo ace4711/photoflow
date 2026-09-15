@@ -149,6 +149,35 @@ struct PipelineTab: View {
                     Text("Bracket-grupper slås ihop automatiskt med Mertens exposure fusion. Resultatet visas i granskningsvyn.")
                         .font(.caption)
                         .foregroundColor(.secondary)
+
+                    Picker("Motor", selection: $settings.hdrEngine) {
+                        Text("Core Image RAW (Swift)").tag("coreImage")
+                        Text("OpenCV (äldre, JPEG-förhandsbilder)").tag("opencv")
+                    }
+                    .pickerStyle(.menu)
+
+                    if settings.hdrEngine == "coreImage" {
+                        Text("Riktig exposure fusion på RAW-data (DNG/NEF) via Core Image, i ren Swift — bevarar RAW-dynamiken i stället för att fusionera 8-bitars JPEG-förhandsbilder.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        HStack {
+                            Text("Max upplösning (lång sida)")
+                            Spacer()
+                            TextField("", value: $settings.hdrMaxDimension, format: .number)
+                                .frame(width: 80)
+                                .textFieldStyle(.roundedBorder)
+                            Text("px (0 = full upplösning)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Toggle("Justera handhållna brackets (Vision-bildregistrering)", isOn: $settings.hdrAlignEnabled)
+                    } else {
+                        Text("Den äldre vägen: python3 + OpenCV (cv2.createMergeMertens) på inbäddade 8-bitars JPEG-förhandsbilder. Kräver att OpenCV är installerat (pip3 install opencv-python numpy).")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
                 } else {
                     Text("HDR-steget och bracket-granskning hoppas över. Alla bilder går direkt till gallring.")
                         .font(.caption)
