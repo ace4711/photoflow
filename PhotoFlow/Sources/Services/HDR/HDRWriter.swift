@@ -59,13 +59,11 @@ nonisolated enum HDRWriter {
 
         let context = CIContext(options: [.workingColorSpace: colorSpace])
 
-        // Source and destination color space are identical (sRGB), so this is
-        // a pure float->16-bit-integer format conversion, not a re-encoding —
-        // the gamma-encoded values written by RAWRenderer/ExposureFusion are
-        // preserved exactly (up to 16-bit quantization).
-        guard let cgImage16 = context.createCGImage(ciImage, from: ciImage.extent, format: .RGBA16, colorSpace: colorSpace) else {
-            throw WriterError.cgImageCreationFailed
-        }
+        // Built directly from `pixels` (not via `CIContext.createCGImage`,
+        // which only offers `.RGBA16` — i.e. with an alpha channel we don't
+        // need): a plain 3-channel 16-bit-per-component RGB image, matching
+        // "16 bpc RGB" rather than RGBA.
+        let cgImage16 = try makeRGB16CGImage(pixels: pixels, width: width, height: height, colorSpace: colorSpace)
         try writeTIFF(cgImage16, to: tiffURL)
 
         let longSide = max(width, height)
@@ -77,6 +75,38 @@ nonisolated enum HDRWriter {
             colorSpace: colorSpace,
             options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: jpegQuality]
         )
+    }
+
+    /// Packs `pixels` (RGBA float32, [0,1]) into a plain 3-channel,
+    /// 16-bit-per-component RGB `CGImage` — no alpha, and no color conversion
+    /// (`colorSpace` here must be the same one the values were rendered in).
+    private static func makeRGB16CGImage(pixels: [Float], width: Int, height: Int, colorSpace: CGColorSpace) throws -> CGImage {
+        var rgb16 = [UInt16](repeating: 0, count: width * height * 3)
+        pixels.withUnsafeBufferPointer { src in
+            rgb16.withUnsafeMutableBufferPointer { dst in
+                for p in 0..<(width * height) {
+                    dst[p * 3] = UInt16((min(max(src[p * 4], 0), 1) * 65535).rounded())
+                    dst[p * 3 + 1] = UInt16((min(max(src[p * 4 + 1], 0), 1) * 65535).rounded())
+                    dst[p * 3 + 2] = UInt16((min(max(src[p * 4 + 2], 0), 1) * 65535).rounded())
+                }
+            }
+        }
+        let data = rgb16.withUnsafeBytes { raw in
+            Data(bytes: raw.baseAddress!, count: raw.count)
+        }
+        guard let provider = CGDataProvider(data: data as CFData) else {
+            throw WriterError.cgImageCreationFailed
+        }
+        // Native byte order on both Apple Silicon and Intel is little-endian,
+        // matching how the `UInt16` values above are laid out in memory.
+        guard let cgImage = CGImage(
+            width: width, height: height, bitsPerComponent: 16, bitsPerPixel: 48, bytesPerRow: width * 3 * 2,
+            space: colorSpace, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue | CGImageByteOrderInfo.order16Little.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
+        ) else {
+            throw WriterError.cgImageCreationFailed
+        }
+        return cgImage
     }
 
     private static func writeTIFF(_ cgImage: CGImage, to url: URL) throws {
