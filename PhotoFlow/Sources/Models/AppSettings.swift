@@ -32,6 +32,12 @@ class AppSettings: ObservableObject {
     @AppStorage("calendarMatchEnabled") var calendarMatchEnabled: Bool = true
     @AppStorage("calendarName") var calendarName: String = "Exempelkalender"
     @AppStorage("aiTaggingEnabled") var aiTaggingEnabled: Bool = true
+    /// Styr om "Föreslå gallring" (`s` i gallringsvyn) även föreslår Vision's
+    /// `isUtility`-flaggade bilder för avvisning, utöver dubbletter (som alltid
+    /// föreslås). Av som standard (Fas 3c): kalibreringen i Fas 3b visade att
+    /// Vision flaggade 34 % av en riktig fastighetssession som "nyttobild" —
+    /// för högt för att lita på automatiskt, se FORBATTRINGAR.md Fas 3c.
+    @AppStorage("cullSuggestUtility") var cullSuggestUtility: Bool = false
 
     var inputDirectory: URL? {
         get {

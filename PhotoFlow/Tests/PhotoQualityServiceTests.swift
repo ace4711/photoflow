@@ -162,17 +162,31 @@ struct PhotoQualityServiceTests {
             candidate("c", quality: 0.2, group: 0),
         ]
         let suggested = PhotoQualityService.suggestCulling(candidates)
-        #expect(suggested == ["b", "c"])
+        #expect(suggested.duplicates == ["b", "c"])
+        #expect(suggested.utility.isEmpty)
+        #expect(suggested.all == ["b", "c"])
     }
 
-    @Test("isUtility-bilder föreslås avvisade även utan dubblettgrupp")
-    func suggestCulling_utilityPhoto_suggestedEvenWithoutGroup() {
+    @Test("isUtility-bilder föreslås INTE som standard (includeUtility av)")
+    func suggestCulling_utilityPhoto_excludedByDefault() {
         let candidates = [
             candidate("a", isUtility: true, quality: 0.9),
             candidate("b", quality: 0.5),
         ]
         let suggested = PhotoQualityService.suggestCulling(candidates)
-        #expect(suggested == ["a"])
+        #expect(suggested.isEmpty)
+    }
+
+    @Test("isUtility-bilder föreslås avvisade när includeUtility är på, även utan dubblettgrupp")
+    func suggestCulling_utilityPhoto_suggestedWhenIncluded() {
+        let candidates = [
+            candidate("a", isUtility: true, quality: 0.9),
+            candidate("b", quality: 0.5),
+        ]
+        let suggested = PhotoQualityService.suggestCulling(candidates, includeUtility: true)
+        #expect(suggested.utility == ["a"])
+        #expect(suggested.duplicates.isEmpty)
+        #expect(suggested.all == ["a"])
     }
 
     @Test("Redan beslutade bilder föreslås aldrig, även om de matchar en regel")
@@ -182,7 +196,7 @@ struct PhotoQualityServiceTests {
             candidate("b", quality: 0.1, group: 0, decided: true),
             candidate("c", isUtility: true, decided: true),
         ]
-        let suggested = PhotoQualityService.suggestCulling(candidates)
+        let suggested = PhotoQualityService.suggestCulling(candidates, includeUtility: true)
         #expect(suggested.isEmpty)
     }
 

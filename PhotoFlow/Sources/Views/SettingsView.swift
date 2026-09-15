@@ -197,6 +197,14 @@ struct PipelineTab: View {
                         .font(.caption)
                         .foregroundColor(.orange)
                 }
+
+                Toggle("\"Föreslå gallring\" ska även föreslå nyttobilder", isOn: $settings.cullSuggestUtility)
+
+                Text(settings.cullSuggestUtility
+                     ? "\"Föreslå gallring\" (s i gallringsvyn) föreslår dubbletter OCH bilder Vision klassar som nyttobilder (kvitton/dokument-liknande)."
+                     : "\"Föreslå gallring\" (s i gallringsvyn) föreslår bara dubbletter (behåller bästa i varje grupp). Vision flaggade 34 % av en testsession som \"nyttobild\" — för högt för att lita på automatiskt utan att slå på detta.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
 
             Section("Kalenderintegration") {

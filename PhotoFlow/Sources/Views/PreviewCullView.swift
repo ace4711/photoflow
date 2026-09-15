@@ -771,8 +771,11 @@ struct PreviewCullView: View {
     /// Marks (never deletes — deletion only happens in `finishCulling`) the
     /// photos Vision considers worst: the sharpest/highest-quality photo in
     /// each duplicate group is kept, the rest in that group are suggested for
-    /// rejection, and any `isUtility` photo is suggested regardless of
-    /// grouping. Never touches a photo the user already decided on. See
+    /// rejection — that always happens. `isUtility` photos are only suggested
+    /// when `AppSettings.cullSuggestUtility` is on (off by default, see
+    /// FORBATTRINGAR.md Fas 3c — Vision flagged 34% of a real session as
+    /// "utility" in the Fas 3b calibration, too high to suggest automatically
+    /// without opt-in). Never touches a photo the user already decided on. See
     /// `PhotoQualityService.suggestCulling` for the pure decision logic.
     private func suggestCulling() {
         let candidates = pipeline.allPhotos.map { photo in
@@ -785,13 +788,18 @@ struct PreviewCullView: View {
                 isDecided: photo.accepted || photo.rejected
             )
         }
-        let suggestedIDs = PhotoQualityService.suggestCulling(candidates)
+        let includeUtility = AppSettings.shared.cullSuggestUtility
+        let suggestion = PhotoQualityService.suggestCulling(candidates, includeUtility: includeUtility)
 
-        guard !suggestedIDs.isEmpty else {
-            showSuggestionMessage("Inga förslag att gallra — inga dubbletter eller nyttobilder kvar att bedöma.")
+        guard !suggestion.isEmpty else {
+            let reason = includeUtility
+                ? "inga dubbletter eller nyttobilder kvar att bedöma"
+                : "inga dubbletter kvar att bedöma (nyttobilder är avstängt, se Inställningar)"
+            showSuggestionMessage("Inga förslag att gallra — \(reason).")
             return
         }
 
+        let suggestedIDs = suggestion.all
         var undoBuffer: [(id: String, wasAccepted: Bool, wasRejected: Bool)] = []
         for photo in pipeline.allPhotos where suggestedIDs.contains(photo.id) {
             undoBuffer.append((photo.id, photo.accepted, photo.rejected))
@@ -800,7 +808,11 @@ struct PreviewCullView: View {
         lastSuggestionUndo = undoBuffer
         pipeline.saveCullDecisions()
         audio.playReject()
-        showSuggestionMessage("Föreslog \(undoBuffer.count) bilder för gallring (dubbletter/nyttobilder). Tryck z för att ångra.")
+
+        var parts: [String] = []
+        if !suggestion.duplicates.isEmpty { parts.append("\(suggestion.duplicates.count) dubbletter") }
+        if !suggestion.utility.isEmpty { parts.append("\(suggestion.utility.count) nyttobilder") }
+        showSuggestionMessage("Föreslog \(undoBuffer.count) bilder för gallring (\(parts.joined(separator: ", "))). Tryck z för att ångra.")
     }
 
     /// Undoes the most recent `suggestCulling()` batch only — restores exactly

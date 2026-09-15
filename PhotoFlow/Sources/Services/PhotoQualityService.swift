@@ -175,12 +175,27 @@ nonisolated enum PhotoQualityService {
         let isDecided: Bool
     }
 
+    /// Resultat av `suggestCulling`, uppdelat per anledning så anroparen kan
+    /// visa exakt vad som föreslogs (t.ex. "3 dubbletter, 2 nyttobilder") i
+    /// stället för bara en totalsumma.
+    struct CullSuggestion {
+        /// Dubbletter (behöll bästa i varje grupp) — föreslås alltid.
+        var duplicates: Set<String> = []
+        /// `isUtility`-bilder — föreslås bara när `includeUtility` är på.
+        var utility: Set<String> = []
+        var all: Set<String> { duplicates.union(utility) }
+        var isEmpty: Bool { duplicates.isEmpty && utility.isEmpty }
+    }
+
     /// Returnerar ID:n för de bilder som bör *föreslås* avvisade: för varje
     /// dubblettgrupp behålls den med högst kvalitet/skärpa (`bestIndex`) och
-    /// resten föreslås; `isUtility`-bilder föreslås alltid (oavsett
-    /// dubblettgrupp). Rör aldrig redan beslutade bilder.
-    static func suggestCulling(_ candidates: [CullCandidate]) -> Set<String> {
-        var suggested: Set<String> = []
+    /// resten föreslås — det görs alltid. `isUtility`-bilder föreslås bara när
+    /// `includeUtility` är på (av som standard, se `AppSettings.cullSuggestUtility`
+    /// — Vision flaggade 34 % av en riktig session som nyttobild i Fas 3b-
+    /// kalibreringen, för högt för att föreslå automatiskt utan opt-in). Rör
+    /// aldrig redan beslutade bilder.
+    static func suggestCulling(_ candidates: [CullCandidate], includeUtility: Bool = false) -> CullSuggestion {
+        var result = CullSuggestion()
 
         var groups: [Int: [Int]] = [:]
         for (i, c) in candidates.enumerated() {
@@ -194,15 +209,17 @@ nonisolated enum PhotoQualityService {
             ) else { continue }
             for i in indices where i != bestIdx {
                 let c = candidates[i]
-                if !c.isDecided { suggested.insert(c.id) }
+                if !c.isDecided { result.duplicates.insert(c.id) }
             }
         }
 
-        for c in candidates where c.isUtility && !c.isDecided {
-            suggested.insert(c.id)
+        if includeUtility {
+            for c in candidates where c.isUtility && !c.isDecided {
+                result.utility.insert(c.id)
+            }
         }
 
-        return suggested
+        return result
     }
 
     // MARK: - Skärpemetrik (vImage/Accelerate)
