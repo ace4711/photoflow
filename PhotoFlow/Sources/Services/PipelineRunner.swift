@@ -8,6 +8,12 @@ class PipelineRunner: ObservableObject {
     private var currentTask: Process?
     private var pipelineLogHandle: FileHandle?
 
+    /// Owns the running pipeline's Task so `cancel()` can actually stop it —
+    /// previously `RunnerWrapper.start` created an untracked, un-cancellable Task
+    /// and `cancel()` only terminated whatever single Process happened to be
+    /// running at that instant, so the pipeline just moved on to its next step.
+    private var pipelineTask: Task<Void, Never>?
+
     private func pipelineLog(_ message: String) {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss.SSS"
@@ -97,6 +103,16 @@ class PipelineRunner: ObservableObject {
         }
     }
 
+    /// Starts the pipeline in a Task owned by this runner, so `cancel()` can
+    /// actually cancel it (see `pipelineTask`). Callers that previously wrapped
+    /// `startPipeline` in their own `Task { }` (RunnerWrapper.start) should call
+    /// this instead.
+    func start(inputDir: URL, outputDir: URL? = nil) {
+        pipelineTask = Task { [weak self] in
+            await self?.startPipeline(inputDir: inputDir, outputDir: outputDir)
+        }
+    }
+
     func startPipeline(inputDir: URL, outputDir: URL? = nil) async {
         guard !state.isRunning else {
             pipelineLog("Pipeline redan aktiv — ignorerar nytt startanrop (inputDir: \(inputDir.path))")
@@ -152,6 +168,7 @@ class PipelineRunner: ObservableObject {
             state.completeStep(.copyToInput, count: nefFiles.count)
 
             // Step: Convert NEF -> DNG
+            try await checkCancellationAndWaitIfPaused()
             pipelineLog(">>> Steg: DNG-konvertering")
             state.updateStep(.convertToDNG, phase: .active)
             try await runDNGConversion(inputDir: inputDir)
@@ -159,6 +176,7 @@ class PipelineRunner: ObservableObject {
             pipelineLog("<<< DNG-konvertering klar")
 
             // Step: Analyze brackets (grouping — needed even without HDR)
+            try await checkCancellationAndWaitIfPaused()
             pipelineLog(">>> Steg: Bracket-analys")
             let hdrEnabled = AppSettings.shared.hdrMergeEnabled
             if hdrEnabled {
@@ -168,6 +186,7 @@ class PipelineRunner: ObservableObject {
             pipelineLog("<<< Bracket-analys klar")
 
             // Step: Generate previews
+            try await checkCancellationAndWaitIfPaused()
             pipelineLog(">>> Steg: Preview-generering")
             state.updateStep(.generatePreviews, phase: .active)
             try await runPreviewGeneration(inputDir: inputDir)
@@ -175,6 +194,7 @@ class PipelineRunner: ObservableObject {
             pipelineLog("<<< Preview-generering klar")
 
             // Step: Match photos to calendar bookings
+            try await checkCancellationAndWaitIfPaused()
             pipelineLog(">>> Steg: Kalendermatchning")
             if AppSettings.shared.calendarMatchEnabled {
                 state.updateStep(.findCalendarInfo, phase: .active)
@@ -194,6 +214,7 @@ class PipelineRunner: ObservableObject {
                 state.appendStepLog(.aiTagging, "AI-taggning temporärt avaktiverad", type: .info)
             }
 
+            try await checkCancellationAndWaitIfPaused()
             if hdrEnabled {
                 // Step: Merge HDR brackets
                 try await runHDRMerge()
@@ -208,17 +229,26 @@ class PipelineRunner: ObservableObject {
             pipelineLog("<<< Bracket-grupper laddade")
 
             // Step: Sort files into address folders (before review)
+            try await checkCancellationAndWaitIfPaused()
             pipelineLog(">>> Steg: Sortera filer till adressmappar")
             state.updateStep(.moveToFolders, phase: .active)
             await exportToAddressFolders()
+            // exportToAddressFolders can return early on cancellation (it already
+            // marked its own step + log for that); don't stomp that by unconditionally
+            // marking it complete right after.
+            try Task.checkCancellation()
             state.completeStep(.moveToFolders)
             pipelineLog("<<< Filsortering klar")
 
             // Step: Write metadata (GPS, IPTC, AI-tags) to sorted files
+            try await checkCancellationAndWaitIfPaused()
             pipelineLog(">>> Steg: Skriv metadata")
             if AppSettings.shared.calendarMatchEnabled {
                 state.updateStep(.writeIPTCTags, phase: .active)
                 await writeIPTCMetadata()
+                // Same reasoning as exportToAddressFolders above: don't overwrite an
+                // early-cancellation marker with "complete".
+                try Task.checkCancellation()
                 state.completeStep(.writeIPTCTags)
             } else {
                 state.updateStep(.writeIPTCTags, phase: .disabled)
@@ -239,6 +269,8 @@ class PipelineRunner: ObservableObject {
         } catch is CancellationError {
             state.statusMessage = "Avbrutet"
             state.isRunning = false
+            state.isPaused = false
+            markActiveStepsCancelled()
         } catch {
             state.errorMessage = error.localizedDescription
             state.statusMessage = "Fel: \(error.localizedDescription)"
@@ -249,9 +281,17 @@ class PipelineRunner: ObservableObject {
     }
 
     func cancel() {
+        // Cancels the owning Task — runProcess's withTaskCancellationHandler
+        // terminates whatever Process is currently running (or refuses to start
+        // the next one), and every checkCancellation()/waitIfPaused() call point
+        // between steps and inside chunk loops turns that into a CancellationError
+        // that unwinds startPipeline's `do` block (see its `catch is
+        // CancellationError`). Also terminate any in-flight process directly as a
+        // belt-and-suspenders fallback.
+        pipelineTask?.cancel()
         currentTask?.terminate()
-        state.isRunning = false
         state.isPaused = false
+        state.isRunning = false
         state.statusMessage = "Avbrutet av användaren"
     }
 
@@ -353,10 +393,42 @@ class PipelineRunner: ObservableObject {
         }
     }
 
-    /// Waits while pipeline is paused. Call between work units.
+    /// Waits while pipeline is paused. Call between work units. Also breaks out
+    /// (without un-pausing) as soon as the surrounding Task is cancelled, so a
+    /// cancel while paused doesn't spin forever waiting for a resume that will
+    /// never come.
     private func waitIfPaused() async {
-        while state.isPaused {
+        while state.isPaused && !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+        }
+    }
+
+    /// Throwing convenience for use between work units in `throws` functions:
+    /// bail out immediately if cancelled, otherwise wait out any pause, then
+    /// check cancellation again (a cancel while paused should still stop us
+    /// before the next unit of work starts).
+    private func checkCancellationAndWaitIfPaused() async throws {
+        try Task.checkCancellation()
+        await waitIfPaused()
+        try Task.checkCancellation()
+    }
+
+    /// Non-throwing equivalent for `async` (non-`throws`) functions: waits out
+    /// any pause, then reports whether the caller should abort.
+    private func shouldAbort() async -> Bool {
+        if Task.isCancelled { return true }
+        await waitIfPaused()
+        return Task.isCancelled
+    }
+
+    /// Marks whichever step(s) were `.active` as idle with an "Avbrutet" log line,
+    /// instead of leaving a step's card stuck showing "Arbetar..." forever after a
+    /// cancel. Called from `startPipeline`'s `catch is CancellationError` and from
+    /// non-throwing steps that notice cancellation via `shouldAbort()`.
+    private func markActiveStepsCancelled() {
+        for step in DashboardStep.allCases where state.stepStatuses[step]?.phase == .active {
+            state.updateStep(step, phase: .idle)
+            state.appendStepLog(step, "Avbrutet", type: .warning)
         }
     }
 
@@ -606,6 +678,7 @@ class PipelineRunner: ObservableObject {
 
         var convertedSoFar = existingDNGNames.count
         for chunk in chunks {
+            try await checkCancellationAndWaitIfPaused()
             _ = try await runProcess(
                 executablePath: converterPath,
                 arguments: ["-c", "-d", dngDir.path] + chunk
@@ -1011,10 +1084,17 @@ class PipelineRunner: ObservableObject {
             }
             organized += 1
 
-            // Update progress every 50 files so the UI step card shows activity
+            // Update progress every 50 files so the UI step card shows activity, and
+            // check for cancellation/pause at the same cadence rather than per-file
+            // (this loop is pure fast symlink creation, not worth checking every file).
             if index % 50 == 0 || index == photoFolders.count - 1 {
                 state.updateStepProgress(.moveToFolders, processed: organized, total: photosToOrganize.count)
                 state.statusMessage = "Sorterar filer: \(organized)/\(photosToOrganize.count)..."
+                if await shouldAbort() {
+                    state.appendStepLog(.moveToFolders, "Avbrutet efter \(organized)/\(photosToOrganize.count) filer", type: .warning)
+                    markActiveStepsCancelled()
+                    return
+                }
             }
         }
 
@@ -1325,6 +1405,11 @@ class PipelineRunner: ObservableObject {
         var processedSoFar = 0
 
         for (chunkIndex, chunk) in chunks.enumerated() {
+            if await shouldAbort() {
+                state.appendStepLog(.writeIPTCTags, "Avbrutet efter \(processedSoFar)/\(totalFiles) filer", type: .warning)
+                markActiveStepsCancelled()
+                return
+            }
             let argfileURL = outputDir.appendingPathComponent(".exiftool_argfile_\(chunkIndex).txt")
             let argfileContent = chunk.joined(separator: "\n")
             try? argfileContent.write(to: argfileURL, atomically: true, encoding: .utf8)
@@ -1645,7 +1730,7 @@ class PipelineRunner: ObservableObject {
         state.updateStepProgress(.createHDR, processed: 0, total: groupsToMerge.count)
 
         for (idx, group) in groupsToMerge.enumerated() {
-            await waitIfPaused()
+            try await checkCancellationAndWaitIfPaused()
             state.statusMessage = "Exposure fusion: grupp \(group.groupId) (\(idx + 1)/\(groupsToMerge.count))..."
             state.currentFileIndex = idx
             state.progress = Double(idx) / Double(groupsToMerge.count)
@@ -2051,96 +2136,116 @@ class PipelineRunner: ObservableObject {
         stdinData: Data? = nil,
         onOutput: ((String) -> Void)? = nil
     ) async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                let tmpDir = NSTemporaryDirectory()
-                let uid = UUID().uuidString
+        // Bridges Process (not itself cancellable) to Swift concurrency task
+        // cancellation: withTaskCancellationHandler's onCancel closure runs
+        // immediately on the cancelling side, possibly before the process has even
+        // been created on the background queue below — the box lets `onCancel`
+        // record that and terminate the process as soon as it exists.
+        let box = ProcessCancellationBox()
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                    let tmpDir = NSTemporaryDirectory()
+                    let uid = UUID().uuidString
 
-                // Use temp files instead of pipes to completely avoid pipe buffer deadlocks.
-                // Pipes have limited kernel buffers (~64KB) and can cause Process/waitUntilExit
-                // to hang when the parent holds write-end file descriptors.
+                    // Use temp files instead of pipes to completely avoid pipe buffer deadlocks.
+                    // Pipes have limited kernel buffers (~64KB) and can cause Process/waitUntilExit
+                    // to hang when the parent holds write-end file descriptors.
 
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: executablePath)
-                process.arguments = arguments
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: executablePath)
+                    process.arguments = arguments
 
-                // stdout → caller-specified file or temp file
-                let stdoutFile: URL
-                if let outputFile {
-                    stdoutFile = outputFile
-                } else {
-                    stdoutFile = URL(fileURLWithPath: tmpDir + uid + ".stdout")
-                }
-                FileManager.default.createFile(atPath: stdoutFile.path, contents: nil)
-                guard let stdoutHandle = FileHandle(forWritingAtPath: stdoutFile.path) else {
-                    continuation.resume(throwing: PipelineError.processError("Kunde inte skapa stdout-fil"))
-                    return
-                }
-                process.standardOutput = stdoutHandle
+                    // stdout → caller-specified file or temp file
+                    let stdoutFile: URL
+                    if let outputFile {
+                        stdoutFile = outputFile
+                    } else {
+                        stdoutFile = URL(fileURLWithPath: tmpDir + uid + ".stdout")
+                    }
+                    FileManager.default.createFile(atPath: stdoutFile.path, contents: nil)
+                    guard let stdoutHandle = FileHandle(forWritingAtPath: stdoutFile.path) else {
+                        continuation.resume(throwing: PipelineError.processError("Kunde inte skapa stdout-fil"))
+                        return
+                    }
+                    process.standardOutput = stdoutHandle
 
-                // stderr → temp file
-                let stderrFile = URL(fileURLWithPath: tmpDir + uid + ".stderr")
-                FileManager.default.createFile(atPath: stderrFile.path, contents: nil)
-                guard let stderrHandle = FileHandle(forWritingAtPath: stderrFile.path) else {
-                    continuation.resume(throwing: PipelineError.processError("Kunde inte skapa stderr-fil"))
-                    return
-                }
-                process.standardError = stderrHandle
+                    // stderr → temp file
+                    let stderrFile = URL(fileURLWithPath: tmpDir + uid + ".stderr")
+                    FileManager.default.createFile(atPath: stderrFile.path, contents: nil)
+                    guard let stderrHandle = FileHandle(forWritingAtPath: stderrFile.path) else {
+                        continuation.resume(throwing: PipelineError.processError("Kunde inte skapa stderr-fil"))
+                        return
+                    }
+                    process.standardError = stderrHandle
 
-                // stdin → write data to temp file and use as stdin
-                if let stdinData {
+                    // stdin → write data to temp file and use as stdin
+                    if let stdinData {
+                        let stdinFile = URL(fileURLWithPath: tmpDir + uid + ".stdin")
+                        try? stdinData.write(to: stdinFile)
+                        if let stdinHandle = FileHandle(forReadingAtPath: stdinFile.path) {
+                            process.standardInput = stdinHandle
+                        }
+                    }
+
+                    // Register with the cancellation box before run() — if the task was
+                    // already cancelled, box.register bails out (and terminates/no-ops)
+                    // without launching the process at all.
+                    guard box.register(process) else {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
+
+                    Task { @MainActor in
+                        self?.currentTask = process
+                    }
+
+                    do {
+                        try process.run()
+                    } catch {
+                        continuation.resume(throwing: error)
+                        return
+                    }
+
+                    // No pipes → waitUntilExit cannot deadlock
+                    process.waitUntilExit()
+
+                    // Close file handles
+                    stdoutHandle.closeFile()
+                    stderrHandle.closeFile()
+
+                    // Read results from files
+                    let output: String
+                    if outputFile != nil {
+                        output = "" // caller reads from outputFile directly
+                    } else {
+                        output = (try? String(contentsOf: stdoutFile, encoding: .utf8)) ?? ""
+                        try? FileManager.default.removeItem(at: stderrFile)
+                        try? FileManager.default.removeItem(at: stdoutFile)
+                    }
+
+                    let stderrData = (try? Data(contentsOf: stderrFile)) ?? Data()
+                    try? FileManager.default.removeItem(at: stderrFile)
+
+                    // Clean up stdin temp file
                     let stdinFile = URL(fileURLWithPath: tmpDir + uid + ".stdin")
-                    try? stdinData.write(to: stdinFile)
-                    if let stdinHandle = FileHandle(forReadingAtPath: stdinFile.path) {
-                        process.standardInput = stdinHandle
+                    try? FileManager.default.removeItem(at: stdinFile)
+
+                    if box.isCancelled {
+                        continuation.resume(throwing: CancellationError())
+                    } else if process.terminationStatus != 0 {
+                        let errorMsg = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        continuation.resume(throwing: PipelineError.processError(
+                            errorMsg.isEmpty ? "Process exited with code \(process.terminationStatus)" : errorMsg
+                        ))
+                    } else {
+                        continuation.resume(returning: output)
                     }
                 }
-
-                Task { @MainActor in
-                    self?.currentTask = process
-                }
-
-                do {
-                    try process.run()
-                } catch {
-                    continuation.resume(throwing: error)
-                    return
-                }
-
-                // No pipes → waitUntilExit cannot deadlock
-                process.waitUntilExit()
-
-                // Close file handles
-                stdoutHandle.closeFile()
-                stderrHandle.closeFile()
-
-                // Read results from files
-                let output: String
-                if outputFile != nil {
-                    output = "" // caller reads from outputFile directly
-                } else {
-                    output = (try? String(contentsOf: stdoutFile, encoding: .utf8)) ?? ""
-                    try? FileManager.default.removeItem(at: stderrFile)
-                    try? FileManager.default.removeItem(at: stdoutFile)
-                }
-
-                let stderrData = (try? Data(contentsOf: stderrFile)) ?? Data()
-                try? FileManager.default.removeItem(at: stderrFile)
-
-                // Clean up stdin temp file
-                let stdinFile = URL(fileURLWithPath: tmpDir + uid + ".stdin")
-                try? FileManager.default.removeItem(at: stdinFile)
-
-                if process.terminationStatus != 0 {
-                    let errorMsg = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    continuation.resume(throwing: PipelineError.processError(
-                        errorMsg.isEmpty ? "Process exited with code \(process.terminationStatus)" : errorMsg
-                    ))
-                } else {
-                    continuation.resume(returning: output)
-                }
             }
-        }
+        }, onCancel: {
+            box.cancel()
+        })
     }
 
     // MARK: - Embedded Python scripts
@@ -2429,5 +2534,45 @@ enum PipelineError: LocalizedError {
         case .toolNotFound(let msg): return msg
         case .processError(let msg): return "Process-fel: \(msg)"
         }
+    }
+}
+
+/// Bridges a `Process` (which has no concept of Swift concurrency cancellation)
+/// to a `Task`'s cancellation via `withTaskCancellationHandler`. The `onCancel`
+/// closure of that API can run on any thread and, if the task was already
+/// cancelled, runs synchronously before the operation closure even starts — so
+/// `register`/`cancel` need their own lock rather than relying on `runProcess`'s
+/// background queue for safety.
+final class ProcessCancellationBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
+
+    /// Called once the `Process` object exists, right before `run()`. Returns
+    /// `false` if the task was already cancelled by then — the caller should
+    /// bail out without ever starting the process.
+    func register(_ process: Process) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if cancelled { return false }
+        self.process = process
+        return true
+    }
+
+    /// Called from `withTaskCancellationHandler`'s `onCancel`. Terminates the
+    /// process immediately if it's already running; if it hasn't been created
+    /// yet, `register` will pick up `cancelled` and refuse to start it.
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let proc = process
+        lock.unlock()
+        proc?.terminate()
+    }
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
     }
 }

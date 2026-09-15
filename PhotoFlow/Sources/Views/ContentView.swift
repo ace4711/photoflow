@@ -147,10 +147,10 @@ class RunnerWrapper: ObservableObject {
     }
 
     func start(inputDir: URL, outputDir: URL? = nil) {
-        guard let runner else { return }
-        Task {
-            await runner.startPipeline(inputDir: inputDir, outputDir: outputDir)
-        }
+        // PipelineRunner.start owns the Task itself (pipelineTask), so cancel()
+        // can actually cancel it — a Task created here instead would be
+        // un-cancellable from RunnerWrapper.cancel().
+        runner?.start(inputDir: inputDir, outputDir: outputDir)
     }
 
     func loadExistingSession(inputDir: URL, outputDir: URL? = nil) {
