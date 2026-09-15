@@ -1024,7 +1024,7 @@ class PipelineRunner: ObservableObject {
         let hdrEnabled = AppSettings.shared.hdrMergeEnabled
         let hdrDir = outputDir.appendingPathComponent("hdr")
         for group in state.bracketGroups where group.isBracket && hdrEnabled {
-            guard let firstPhoto = group.photos.first,
+            guard let firstPhoto = state.photos(in: group).first,
                   let folderName = calendar.addressFolder(for: firstPhoto.dateTime, mappings: calendarMappings) else { continue }
             let previewDir = AddressFolderLayout.previewDir(in: outputDir, folderName: folderName)
             let extrasDir = AddressFolderLayout.extrasDir(in: outputDir, folderName: folderName)
@@ -1714,7 +1714,7 @@ class PipelineRunner: ObservableObject {
         guard let outputDir = state.outputDirectory else { return }
         let hdrDir = outputDir.appendingPathComponent("hdr")
 
-        let selectedPhotos = group.photos.filter { $0.accepted }
+        let selectedPhotos = state.photos(in: group).filter { $0.accepted }
         guard selectedPhotos.count >= 2 else {
             state.appendLog("Grupp \(group.id): Minst 2 bilder krävs för HDR.", type: .warning)
             return
@@ -1782,7 +1782,7 @@ class PipelineRunner: ObservableObject {
         var triggerGroups: [[String: Any]] = []
         var groupIndex = 0
         for group in groups where group.isBracket {
-            let selectedPhotos = group.photos.filter { $0.accepted }
+            let selectedPhotos = state.photos(in: group).filter { $0.accepted }
             guard selectedPhotos.count >= 2 else { continue }
             groupIndex += 1
             let files = selectedPhotos.map { $0.nefURL.path }
@@ -2026,7 +2026,7 @@ class PipelineRunner: ObservableObject {
                 id: groupId,
                 isBracket: isBracket,
                 folderName: folderName,
-                photos: photos,
+                photoIDs: photos.map(\.id),
                 fNumber: fNumber,
                 iso: iso,
                 timeStart: timeStart,

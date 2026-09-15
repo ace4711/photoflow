@@ -18,7 +18,57 @@ class PipelineState: ObservableObject {
     @Published var outputDirectory: URL?
 
     @Published var bracketGroups: [BracketGroup] = []
-    @Published var allPhotos: [PhotoItem] = []
+    @Published var allPhotos: [PhotoItem] = [] {
+        didSet { rebuildPhotoIndex() }
+    }
+
+    /// O(1) lookup from `PhotoItem.id` to its index in `allPhotos`, kept in sync
+    /// via `allPhotos`'s `didSet`. `allPhotos` is the single source of truth for
+    /// cull decisions — `BracketGroup` only stores `photoIDs`, resolved through
+    /// this index by `photos(in:)`.
+    private var photoIndexByID: [String: Int] = [:]
+
+    private func rebuildPhotoIndex() {
+        photoIndexByID = Dictionary(uniqueKeysWithValues: allPhotos.enumerated().map { ($1.id, $0) })
+    }
+
+    /// Resolves a group's photos from `allPhotos`, in the group's original order.
+    /// IDs with no match in `allPhotos` (shouldn't normally happen) are skipped.
+    func photos(in group: BracketGroup) -> [PhotoItem] {
+        group.photoIDs.compactMap { photoIndexByID[$0].map { allPhotos[$0] } }
+    }
+
+    /// Sets a photo's accept/reject decision by ID. Since `allPhotos` is the only
+    /// place decisions are stored, this is the one function both BracketReviewView
+    /// and PreviewCullView should call to change a decision.
+    func setDecision(photoID: String, accepted: Bool, rejected: Bool) {
+        guard let idx = photoIndexByID[photoID] else { return }
+        allPhotos[idx].accepted = accepted
+        allPhotos[idx].rejected = rejected
+    }
+
+    func setAlgorithmSuggested(photoID: String, suggested: Bool) {
+        guard let idx = photoIndexByID[photoID] else { return }
+        allPhotos[idx].algorithmSuggested = suggested
+    }
+
+    func selectedCount(in group: BracketGroup) -> Int {
+        photos(in: group).filter { $0.accepted }.count
+    }
+
+    /// Vacuously true for an empty group, matching the pre-refactor behavior.
+    func allReviewed(_ group: BracketGroup) -> Bool {
+        photos(in: group).allSatisfy { $0.accepted || $0.rejected }
+    }
+
+    func label(for group: BracketGroup) -> String {
+        let photos = photos(in: group)
+        if group.isBracket {
+            return "HDR \(group.id) - \(selectedCount(in: group))/\(photos.count) exp (f/\(group.fNumber))"
+        } else {
+            return "Grupp \(group.id) - \(photos.count) bilder (f/\(group.fNumber))"
+        }
+    }
 
     // For bracket review
     @Published var currentBracketIndex: Int = 0
@@ -232,23 +282,13 @@ class PipelineState: ObservableObject {
         let file = outputDir.appendingPathComponent("cull_decisions.json")
         var decisions: [String: String] = [:]
 
-        // Save from allPhotos
+        // allPhotos is the single source of truth for cull decisions — BracketGroup
+        // only stores photoIDs, so there's no second copy to reconcile here anymore.
         for photo in allPhotos {
             if photo.accepted {
                 decisions[photo.id] = "accepted"
             } else if photo.rejected {
                 decisions[photo.id] = "rejected"
-            }
-        }
-
-        // Also save from bracketGroups (structs = separate copies)
-        for group in bracketGroups {
-            for photo in group.photos {
-                if photo.accepted {
-                    decisions[photo.id] = "accepted"
-                } else if photo.rejected {
-                    decisions[photo.id] = "rejected"
-                }
             }
         }
 

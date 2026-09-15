@@ -470,16 +470,12 @@ struct DashboardView: View {
         let notesFile = outputDir.appendingPathComponent("photo_notes.json")
         try? FileManager.default.removeItem(at: notesFile)
 
-        // Reset in-memory state
+        // Reset in-memory state. allPhotos is the single source of truth for cull
+        // decisions — BracketGroup only stores photoIDs, so resetting it here is
+        // enough for both BracketReviewView and PreviewCullView to see the change.
         for i in pipeline.allPhotos.indices {
             pipeline.allPhotos[i].accepted = false
             pipeline.allPhotos[i].rejected = false
-        }
-        for gi in pipeline.bracketGroups.indices {
-            for pi in pipeline.bracketGroups[gi].photos.indices {
-                pipeline.bracketGroups[gi].photos[pi].accepted = false
-                pipeline.bracketGroups[gi].photos[pi].rejected = false
-            }
         }
 
         pipeline.appendLog("All granskningsdata raderad.", type: .warning)

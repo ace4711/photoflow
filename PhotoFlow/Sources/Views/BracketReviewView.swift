@@ -18,10 +18,14 @@ struct BracketReviewView: View {
         return pipeline.bracketGroups[selectedGroupIndex]
     }
 
+    var currentGroupPhotos: [PhotoItem] {
+        guard let group = currentGroup else { return [] }
+        return pipeline.photos(in: group)
+    }
+
     var currentPhoto: PhotoItem? {
-        guard let group = currentGroup,
-              selectedPhotoIndex < group.photos.count else { return nil }
-        return group.photos[selectedPhotoIndex]
+        guard selectedPhotoIndex < currentGroupPhotos.count else { return nil }
+        return currentGroupPhotos[selectedPhotoIndex]
     }
 
     var body: some View {
@@ -152,7 +156,7 @@ struct BracketReviewView: View {
             }
 
             Button(action: {
-                let bracketGroups = pipeline.bracketGroups.filter { $0.isBracket && $0.selectedCount >= 2 }
+                let bracketGroups = pipeline.bracketGroups.filter { $0.isBracket && pipeline.selectedCount(in: $0) >= 2 }
                 runner.sendToLightroom(groups: bracketGroups)
             }) {
                 Label("Lightroom HDR", systemImage: "arrow.right.circle")
@@ -190,16 +194,16 @@ struct BracketReviewView: View {
                                     .foregroundColor(.orange)
                                     .font(.caption)
                             }
-                            Text(group.label)
+                            Text(pipeline.label(for: group))
                                 .font(.system(.caption, design: .rounded, weight: .medium))
                         }
                         HStack(spacing: 8) {
                             Text("\(group.timeStart)")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
-                            Text("\(group.selectedCount)/\(group.photos.count) valda")
+                            Text("\(pipeline.selectedCount(in: group))/\(pipeline.photos(in: group).count) valda")
                                 .font(.caption2)
-                                .foregroundColor(group.selectedCount > 0 ? .green : .secondary)
+                                .foregroundColor(pipeline.selectedCount(in: group) > 0 ? .green : .secondary)
                         }
                     }
                     Spacer()
@@ -217,7 +221,7 @@ struct BracketReviewView: View {
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                         }
-                        if group.allReviewed {
+                        if pipeline.allReviewed(group) {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundColor(.green)
                                 .font(.caption)
@@ -263,7 +267,7 @@ struct BracketReviewView: View {
                         }
 
                     HStack(spacing: 16) {
-                        Label("HDR - \(currentGroup?.selectedCount ?? 0) exponeringar", systemImage: "photo.stack")
+                        Label("HDR - \(currentGroup.map { pipeline.selectedCount(in: $0) } ?? 0) exponeringar", systemImage: "photo.stack")
                             .font(.system(.body, design: .monospaced))
                         Text("·")
                         Label("Mertens Exposure Fusion (OpenCV)", systemImage: "cpu")
@@ -400,8 +404,8 @@ struct BracketReviewView: View {
                             .frame(height: 80)
                     }
 
-                    if let group = currentGroup {
-                        ForEach(Array(group.photos.enumerated()), id: \.element.id) { index, photo in
+                    if currentGroup != nil {
+                        ForEach(Array(currentGroupPhotos.enumerated()), id: \.element.id) { index, photo in
                             thumbnailCard(photo: photo, index: index)
                                 .id(index)
                                 .onTapGesture {
@@ -456,10 +460,10 @@ struct BracketReviewView: View {
     // MARK: - Actions
 
     private func navigatePhoto(_ direction: Int) {
-        guard let group = currentGroup else { return }
+        guard currentGroup != nil else { return }
         showHDRPreview = false
         let newIndex = selectedPhotoIndex + direction
-        if newIndex >= 0 && newIndex < group.photos.count {
+        if newIndex >= 0 && newIndex < currentGroupPhotos.count {
             selectedPhotoIndex = newIndex
         }
     }
@@ -474,13 +478,12 @@ struct BracketReviewView: View {
     }
 
     private func toggleCurrentPhoto() {
-        guard currentGroup != nil, currentPhoto != nil else { return }
-        let wasAccepted = pipeline.bracketGroups[selectedGroupIndex].photos[selectedPhotoIndex].accepted
-        pipeline.bracketGroups[selectedGroupIndex].photos[selectedPhotoIndex].accepted = !wasAccepted
-        pipeline.bracketGroups[selectedGroupIndex].photos[selectedPhotoIndex].rejected = false
+        guard currentGroup != nil, let photo = currentPhoto else { return }
+        let wasAccepted = photo.accepted
+        pipeline.setDecision(photoID: photo.id, accepted: !wasAccepted, rejected: false)
         // Mark as user choice (not algorithm)
         if !wasAccepted {
-            pipeline.bracketGroups[selectedGroupIndex].photos[selectedPhotoIndex].algorithmSuggested = false
+            pipeline.setAlgorithmSuggested(photoID: photo.id, suggested: false)
         }
         if wasAccepted {
             audio.playReject()
@@ -492,10 +495,9 @@ struct BracketReviewView: View {
     }
 
     private func acceptCurrentPhoto() {
-        guard currentGroup != nil, currentPhoto != nil else { return }
-        pipeline.bracketGroups[selectedGroupIndex].photos[selectedPhotoIndex].accepted = true
-        pipeline.bracketGroups[selectedGroupIndex].photos[selectedPhotoIndex].rejected = false
-        pipeline.bracketGroups[selectedGroupIndex].photos[selectedPhotoIndex].algorithmSuggested = false
+        guard currentGroup != nil, let photo = currentPhoto else { return }
+        pipeline.setDecision(photoID: photo.id, accepted: true, rejected: false)
+        pipeline.setAlgorithmSuggested(photoID: photo.id, suggested: false)
         audio.playAccept()
         pipeline.saveCullDecisions()
         navigatePhoto(1)
@@ -503,9 +505,8 @@ struct BracketReviewView: View {
     }
 
     private func rejectCurrentPhoto() {
-        guard currentGroup != nil, currentPhoto != nil else { return }
-        pipeline.bracketGroups[selectedGroupIndex].photos[selectedPhotoIndex].accepted = false
-        pipeline.bracketGroups[selectedGroupIndex].photos[selectedPhotoIndex].rejected = true
+        guard currentGroup != nil, let photo = currentPhoto else { return }
+        pipeline.setDecision(photoID: photo.id, accepted: false, rejected: true)
         audio.playReject()
         pipeline.saveCullDecisions()
         navigatePhoto(1)
