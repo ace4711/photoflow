@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import CoreLocation
+import os
 
 @MainActor
 class PipelineState: ObservableObject {
@@ -62,10 +63,31 @@ class PipelineState: ObservableObject {
         return "\(pct)%"
     }
 
+    // Standard per-app location for log files, not the user's Desktop —
+    // ~/Library/Logs/<App>/ is where Console.app and macOS conventions expect them.
     private static let logFileURL: URL = {
-        let desktop = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
-        return desktop.appendingPathComponent("photoflow.log")
+        let logsDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/PhotoFlow")
+        try? FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
+        return logsDir.appendingPathComponent("photoflow.log")
     }()
+
+    /// Kept open for the process lifetime instead of opening/closing the file on
+    /// every single log line.
+    private static let logFileHandle: FileHandle? = {
+        if !FileManager.default.fileExists(atPath: logFileURL.path) {
+            FileManager.default.createFile(atPath: logFileURL.path, contents: nil)
+        }
+        let handle = try? FileHandle(forWritingTo: logFileURL)
+        handle?.seekToEndOfFile()
+        return handle
+    }()
+
+    private static let logTimestampFormatter = ISO8601DateFormatter()
+
+    /// Also logged via os.Logger so entries show up in Console.app, independent of
+    /// whether the in-app log view or the file on disk are checked.
+    private static let osLogger = Logger(subsystem: "com.photoflow.app", category: "general")
 
     func appendLog(_ text: String, type: LogLine.LogType = .info) {
         let line = LogLine(text: text, type: type)
@@ -73,6 +95,13 @@ class PipelineState: ObservableObject {
         if logLines.count > 500 {
             logLines.removeFirst(100)
         }
+
+        switch type {
+        case .info, .success: Self.osLogger.info("\(text, privacy: .public)")
+        case .warning: Self.osLogger.warning("\(text, privacy: .public)")
+        case .error: Self.osLogger.error("\(text, privacy: .public)")
+        }
+
         // Also write to file for debugging
         let prefix = switch type {
         case .info: "INFO"
@@ -80,18 +109,10 @@ class PipelineState: ObservableObject {
         case .error: "ERR "
         case .success: "OK  "
         }
-        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let timestamp = Self.logTimestampFormatter.string(from: Date())
         let logLine = "[\(timestamp)] \(prefix) \(text)\n"
         if let data = logLine.data(using: .utf8) {
-            if FileManager.default.fileExists(atPath: Self.logFileURL.path) {
-                if let handle = try? FileHandle(forWritingTo: Self.logFileURL) {
-                    handle.seekToEndOfFile()
-                    handle.write(data)
-                    handle.closeFile()
-                }
-            } else {
-                try? data.write(to: Self.logFileURL)
-            }
+            Self.logFileHandle?.write(data)
         }
     }
 
@@ -186,6 +207,20 @@ class PipelineState: ObservableObject {
     func appendStepLog(_ step: DashboardStep, _ text: String, type: LogLine.LogType = .info) {
         let line = LogLine(text: text, type: type)
         stepStatuses[step]?.logEntries.append(line)
+        // Keep per-step log history bounded — a long-running pipeline could
+        // otherwise grow this array without limit across many re-runs.
+        if let count = stepStatuses[step]?.logEntries.count, count > 1000 {
+            stepStatuses[step]?.logEntries.removeFirst(200)
+        }
+
+        // Category = step, so Console.app can filter to one pipeline step.
+        let stepLogger = Logger(subsystem: "com.photoflow.app", category: "\(step)")
+        switch type {
+        case .info, .success: stepLogger.info("\(text, privacy: .public)")
+        case .warning: stepLogger.warning("\(text, privacy: .public)")
+        case .error: stepLogger.error("\(text, privacy: .public)")
+        }
+
         // Also add to global log
         appendLog("[\(step.title)] \(text)", type: type)
     }
@@ -241,9 +276,13 @@ struct LogLine: Identifiable {
         case info, warning, error, success
     }
 
-    var timeString: String {
+    private static let timeFormatter: DateFormatter = {
         let fmt = DateFormatter()
         fmt.dateFormat = "HH:mm:ss"
-        return fmt.string(from: timestamp)
+        return fmt
+    }()
+
+    var timeString: String {
+        Self.timeFormatter.string(from: timestamp)
     }
 }
