@@ -63,14 +63,6 @@ class DependencyManager: ObservableObject {
             installMethod: .download(url: "https://helpx.adobe.com/camera-raw/using/adobe-dng-converter.html")
         ),
         ToolDef(
-            name: "python3",
-            description: "Bracket-analys och gruppering",
-            importance: .required,
-            checkPaths: ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"],
-            versionArgs: ["--version"],
-            installMethod: .brew(formula: "python3")
-        ),
-        ToolDef(
             name: "Adobe Lightroom Classic",
             description: "HDR-sammanslagning (alternativ)",
             importance: .optional,

@@ -17,14 +17,6 @@ struct ToolLocatorTests {
         // this test only verifies we never return a bogus/nonexistent path.
     }
 
-    @Test("python3ForAnalysis hittas i något av de kända sökvägarna om det finns installerat")
-    func python3ForAnalysis_findsKnownPathOrNil() {
-        if let path = ToolLocator.python3ForAnalysis {
-            #expect(path.hasSuffix("/python3"))
-            #expect(FileManager.default.fileExists(atPath: path))
-        }
-    }
-
     @Test("python3WithOpenCV returnerar en existerande fil eller nil, aldrig ett fantompath")
     func python3WithOpenCV_findsExistingPathOrNil() {
         ToolLocator.resetCacheForTesting()

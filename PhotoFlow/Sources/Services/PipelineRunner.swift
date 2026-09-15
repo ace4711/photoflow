@@ -73,13 +73,6 @@ class PipelineRunner: ObservableObject {
         return path
     }
 
-    private func requirePython3ForAnalysis() throws -> String {
-        guard let path = ToolLocator.python3ForAnalysis else {
-            throw PipelineError.toolNotFound("python3 saknas. Installera med: brew install python3")
-        }
-        return path
-    }
-
     private func requirePython3WithOpenCV() throws -> String {
         guard let path = ToolLocator.python3WithOpenCV else {
             throw PipelineError.toolNotFound("python3 med OpenCV (cv2) och numpy saknas — krävs för HDR-sammanslagning. Installera med: pip3 install opencv-python numpy")
@@ -755,60 +748,127 @@ class PipelineRunner: ObservableObject {
         }
 
         state.appendLog("Analyserar EXIF-data...", type: .info)
+        try await checkCancellationAndWaitIfPaused()
 
         let groupsDir = outputDir.appendingPathComponent("bracket_groups")
         try FileManager.default.createDirectory(at: groupsDir, withIntermediateDirectories: true)
 
-        // Use exiftool to extract EXIF data — pass paths via stdin (-@ -) to avoid
-        // argument-list limits and hangs with large file counts
-        let exifCSV = outputDir.appendingPathComponent("exif_data.csv")
-        let nefPathsList = nefFiles.map { $0.path }.joined(separator: "\n")
+        // Read EXIF via ImageIO (ExifReader), falling back to exiftool only for
+        // ExposureTime (verified unreliable via ImageIO on some real NEFs — see
+        // ExifReader's doc comment). Replaces the old exiftool CSV dump + embedded
+        // Python parsing.
+        pipelineLog("  bracket: läser EXIF via ImageIO (\(nefFiles.count) filer)...")
+        let records = try await ExifReader.readAll(nefFiles: nefFiles, exiftoolPath: try requireExiftool())
+        pipelineLog("  bracket: EXIF-läsning klar (\(records.count)/\(nefFiles.count) filer gav giltig EXIF)")
 
-        pipelineLog("  bracket: startar exiftool...")
-        _ = try await runProcess(
-            executablePath: try requireExiftool(),
-            arguments: ["-csv", "-FileName", "-ExposureTime", "-FNumber", "-ISO",
-                        "-DateTimeOriginal", "-SubSecTimeOriginal",
-                        "-ExposureCompensation", "-ShutterCount", "-@", "-"],
-            outputFile: exifCSV,
-            stdinData: nefPathsList.data(using: .utf8)
-        )
-        pipelineLog("  bracket: exiftool klar")
+        // Written for debugging only now (nothing downstream reads it) — same
+        // idea as the old exiftool CSV dump, generated from what we actually read.
+        let exifCSV = outputDir.appendingPathComponent("exif_data.csv")
+        Self.writeExifDebugCSV(records: records, nefFiles: nefFiles, to: exifCSV)
 
         state.progress = 0.5
+        try await checkCancellationAndWaitIfPaused()
 
-        // Run Python bracket analysis
-        pipelineLog("  bracket: startar python bracket-analys...")
-        let pythonScript = bracketAnalysisPython()
+        // Run bracket analysis (pure Swift port of the old Python script — see
+        // BracketAnalyzer.swift)
+        let params = BracketAnalysisParams(maxTimeGap: maxTimeGap, minBracketSize: minBracketSize)
+        let analysis = BracketAnalyzer.analyze(records: records, params: params)
+        pipelineLog("  bracket: analys klar (\(analysis.groups.count) grupper, \(analysis.bracketGroupsCount) brackets)")
 
-        _ = try await runProcess(
-            executablePath: try requirePython3ForAnalysis(),
-            arguments: ["-c", pythonScript, exifCSV.path, groupsJSON.path, "\(maxTimeGap)", "\(minBracketSize)"]
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted]
+        let jsonData = try encoder.encode(analysis)
+        try jsonData.write(to: groupsJSON)
+
+        // Create symlinked bracket group folders. The old Python version built
+        // NEF paths as `source_dir/filename`, which silently produced no symlink
+        // at all for NEFs in subfolders (findNEFFiles searches recursively) —
+        // fixed here by reusing the same recursive lookup loadBracketGroups uses.
+        try await checkCancellationAndWaitIfPaused()
+        var nefLookup: [String: URL] = [:]
+        for url in nefFiles { nefLookup[url.lastPathComponent] = url }
+        Self.organizeGroupsIntoFolders(
+            groups: analysis.groups,
+            nefLookup: nefLookup,
+            dngDir: outputDir.appendingPathComponent("dng"),
+            groupsDir: groupsDir
         )
-        pipelineLog("  bracket: python bracket-analys klar")
+        pipelineLog("  bracket: grupperna organiserade i \(groupsDir.lastPathComponent)/")
 
-        // Create symlinked bracket group folders
-        pipelineLog("  bracket: startar python organize...")
-        let organizeScript = organizeGroupsPython()
-        _ = try await runProcess(
-            executablePath: try requirePython3ForAnalysis(),
-            arguments: ["-c", organizeScript, groupsJSON.path, inputDir.path,
-                        outputDir.appendingPathComponent("dng").path, groupsDir.path]
-        )
-        pipelineLog("  bracket: python organize klar")
-
-        // Log summary of detected groups (avoid per-group spam that bogs down UI)
-        if let groupData = try? Data(contentsOf: groupsJSON),
-           let groupJson = try? JSONSerialization.jsonObject(with: groupData) as? [String: Any],
-           let detectedGroups = groupJson["groups"] as? [[String: Any]] {
-            let bracketCount = detectedGroups.filter { ($0["is_bracket"] as? Bool) == true }.count
-            let singleCount = detectedGroups.count - bracketCount
-            state.appendStepLog(.createHDR, "\(detectedGroups.count) grupper: \(bracketCount) brackets, \(singleCount) singlar", type: .success)
-        }
+        state.appendStepLog(.createHDR, "\(analysis.groups.count) grupper: \(analysis.bracketGroupsCount) brackets, \(analysis.singleGroupsCount) singlar", type: .success)
 
         state.progress = 1.0
         state.appendLog("Bracket-analys klar.", type: .success)
         audio.playStepComplete()
+    }
+
+    /// Writes a CSV of the EXIF fields `ExifReader` read, purely for manual
+    /// debugging (nothing in the app reads this file back). Not a byte-for-byte
+    /// replacement of the old exiftool CSV dump — columns match what
+    /// `ExifRecord` actually carries.
+    nonisolated static func writeExifDebugCSV(records: [ExifRecord], nefFiles: [URL], to url: URL) {
+        var sourceByFilename: [String: String] = [:]
+        for nef in nefFiles { sourceByFilename[nef.lastPathComponent] = nef.path }
+
+        func csvField(_ value: String) -> String {
+            guard value.contains(",") || value.contains("\"") || value.contains("\n") else { return value }
+            return "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
+        }
+
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
+
+        var lines = ["SourceFile,FileName,ExposureTime,FNumber,ISO,DateTimeOriginal,SubSecTimeOriginal,Orientation"]
+        for record in records.sorted(by: { $0.filename < $1.filename }) {
+            let source = sourceByFilename[record.filename] ?? record.filename
+            // Original digit count (1-3) isn't preserved in the parsed Double —
+            // this is a debug CSV, so a fixed 3-digit representation is fine.
+            let subsecDigits = String(format: "%03.0f", record.subsec * 1000)
+            lines.append([
+                csvField(source),
+                csvField(record.filename),
+                csvField(record.exposureTime),
+                csvField(String(record.fNumber)),
+                csvField(String(record.iso)),
+                csvField(dateFormatter.string(from: record.dateTimeOriginal)),
+                csvField(subsecDigits),
+                csvField(String(record.orientation))
+            ].joined(separator: ","))
+        }
+        try? (lines.joined(separator: "\n") + "\n").write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    /// Creates the `bracket_NNN_HDR_Nexp` / `single_NNN_Nimg` folders under
+    /// `bracket_groups/`, each containing symlinks to the group's NEF (via
+    /// `nefLookup`, which — unlike the old Python version — resolves files
+    /// recursively so subfolders under the input directory work) and DNG (from
+    /// the `dng/` staging folder) files. Matches the old embedded Python
+    /// organize script's behavior exactly, minus that bug.
+    nonisolated static func organizeGroupsIntoFolders(groups: [BracketGroupResult], nefLookup: [String: URL], dngDir: URL, groupsDir: URL) {
+        let fm = FileManager.default
+        for group in groups {
+            let folderName = group.isBracket
+                ? "bracket_\(String(format: "%03d", group.groupId))_HDR_\(group.imageCount)exp"
+                : "single_\(String(format: "%03d", group.groupId))_\(group.imageCount)img"
+            let groupFolder = groupsDir.appendingPathComponent(folderName)
+            try? fm.createDirectory(at: groupFolder, withIntermediateDirectories: true)
+
+            for filename in group.files {
+                if let nefURL = nefLookup[filename] {
+                    let dst = groupFolder.appendingPathComponent(filename)
+                    if !fm.fileExists(atPath: dst.path) {
+                        try? fm.createSymbolicLink(at: dst, withDestinationURL: nefURL)
+                    }
+                }
+
+                let baseName = filename.contains(".") ? String(filename[..<filename.lastIndex(of: ".")!]) : filename
+                let dngSrc = dngDir.appendingPathComponent("\(baseName).dng")
+                let dngDst = groupFolder.appendingPathComponent("\(baseName).dng")
+                if fm.fileExists(atPath: dngSrc.path) && !fm.fileExists(atPath: dngDst.path) {
+                    try? fm.createSymbolicLink(at: dngDst, withDestinationURL: dngSrc)
+                }
+            }
+        }
     }
 
     // MARK: - Step 2.5: Calendar Matching
@@ -2286,224 +2346,6 @@ class PipelineRunner: ObservableObject {
         }, onCancel: {
             box.cancel()
         })
-    }
-
-    // MARK: - Embedded Python scripts
-
-    private func bracketAnalysisPython() -> String {
-        """
-        import csv, json, sys, math
-        from datetime import datetime
-
-        exif_csv, output_json = sys.argv[1], sys.argv[2]
-        max_time_gap, min_bracket_size = int(sys.argv[3]), int(sys.argv[4])
-
-        def parse_exposure(s):
-            s = s.strip()
-            if '/' in s:
-                p = s.split('/')
-                return float(p[0]) / float(p[1])
-            return float(s)
-
-        def parse_dt(s):
-            try: return datetime.strptime(s.strip(), "%Y:%m:%d %H:%M:%S")
-            except: return None
-
-        def ev(exp):
-            if exp <= 0: return 0
-            return math.log2(exp)
-
-        # Read EXIF data
-        images = []
-        with open(exif_csv, 'r') as f:
-            for row in csv.DictReader(f):
-                dt = parse_dt(row.get('DateTimeOriginal', ''))
-                if not dt: continue
-                try: exp = parse_exposure(row.get('ExposureTime', '0'))
-                except: exp = 0
-                try: fn = float(row.get('FNumber', '0'))
-                except: fn = 0
-                try: iso = int(row.get('ISO', '0'))
-                except: iso = 0
-                # SubSecTimeOriginal can have 1-3 digits ("5" = .5s, "50" = .50s,
-                # "500" = .500s) — treat it as decimal digits after "0.", not as an
-                # integer count of centiseconds (which broke for 1- and 3-digit values).
-                subsec_digits = ''.join(ch for ch in row.get('SubSecTimeOriginal', '') if ch.isdigit())
-                try: subsec_val = float('0.' + subsec_digits) if subsec_digits else 0.0
-                except: subsec_val = 0.0
-                precise_ts = dt.timestamp() + subsec_val
-                images.append({'filename': row['FileName'], 'datetime': dt, 'exposure': exp,
-                    'fnumber': fn, 'iso': iso, 'exposure_str': row.get('ExposureTime', ''),
-                    'precise_ts': precise_ts})
-
-        images.sort(key=lambda x: x['filename'])
-
-        # Phase 1: Group by time proximity + same aperture/ISO
-        raw_groups, current = [], [images[0]] if images else []
-        for i in range(1, len(images)):
-            p, c = images[i-1], images[i]
-            td = c['precise_ts'] - p['precise_ts']
-            same = c['fnumber'] == p['fnumber'] and c['iso'] == p['iso']
-            if td <= max_time_gap and same:
-                current.append(c)
-            else:
-                raw_groups.append(current)
-                current = [c]
-        if current: raw_groups.append(current)
-
-        # Phase 2: Split groups that contain multiple bracket sub-sequences
-        def find_bracket_subsequences(group):
-            if len(group) <= 3:
-                return [group]
-            exps = [img['exposure'] for img in group]
-            evs = [ev(e) for e in exps]
-            n = len(group)
-
-            # Detect time gaps within the group - a gap >6s suggests new bracket take
-            sub_seqs = []
-            current_seq = [0]
-            for i in range(1, n):
-                gap = group[i]['precise_ts'] - group[i-1]['precise_ts']
-                if gap > 6.0:
-                    sub_seqs.append(current_seq)
-                    current_seq = [i]
-                else:
-                    current_seq.append(i)
-            sub_seqs.append(current_seq)
-
-            if len(sub_seqs) > 1:
-                return [[group[i] for i in seq] for seq in sub_seqs]
-
-            # Look for repeating bracket patterns (e.g. 3+3 or 3+3+extra)
-            # Check if exposures repeat a monotonic pattern
-            for pat_len in [3, 4, 5]:
-                if n >= pat_len * 2 and n <= pat_len * 2 + 2:
-                    first_evs = sorted(evs[:pat_len])
-                    second_evs = sorted(evs[pat_len:pat_len*2])
-                    # Check if the two sets have similar EV spread
-                    if len(second_evs) >= pat_len:
-                        spread1 = first_evs[-1] - first_evs[0]
-                        spread2 = second_evs[-1] - second_evs[0]
-                        if spread1 > 1.0 and spread2 > 1.0 and abs(spread1 - spread2) < 2.0:
-                            result = [group[:pat_len], group[pat_len:pat_len*2]]
-                            if n > pat_len * 2:
-                                result.append(group[pat_len*2:])
-                            return result
-
-            return [group]
-
-        groups = []
-        for rg in raw_groups:
-            groups.extend(find_bracket_subsequences(rg))
-
-        # Phase 3: Classify groups and find optimal HDR subsets
-        def find_best_hdr_subset(group):
-            exps = [(i, img['exposure']) for i, img in enumerate(group)]
-            if len(exps) <= 1:
-                return list(range(len(group)))
-
-            # Remove duplicate exposures (keep first of each unique EV level)
-            unique = []
-            for idx, exp_val in exps:
-                ev_val = ev(exp_val)
-                is_dup = False
-                for uidx, uexp in unique:
-                    if abs(ev(uexp) - ev_val) < 0.3:
-                        is_dup = True
-                        break
-                if not is_dup:
-                    unique.append((idx, exp_val))
-
-            # Sort by exposure value (dark to bright)
-            unique.sort(key=lambda x: x[1])
-
-            # For real estate HDR: drop the darkest exposure if it's much darker
-            # than the median. Dark frames pull the HDR merge down too much.
-            # Keep at least 2 exposures.
-            if len(unique) >= 3:
-                evs_sorted = [ev(u[1]) for u in unique]
-                median_ev = evs_sorted[len(evs_sorted) // 2]
-                darkest_ev = evs_sorted[0]
-                # If darkest is >2.5 EV below median, skip it
-                if (median_ev - darkest_ev) > 2.5:
-                    unique = unique[1:]  # drop darkest
-                    print(f"    Hoppar over morkaste exponering (EV-diff: {median_ev - darkest_ev:.1f})")
-
-            indices = [u[0] for u in unique]
-
-            if len(unique) < min_bracket_size:
-                return indices
-
-            return indices
-
-        output = {'total_images': len(images), 'total_groups': len(groups), 'groups': [],
-            'params': {'max_time_gap': max_time_gap, 'min_bracket_size': min_bracket_size}}
-        for i, g in enumerate(groups):
-            exps = [x['exposure'] for x in g]
-            er = max(exps) / max(min(exps), 0.0001) if min(exps) > 0 else 0
-
-            # Better bracket detection:
-            # 1. Need min_bracket_size unique exposure levels
-            unique_evs = set()
-            for e in exps:
-                ev_val = round(ev(e) * 3) / 3  # quantize to 1/3 EV
-                unique_evs.add(ev_val)
-
-            has_enough_unique = len(unique_evs) >= min_bracket_size
-            has_range = er > 2.0
-            is_bracket = has_enough_unique and has_range
-
-            # Find suggested HDR subset
-            hdr_indices = find_best_hdr_subset(g) if is_bracket else []
-
-            files = [x['filename'].rsplit('.', 1)[0] + '.NEF' for x in g]
-            group_info = {
-                'group_id': i+1, 'is_bracket': is_bracket, 'image_count': len(g),
-                'files': files, 'exposures': [x['exposure_str'] for x in g],
-                'fnumber': g[0]['fnumber'], 'iso': g[0]['iso'],
-                'time_start': g[0]['datetime'].strftime('%H:%M:%S'),
-                'time_end': g[-1]['datetime'].strftime('%H:%M:%S'),
-                'date_start': g[0]['datetime'].strftime('%Y-%m-%d %H:%M:%S'),
-                'date_end': g[-1]['datetime'].strftime('%Y-%m-%d %H:%M:%S'),
-                'datetimes': [x['datetime'].strftime('%Y-%m-%d %H:%M:%S') for x in g],
-                'exposure_range_stops': round(er, 1),
-                'suggested_hdr_indices': hdr_indices,
-                'unique_exposure_levels': len(unique_evs)}
-            output['groups'].append(group_info)
-
-        br = [x for x in output['groups'] if x['is_bracket']]
-        output['bracket_groups_count'] = len(br)
-        output['single_groups_count'] = len(output['groups']) - len(br)
-        with open(output_json, 'w') as f: json.dump(output, f, indent=2)
-        for g in output['groups']:
-            tag = ' [HDR]' if g['is_bracket'] else ''
-            sel = f" sel={g['suggested_hdr_indices']}" if g['suggested_hdr_indices'] else ''
-            print(f"  Grupp {g['group_id']:3d}: {g['image_count']} imgs, {g['unique_exposure_levels']} unika EV, f/{g['fnumber']}{tag}{sel}")
-        print(f"Grupper: {len(output['groups'])}, HDR: {len(br)}")
-        """
-    }
-
-    private func organizeGroupsPython() -> String {
-        """
-        import json, os, sys
-        groups_json, source_dir, dng_dir, groups_dir = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-        with open(groups_json, 'r') as f: data = json.load(f)
-        for g in data['groups']:
-            gid, ib = g['group_id'], g['is_bracket']
-            fn = f"bracket_{gid:03d}_HDR_{g['image_count']}exp" if ib else f"single_{gid:03d}_{g['image_count']}img"
-            gf = os.path.join(groups_dir, fn)
-            os.makedirs(gf, exist_ok=True)
-            for f2 in g['files']:
-                src = os.path.join(source_dir, f2)
-                dst = os.path.join(gf, f2)
-                if os.path.exists(src) and not os.path.exists(dst):
-                    os.symlink(os.path.abspath(src), dst)
-                dn = f2.rsplit('.', 1)[0] + '.dng'
-                sd = os.path.join(dng_dir, dn)
-                dd = os.path.join(gf, dn)
-                if os.path.exists(sd) and not os.path.exists(dd):
-                    os.symlink(os.path.abspath(sd), dd)
-        """
     }
 
     /// Python script for Mertens exposure fusion via OpenCV.

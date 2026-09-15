@@ -19,10 +19,6 @@ enum ToolLocator {
     /// exiftool — EXIF extraction, preview generation and metadata writing.
     static var exiftool: String? { find("exiftool") }
 
-    /// Plain python3 (standard library only) for the bracket-analysis and
-    /// group-organizing scripts.
-    static var python3ForAnalysis: String? { find("python3") }
-
     /// python3 with `cv2` (OpenCV) and `numpy` importable, needed for Mertens HDR
     /// exposure fusion. Checking this means actually spawning python and trying the
     /// import, so the result is cached for the process lifetime — call
