@@ -371,6 +371,95 @@ class PipelineRunner: ObservableObject {
         return result.sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
+    /// Builds the exiftool argfile lines (one file's block, ending with "-execute")
+    /// for writing address/GPS/IPTC/AI metadata to a single output file.
+    ///
+    /// NEF files in address folders are symlinks to the user's original card/input
+    /// files — we must never modify them. Plain `-overwrite_original` on a symlink
+    /// makes exiftool replace the link with a full copy of its target (verified),
+    /// which both duplicates disk usage and silently drops the metadata write (it
+    /// lands on the new copy's inode, but the "staging" file the rest of the
+    /// pipeline references is unaffected). So:
+    ///   - DNG / preview JPEG / HDR TIFF-JPEG (regular files we own): write with
+    ///     `-overwrite_original_in_place`, which preserves the symlink and writes
+    ///     through to the target (verified).
+    ///   - NEF (symlink to the original): never touch the file at all. Instead
+    ///     write (or update) an XMP sidecar next to the symlink, using the
+    ///     XMP-tag equivalents of the IPTC fields.
+    static func exiftoolArguments(for file: URL, meta: IPTCFileMetadata) -> [String] {
+        let isNEF = file.pathExtension.lowercased() == "nef"
+        let sidecarURL = file.deletingPathExtension().appendingPathExtension("xmp")
+        let sidecarExists = isNEF && FileManager.default.fileExists(atPath: sidecarURL.path)
+
+        var lines: [String] = []
+
+        if isNEF {
+            if sidecarExists {
+                // Sidecar is a plain file — safe to overwrite directly.
+                lines.append("-overwrite_original")
+            }
+            // else: -o creates a brand new sidecar file, nothing to overwrite.
+        } else {
+            lines.append("-overwrite_original_in_place")
+        }
+        lines.append("-charset")
+        lines.append("iptc=UTF8")
+
+        if let lat = meta.latitude, let lon = meta.longitude {
+            let latRef = lat >= 0 ? "N" : "S"
+            let lonRef = lon >= 0 ? "E" : "W"
+            let prefix = isNEF ? "-XMP:" : "-"
+            lines.append("\(prefix)GPSLatitude=\(abs(lat))")
+            lines.append("\(prefix)GPSLatitudeRef=\(latRef)")
+            lines.append("\(prefix)GPSLongitude=\(abs(lon))")
+            lines.append("\(prefix)GPSLongitudeRef=\(lonRef)")
+        }
+
+        if let address = meta.address, !address.isEmpty {
+            if isNEF {
+                lines.append("-XMP:Title=\(address)")
+                lines.append("-XMP-iptcCore:Location=\(address)")
+                lines.append("-XMP-iptcCore:Sublocation=\(address)")
+            } else {
+                lines.append("-IPTC:Headline=\(address)")
+                lines.append("-IPTC:ObjectName=\(address)")
+                lines.append("-XMP:Title=\(address)")
+                lines.append("-IPTC:Sub-location=\(address)")
+            }
+        }
+
+        if let eventTitle = meta.eventTitle, !eventTitle.isEmpty {
+            lines.append(isNEF ? "-XMP:Instructions=\(eventTitle)" : "-IPTC:SpecialInstructions=\(eventTitle)")
+        }
+
+        for tag in meta.aiTags {
+            if isNEF {
+                lines.append("-XMP:Subject+=\(tag)")
+            } else {
+                lines.append("-IPTC:Keywords+=\(tag)")
+                lines.append("-XMP:Subject+=\(tag)")
+            }
+        }
+
+        if let description = meta.description, !description.isEmpty {
+            if isNEF {
+                lines.append("-XMP:Description=\(description)")
+            } else {
+                lines.append("-IPTC:Caption-Abstract=\(description)")
+                lines.append("-XMP:Description=\(description)")
+            }
+        }
+
+        if isNEF && !sidecarExists {
+            lines.append("-o")
+            lines.append(sidecarURL.path)
+        }
+        lines.append(isNEF && sidecarExists ? sidecarURL.path : file.path)
+        lines.append("-execute")
+
+        return lines
+    }
+
     /// Recursively find all files with the given extension under a directory.
     /// Synchronous, so it's safe to call an NSEnumerator's iterator from
     /// async contexts (FileManager.enumerator's makeIterator is unavailable there).
@@ -1053,60 +1142,42 @@ class PipelineRunner: ObservableObject {
                       let files = try? fm.contentsOfDirectory(at: subDir, includingPropertiesForKeys: nil) else { continue }
 
                 for file in files {
-                    // Common args for this file
-                    argfileLines.append("-overwrite_original")
-                    argfileLines.append("-charset")
-                    argfileLines.append("iptc=UTF8")
+                    // XMP sidecars aren't retaggable directly — they get written/updated
+                    // as a side effect of processing their NEF (see exiftoolArguments).
+                    if file.pathExtension.lowercased() == "xmp" { continue }
 
                     // Build per-file log description
                     var parts: [String] = []
-
-                    // GPS data
                     if hasGPS {
-                        let latRef = folderMeta.lat >= 0 ? "N" : "S"
-                        let lonRef = folderMeta.lon >= 0 ? "E" : "W"
-                        argfileLines.append("-GPSLatitude=\(abs(folderMeta.lat))")
-                        argfileLines.append("-GPSLatitudeRef=\(latRef)")
-                        argfileLines.append("-GPSLongitude=\(abs(folderMeta.lon))")
-                        argfileLines.append("-GPSLongitudeRef=\(lonRef)")
                         parts.append("GPS \(String(format: "%.4f", folderMeta.lat)),\(String(format: "%.4f", folderMeta.lon))")
                     }
-
-                    // IPTC/XMP address metadata
-                    argfileLines.append("-IPTC:Headline=\(address)")
-                    argfileLines.append("-IPTC:ObjectName=\(address)")
-                    argfileLines.append("-XMP:Title=\(address)")
-                    argfileLines.append("-IPTC:Sub-location=\(address)")
                     parts.append("adress=\"\(address)\"")
-
-                    if !eventTitle.isEmpty {
-                        argfileLines.append("-IPTC:SpecialInstructions=\(eventTitle)")
-                    }
 
                     // Per-file AI tags (merged into the same exiftool call)
                     let baseName = file.deletingPathExtension().lastPathComponent
-                    if let aiData = aiTagLookup[baseName] {
-                        for tag in aiData.tags {
-                            let nfcTag = tag.precomposedStringWithCanonicalMapping
-                            argfileLines.append("-IPTC:Keywords+=\(nfcTag)")
-                            argfileLines.append("-XMP:Subject+=\(nfcTag)")
-                        }
-                        // Combine address description + AI description
-                        let combinedDesc = [description, aiData.description.precomposedStringWithCanonicalMapping]
+                    let aiData = aiTagLookup[baseName]
+                    let nfcTags = (aiData?.tags ?? []).map { $0.precomposedStringWithCanonicalMapping }
+                    let combinedDesc: String
+                    if let aiData {
+                        combinedDesc = [description, aiData.description.precomposedStringWithCanonicalMapping]
                             .filter { !$0.isEmpty }.joined(separator: " — ")
-                        argfileLines.append("-IPTC:Caption-Abstract=\(combinedDesc)")
-                        argfileLines.append("-XMP:Description=\(combinedDesc)")
                         parts.append("AI: \(aiData.tags.joined(separator: ", "))")
                     } else {
-                        argfileLines.append("-IPTC:Caption-Abstract=\(description)")
-                        argfileLines.append("-XMP:Description=\(description)")
+                        combinedDesc = description
                     }
 
-                    // Target file path (must be last before -execute)
-                    argfileLines.append(file.path)
-                    argfileLines.append("-execute")
+                    let fileMeta = IPTCFileMetadata(
+                        address: address,
+                        eventTitle: eventTitle,
+                        description: combinedDesc,
+                        latitude: hasGPS ? folderMeta.lat : nil,
+                        longitude: hasGPS ? folderMeta.lon : nil,
+                        aiTags: nfcTags
+                    )
+                    argfileLines.append(contentsOf: Self.exiftoolArguments(for: file, meta: fileMeta))
 
-                    fileDescriptions.append("✓ \(file.lastPathComponent) ← \(parts.joined(separator: ", "))")
+                    let sidecarNote = file.pathExtension.lowercased() == "nef" ? " (XMP-sidecar)" : ""
+                    fileDescriptions.append("✓ \(file.lastPathComponent)\(sidecarNote) ← \(parts.joined(separator: ", "))")
                     totalFiles += 1
                 }
             }
@@ -1122,26 +1193,24 @@ class PipelineRunner: ObservableObject {
                     guard fm.fileExists(atPath: subDir.path),
                           let files = try? fm.contentsOfDirectory(at: subDir, includingPropertiesForKeys: nil) else { continue }
                     for file in files {
+                        if file.pathExtension.lowercased() == "xmp" { continue }
                         let baseName = file.deletingPathExtension().lastPathComponent
                         guard let aiData = aiTagLookup[baseName] else { continue }
 
-                        argfileLines.append("-overwrite_original")
-                        argfileLines.append("-charset")
-                        argfileLines.append("iptc=UTF8")
-                        for tag in aiData.tags {
-                            let nfcTag = tag.precomposedStringWithCanonicalMapping
-                            argfileLines.append("-IPTC:Keywords+=\(nfcTag)")
-                            argfileLines.append("-XMP:Subject+=\(nfcTag)")
-                        }
-                        if !aiData.description.isEmpty {
-                            let nfcDesc = aiData.description.precomposedStringWithCanonicalMapping
-                            argfileLines.append("-IPTC:Caption-Abstract=\(nfcDesc)")
-                            argfileLines.append("-XMP:Description=\(nfcDesc)")
-                        }
-                        argfileLines.append(file.path)
-                        argfileLines.append("-execute")
+                        let nfcTags = aiData.tags.map { $0.precomposedStringWithCanonicalMapping }
+                        let nfcDesc = aiData.description.precomposedStringWithCanonicalMapping
+                        let fileMeta = IPTCFileMetadata(
+                            address: nil,
+                            eventTitle: nil,
+                            description: nfcDesc.isEmpty ? nil : nfcDesc,
+                            latitude: nil,
+                            longitude: nil,
+                            aiTags: nfcTags
+                        )
+                        argfileLines.append(contentsOf: Self.exiftoolArguments(for: file, meta: fileMeta))
 
-                        fileDescriptions.append("✓ \(file.lastPathComponent) ← AI: \(aiData.tags.joined(separator: ", "))")
+                        let sidecarNote = file.pathExtension.lowercased() == "nef" ? " (XMP-sidecar)" : ""
+                        fileDescriptions.append("✓ \(file.lastPathComponent)\(sidecarNote) ← AI: \(aiData.tags.joined(separator: ", "))")
                         totalFiles += 1
                     }
                 }
@@ -2231,6 +2300,19 @@ class PipelineRunner: ObservableObject {
         print(f"Mertens fusion: {len(images)} bilder -> {output_path} + preview")
         """
     }
+}
+
+/// Metadata to write to one output file via `PipelineRunner.exiftoolArguments`.
+/// `address`/`eventTitle`/`description` are `nil` when the field should not be
+/// touched at all (e.g. AI-only files in "Osorterade" that have no calendar match).
+/// All strings are expected to already be NFC-normalized by the caller.
+struct IPTCFileMetadata {
+    var address: String?
+    var eventTitle: String?
+    var description: String?
+    var latitude: Double?
+    var longitude: Double?
+    var aiTags: [String] = []
 }
 
 enum PipelineError: LocalizedError {

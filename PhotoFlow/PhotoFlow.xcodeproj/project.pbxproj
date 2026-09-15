@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		03A356792358F22F5CF85514 /* PipelineRunnerMetadataTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DEE083780895ED14CBEB130 /* PipelineRunnerMetadataTests.swift */; };
 		0A920AE3F7F2BF2E2C1A141A /* NotesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A744F8E9CC36AC9DFDE19C79 /* NotesManager.swift */; };
 		0BC4E6F7B5881C02478E834F /* TranslationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 946EF029FC6B8E82370D3CED /* TranslationService.swift */; };
 		0D48002A6E2A57144C384E9A /* CalendarService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CFA4B712D2C1C7EB5465997 /* CalendarService.swift */; };
@@ -71,6 +72,7 @@
 		97F73B1E75EF61D038F41B3C /* AudioService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioService.swift; sourceTree = "<group>"; };
 		9B5C78734D65FD86D57C916F /* PipelineStep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineStep.swift; sourceTree = "<group>"; };
 		9CA38B372E1E952057138D8D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		9DEE083780895ED14CBEB130 /* PipelineRunnerMetadataTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineRunnerMetadataTests.swift; sourceTree = "<group>"; };
 		9E004565387636287CADBBEE /* PhotoFlow.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PhotoFlow.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A744F8E9CC36AC9DFDE19C79 /* NotesManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesManager.swift; sourceTree = "<group>"; };
 		AF63168D1774C3566A1890FF /* DependencyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DependencyManager.swift; sourceTree = "<group>"; };
@@ -129,6 +131,7 @@
 			isa = PBXGroup;
 			children = (
 				230AF67C14F78CC9A5F63D1F /* CalendarServiceTests.swift */,
+				9DEE083780895ED14CBEB130 /* PipelineRunnerMetadataTests.swift */,
 				522CA5C3C17A8E64E615BF3F /* StepStatusTests.swift */,
 			);
 			path = Tests;
@@ -259,6 +262,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				76AD25703B7CD22D2AF084E4 /* CalendarServiceTests.swift in Sources */,
+				03A356792358F22F5CF85514 /* PipelineRunnerMetadataTests.swift in Sources */,
 				1E93AFB7726AF98B211ECFF2 /* StepStatusTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
