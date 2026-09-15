@@ -339,6 +339,12 @@ class PipelineRunner: ObservableObject {
 
     /// Recursively find all NEF files under a directory, sorted by filename.
     /// Excludes output directories and pipeline artifacts to avoid duplicates.
+    /// Bump when the metadata-writing logic changes in a way that would make
+    /// previously-written `metadata_written.json` markers untrustworthy (e.g. the
+    /// DNG-folder-suffix fix and the NEF-symlink/XMP-sidecar fix). Markers without
+    /// a matching version are treated as stale and metadata is written again.
+    static let metadataMarkerVersion = 2
+
     private static let excludedDirNames: Set<String> = [
         "processed", "bracket_groups", "dng", "hdr", "previews"
     ]
@@ -891,9 +897,9 @@ class PipelineRunner: ObservableObject {
             }
             photoFolders.append((photo: photo, folderName: folderName))
 
-            let previewDir = outputDir.appendingPathComponent("\(folderName) TITTBILDER")
-            let dngDir = outputDir.appendingPathComponent(folderName)
-            let extrasDir = outputDir.appendingPathComponent("\(folderName) ÖVRIGA")
+            let previewDir = AddressFolderLayout.previewDir(in: outputDir, folderName: folderName)
+            let dngDir = AddressFolderLayout.dngDir(in: outputDir, folderName: folderName)
+            let extrasDir = AddressFolderLayout.extrasDir(in: outputDir, folderName: folderName)
             try? fm.createDirectory(at: previewDir, withIntermediateDirectories: true)
             try? fm.createDirectory(at: dngDir, withIntermediateDirectories: true)
             try? fm.createDirectory(at: extrasDir, withIntermediateDirectories: true)
@@ -901,9 +907,9 @@ class PipelineRunner: ObservableObject {
 
         // Create symlinks for all files into address folders (fast, no heavy I/O)
         for (index, (photo, folderName)) in photoFolders.enumerated() {
-            let previewDestDir = outputDir.appendingPathComponent("\(folderName) TITTBILDER")
-            let dngDestDir = outputDir.appendingPathComponent(folderName)
-            let extrasDestDir = outputDir.appendingPathComponent("\(folderName) ÖVRIGA")
+            let previewDestDir = AddressFolderLayout.previewDir(in: outputDir, folderName: folderName)
+            let dngDestDir = AddressFolderLayout.dngDir(in: outputDir, folderName: folderName)
+            let extrasDestDir = AddressFolderLayout.extrasDir(in: outputDir, folderName: folderName)
             var linkedFiles = 0
 
             // Symlink preview JPEG → TITTBILDER
@@ -956,8 +962,8 @@ class PipelineRunner: ObservableObject {
         for group in state.bracketGroups where group.isBracket && hdrEnabled {
             guard let firstPhoto = group.photos.first,
                   let folderName = calendar.addressFolder(for: firstPhoto.dateTime, mappings: calendarMappings) else { continue }
-            let previewDir = outputDir.appendingPathComponent("\(folderName) TITTBILDER")
-            let extrasDir = outputDir.appendingPathComponent("\(folderName) ÖVRIGA")
+            let previewDir = AddressFolderLayout.previewDir(in: outputDir, folderName: folderName)
+            let extrasDir = AddressFolderLayout.extrasDir(in: outputDir, folderName: folderName)
             try? fm.createDirectory(at: previewDir, withIntermediateDirectories: true)
             try? fm.createDirectory(at: extrasDir, withIntermediateDirectories: true)
 
@@ -1024,12 +1030,9 @@ class PipelineRunner: ObservableObject {
             let folderName = calendar.addressFolder(for: photo.dateTime, mappings: calendarMappings) ?? "Osorterade"
             let photoBase = getBaseName(photo.nefURL)
 
-            // DNG files are in the address folder directly, previews and originals in suffixed folders
-            let searchDirs = [
-                outputDir.appendingPathComponent(folderName),
-                outputDir.appendingPathComponent("\(folderName) TITTBILDER"),
-                outputDir.appendingPathComponent("\(folderName) ÖVRIGA"),
-            ]
+            // DNG files are in the address folder directly, previews and originals
+            // (plus any XMP sidecar, same basename) in suffixed folders.
+            let searchDirs = AddressFolderLayout.allDirs(in: outputDir, folderName: folderName)
 
             for dir in searchDirs {
                 guard fm.fileExists(atPath: dir.path),
@@ -1069,11 +1072,15 @@ class PipelineRunner: ObservableObject {
         let calendar = CalendarService.shared
         let fm = FileManager.default
 
-        // Check if metadata has already been written (skip if so)
+        // Check if metadata has already been written (skip if so).
+        // Markers without "version": Self.metadataMarkerVersion are from before the
+        // DNG-folder-suffix fix / NEF-sidecar fix and must NOT be trusted — otherwise
+        // existing sessions would never get corrected metadata on next run.
         let metadataMarkerFile = outputDir.appendingPathComponent("metadata_written.json")
         if fm.fileExists(atPath: metadataMarkerFile.path),
            let data = try? Data(contentsOf: metadataMarkerFile),
            let saved = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let savedVersion = saved["version"] as? Int, savedVersion == Self.metadataMarkerVersion,
            let savedFolderCount = saved["folders_written"] as? Int,
            let savedFileCount = saved["files_written"] as? Int,
            savedFolderCount == calendarMappings.count {
@@ -1121,8 +1128,6 @@ class PipelineRunner: ObservableObject {
         var fileDescriptions: [String] = []
 
         for (folderName, folderMeta) in meta {
-            let subfolderSuffixes = ["TITTBILDER", "DNG", "ÖVRIGA"]
-
             // Find the matching address/title for IPTC
             let mapping = calendarMappings.first(where: {
                 calendar.addressFolder(for: $0.photoDateRange.lowerBound, mappings: calendarMappings) == folderName
@@ -1136,8 +1141,7 @@ class PipelineRunner: ObservableObject {
 
             let hasGPS = folderMeta.lat != 0 || folderMeta.lon != 0
 
-            for suffix in subfolderSuffixes {
-                let subDir = outputDir.appendingPathComponent("\(folderName) \(suffix)")
+            for subDir in AddressFolderLayout.allDirs(in: outputDir, folderName: folderName) {
                 guard fm.fileExists(atPath: subDir.path),
                       let files = try? fm.contentsOfDirectory(at: subDir, includingPropertiesForKeys: nil) else { continue }
 
@@ -1183,36 +1187,35 @@ class PipelineRunner: ObservableObject {
             }
         }
 
-        // Also handle AI-tagged files in "Osorterade" (no calendar match)
+        // Also handle AI-tagged files in "Osorterade" (no calendar match).
+        // No outer directory-existence gate here — each of the three subfolders
+        // (DNG has no suffix, same as address folders) is checked individually,
+        // since a previous bug gated the whole block on a folder that wouldn't
+        // exist unless there happened to be unmatched DNG files.
         if AppSettings.shared.aiTaggingEnabled {
-            let osortDir = outputDir.appendingPathComponent("Osorterade")
-            if fm.fileExists(atPath: osortDir.path) {
-                let subDirs = ["Osorterade TITTBILDER", "Osorterade DNG", "Osorterade ÖVRIGA", "Osorterade"]
-                for subDirName in subDirs {
-                    let subDir = outputDir.appendingPathComponent(subDirName)
-                    guard fm.fileExists(atPath: subDir.path),
-                          let files = try? fm.contentsOfDirectory(at: subDir, includingPropertiesForKeys: nil) else { continue }
-                    for file in files {
-                        if file.pathExtension.lowercased() == "xmp" { continue }
-                        let baseName = file.deletingPathExtension().lastPathComponent
-                        guard let aiData = aiTagLookup[baseName] else { continue }
+            for subDir in AddressFolderLayout.allDirs(in: outputDir, folderName: "Osorterade") {
+                guard fm.fileExists(atPath: subDir.path),
+                      let files = try? fm.contentsOfDirectory(at: subDir, includingPropertiesForKeys: nil) else { continue }
+                for file in files {
+                    if file.pathExtension.lowercased() == "xmp" { continue }
+                    let baseName = file.deletingPathExtension().lastPathComponent
+                    guard let aiData = aiTagLookup[baseName] else { continue }
 
-                        let nfcTags = aiData.tags.map { $0.precomposedStringWithCanonicalMapping }
-                        let nfcDesc = aiData.description.precomposedStringWithCanonicalMapping
-                        let fileMeta = IPTCFileMetadata(
-                            address: nil,
-                            eventTitle: nil,
-                            description: nfcDesc.isEmpty ? nil : nfcDesc,
-                            latitude: nil,
-                            longitude: nil,
-                            aiTags: nfcTags
-                        )
-                        argfileLines.append(contentsOf: Self.exiftoolArguments(for: file, meta: fileMeta))
+                    let nfcTags = aiData.tags.map { $0.precomposedStringWithCanonicalMapping }
+                    let nfcDesc = aiData.description.precomposedStringWithCanonicalMapping
+                    let fileMeta = IPTCFileMetadata(
+                        address: nil,
+                        eventTitle: nil,
+                        description: nfcDesc.isEmpty ? nil : nfcDesc,
+                        latitude: nil,
+                        longitude: nil,
+                        aiTags: nfcTags
+                    )
+                    argfileLines.append(contentsOf: Self.exiftoolArguments(for: file, meta: fileMeta))
 
-                        let sidecarNote = file.pathExtension.lowercased() == "nef" ? " (XMP-sidecar)" : ""
-                        fileDescriptions.append("✓ \(file.lastPathComponent)\(sidecarNote) ← AI: \(aiData.tags.joined(separator: ", "))")
-                        totalFiles += 1
-                    }
+                    let sidecarNote = file.pathExtension.lowercased() == "nef" ? " (XMP-sidecar)" : ""
+                    fileDescriptions.append("✓ \(file.lastPathComponent)\(sidecarNote) ← AI: \(aiData.tags.joined(separator: ", "))")
+                    totalFiles += 1
                 }
             }
         }
@@ -1297,6 +1300,7 @@ class PipelineRunner: ObservableObject {
 
         // Persist marker so we skip on re-run
         let marker: [String: Any] = [
+            "version": Self.metadataMarkerVersion,
             "folders_written": meta.count,
             "files_written": totalFiles,
             "timestamp": ISO8601DateFormatter().string(from: Date()),
