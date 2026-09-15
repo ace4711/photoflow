@@ -445,3 +445,177 @@ nytt själva och brydde sig aldrig om `correctedCoordinates`.
   vilket bedömdes vara för stort ingrepp) — verifierat i stället med
   `ProcessCancellationBoxTests` (den isolerade cancellation-bryggan) och
   manuell testning (se ovan).
+
+## Fas 2a – Swift i stället för Python
+
+Utfört autonomt på branchen `forbattringar` medan användaren sov, en punkt i
+taget med bygge + tester gröna före varje commit. Se `git log --oneline` för
+commit-för-commit-historik. 66 tester totalt efter denna fas, alla gröna.
+
+Mål: ersätta `PipelineRunner.runBracketAnalysis`s kedja
+exiftool → CSV → inbäddat Python-skript → `bracket_groups.json` → inbäddat
+Python-skript (symlänkar) med ren Swift, utan att ändra
+`bracket_groups.json`-formatet (gamla sessioner ska fortsätta fungera
+oförändrat).
+
+### 1. `Services/ExifReader.swift` — EXIF via ImageIO, med en dokumenterad reservlösning
+
+Läser EXIF från NEF via `CGImageSourceCopyPropertiesAtIndex`
+(`kCGImagePropertyExifDictionary`/`kCGImagePropertyTIFFDictionary`),
+parallelliserat med en `TaskGroup` (max 8 samtidiga läsningar).
+
+**Verifierat mot riktiga NEF-kopior i scratchpad** (142 bilder från en
+riktig bracket-session, två kameramodeller): FNumber, ISO,
+DateTimeOriginal, SubSecTimeOriginal och TIFF-orientering matchade
+exiftool exakt på alla 142 filer. **ExposureTime gjorde det inte** — 17 av
+142 filer (12 %) med sann exponeringstid i intervallet 0.3–0.4s (t.ex.
+råvärdet 10/25 = 0.4s, verifierat med `exiftool -v3` mot den råa EXIF-
+rationalen) lästes fel av `kCGImagePropertyExifExposureTime` som exakt
+1/3 s (0.3333...) — en skillnad på ~0.3–0.4 EV, stor nog att ändra
+bracket-klassificeringen (unika EV-nivåer, HDR-delmängd). ExposureTime
+faller därför tillbaka till ett enda batchat
+`exiftool -csv -FileName -ExposureTime -@ -`-anrop (samma stdin-teknik
+som resten av pipelinen); alla andra fält läses via ImageIO. Dokumenterat
+i doc-kommentaren på `ExifReader`.
+
+### 2. `Services/BracketAnalyzer.swift` — ren Swift-port av algoritmen
+
+Portar fas 1 (tid + samma bländare/ISO), fas 2 (dela vid glapp >6s,
+upptäck upprepade 3/4/5-mönster) och fas 3 (klassificering, unika EV
+kvantiserat till 1/3, exponeringsintervall >2.0, `find_best_hdr_subset`
+inkl. att hoppa över mörkaste exponeringen om >2.5 EV under median) rakt
+av från den inbäddade Python-strängen. Output är Codable-modeller
+(`BracketAnalysisOutput`/`BracketGroupResult`) med exakt samma nycklar
+`bracket_groups.json` alltid haft.
+
+**Paritetstester** (`BracketAnalyzerParityTests`, 4 fixturer i
+`Tests/Fixtures/BracketAnalysis/`): enkla singlar, 3-bracket med subsec i
+1/2/3 siffror, 5-bracket där mörkaste exponeringen ska hoppas över, och
+två 3-brackets direkt efter varandra plus ett internt glapp >6s som delar
+en grupp. Facit genererades genom att extrahera Python-skriptet ordagrant
+till en scratchpad-tempfil och köra det på samma CSV:er.
+
+**Körde även jämförelsen mot riktig `exif_data.csv`** från två tidigare
+testsessioner (`ptohotagraphy-test/Exempelgatan 7`: 142 bilder, 32 grupper;
+`lint/INPUT`: 2117 bilder, 509 grupper) — körde det extraherade
+Python-skriptet och den nya Swift-koden på exakt samma indata (samma CSV,
+inte via ImageIO) och diffade JSON-utdatan fält för fält. Hittade en
+skillnad: **Pythons `round()` använder round-half-to-even (banker's
+rounding), Swifts `.rounded()` round-half-away-from-zero.** 29 av ~2250
+grupper i lint/INPUT-sessionen låg exakt på en `.x5`-gräns för
+`exposure_range_stops` och rundades olika (`X.2` i Python, `X.3` i Swift).
+Fixat med `.rounded(.toNearestOrEven)` för både `exposure_range_stops` och
+den kvantiserade unika EV-mängden. Efter fixen: **0 skillnader på båda
+riktiga sessionerna** (bit-för-bit identisk JSON, bortsett från
+nyckelordning som JSON inte definierar semantik för).
+
+### 3. Inkopplat i pipelinen, Python borttaget
+
+`runBracketAnalysis` använder nu `ExifReader` + `BracketAnalyzer` och
+skriver `bracket_groups.json` via `JSONEncoder`. `exif_data.csv` skrivs
+fortfarande (för felsökning, genererad direkt från de inlästa
+`ExifRecord`) men har färre kolumner än förut
+(`ExposureCompensation`/`ShutterCount` togs bort — de lästes aldrig av
+algoritmen) och läses inte längre tillbaka av något.
+
+`organizeGroupsPython` ersatt av `PipelineRunner.organizeGroupsIntoFolders`
+(FileManager-symlänkar, samma mappnamn `bracket_NNN_HDR_Nexp`/
+`single_NNN_Nimg`). **Fixar en bugg på samma gång**: Python-versionen
+byggde NEF-källvägar som `source_dir/filnamn` (`os.path.join`), vilket tyst
+gav ingen symlänk alls för NEF-filer i undermappar under indatamappen —
+en riktig layout (SD-kort monterar t.ex. `101NCZ_8/DSC_1807.NEF`, sett i
+en av testsessionerna ovan). Den nya versionen återanvänder samma
+rekursiva filnamn→URL-lookup som `loadBracketGroups` redan byggde, så
+undermappar fungerar. Testat både i `BracketOrganizeFoldersTests` och
+end-to-end mot 6 riktiga NEF-kopior (ExifReader → BracketAnalyzer →
+organizeGroupsIntoFolders producerade rätt gruppindelning — en 5-bilders
+bracket + en ensam bild, pga ett verkligt glapp på 7s — med riktiga
+symlänkar).
+
+Borttaget: `bracketAnalysisPython()`, `organizeGroupsPython()`,
+`ToolLocator.python3ForAnalysis`, samt DependencyManager-raden för det
+obligatoriska "python3"-verktyget (bara bracket-analysen behövde den rena
+python3-installationen). Python + OpenCV för Mertens HDR-sammanslagning
+finns kvar oförändrat (valfritt verktyg, `python3WithOpenCV`).
+
+### 4. Förhandsbilder — undersökt, INTE bytt
+
+`runPreviewGeneration` använder fortfarande `exiftool -b -JpgFromRaw -W`.
+Undersökte om `CGImageSourceCreateThumbnailAtIndex` med
+`kCGImageSourceCreateThumbnailFromImageIfAbsent` +
+`kCGImageSourceThumbnailMaxPixelSize: 10000` +
+`kCGImageSourceCreateThumbnailWithTransform: true` kunde ersätta det, mätt
+på 21 kopierade NEF (två kameramodeller, både liggande och stående bilder):
+
+- **Upplösning**: matchade exiftools `JpgFromRaw` exakt i pixelantal för
+  båda kameramodellerna (t.ex. 8256×5504 respektive 5152×3432 — det
+  senare är kamerans faktiska inbäddade preview-storlek, INTE
+  sensorupplösningen som `kCGImagePropertyPixelWidth/Height` rapporterar,
+  vilket första mätomgången missade). För roterade bilder
+  (TIFF-orientering 8) transponerar `withTransform: true` bredd/höjd
+  (5504×8256 i stället för exiftools oroterade 8256×5504) — samma antal
+  pixlar, bara redan upprätad i stället för att förlita sig på att
+  visningsprogrammet respekterar orienteringstaggen.
+- **Hastighet**: exiftool extraherar alla 21 förhandsbilder i **ett**
+  batch-anrop (`-@ -`, rena byte-kopior, ingen avkodning) på **0.29s**
+  totalt. ImageIO, parallelliserat med en `TaskGroup` (max 8 samtidiga,
+  samma mönster som `ExifReader`), tog **0.70s** totalt — cirka **2.4x
+  långsammare**, och roterade bilder var ~3x långsammare än oroterade
+  inom ImageIO-mätningen själv (transformen tvingar fram en fullständig
+  JPEG-avkodning+rotation+omkodning, en ren bytekopia räcker inte).
+  Extrapolerat till en riktig fastighetsfotografering (300–1000+ bilder,
+  ofta en stor andel stående) skulle det bli flera extra sekunders väntan
+  jämfört med idag.
+
+**Beslut**: behåller exiftool. Kriteriet i uppgiften ("byt bara om inte
+märkbart långsammare") är inte uppfyllt — 2.4x långsammare för det här
+steget räknas som märkbart för en pipeline som redan kör många steg i
+sekvens. Ingen kodändring gjord för denna punkt.
+
+### 5. exiftool `-stay_open` för metadataskrivning — hoppat över
+
+Valfri punkt enligt uppgiften ("gör bara detta om du kan få det robust").
+`writeIPTCMetadata` kör idag ett nytt `exiftool`-anrop per chunk om 100
+filer (rimligt redan — inte per-fil), och att bygga en robust
+`-stay_open`-actor (hantera timeouts per kommando, tolka `{readyN}`-
+markörer tillförlitligt även om ett kommando kraschar exiftool-processen,
+och stänga ner ordentligt vid `cancel()`/Task-cancellation utan att
+läcka en hängande process) är ett större och mer riskfyllt ingrepp än vad
+som är motiverat av vinsten (processtart-overhead för `exiftool` är i
+storleksordningen millisekunder, och stegets flaskhals är ändå IPTC-
+skrivning per fil, inte processstart). Skippat enligt uppgiftens egen
+öppning för detta. Ingen kodändring gjord.
+
+### Manuell testning användaren bör göra
+
+1. **Kör bracket-analysen på en riktig SD-kortsmapp** och jämför resultatet
+   (antal grupper, vilka som blir HDR/single, `suggested_hdr_indices`) mot
+   vad du minns/förväntar dig från tidigare körningar med samma bilder.
+2. **Kontrollera `bracket_groups/`-mappen**: rätt mappnamn
+   (`bracket_NNN_HDR_Nexp`/`single_NNN_Nimg`), symlänkar till både NEF och
+   (om DNG redan konverterats) DNG, inga trasiga länkar
+   (`find <outputmapp>/bracket_groups -type l ! -exec test -e {} \; -print`
+   ska ge tom output).
+3. **Om dina NEF-filer ligger i undermappar** under indatamappen (t.ex.
+   flera SD-kort-mappar i en batch-import): kontrollera att de FÅR
+   symlänkar i `bracket_groups/` nu (den gamla Python-versionen gav tyst
+   inga symlänkar alls för det fallet).
+4. **En bracket med en exponering runt 0.3–0.4s** (t.ex. en HDR-serie där
+   en av bilderna har exakt den exponeringstiden): kontrollera i
+   `bracket_groups.json` att `exposures`-fältet visar rätt värde (inte
+   "1/3") — annars är det ett tecken på att ImageIO-reservlösningen för
+   ExposureTime inte fungerade som väntat på just den filen/kameran.
+5. Kör om en befintlig session vars `bracket_groups.json` skrevs av den
+   GAMLA Python-koden — skip-kontrollen (matchande `total_images` +
+   `params`) ska känna igen den och hoppa över, precis som förut.
+
+### Kvarstående / inte gjort i Fas 2a
+- Punkt 4 (förhandsbilder) och punkt 5 (exiftool `-stay_open`): undersökta
+  och avsiktligt inte implementerade, se ovan för mätningar/motivering.
+- `exif_data.csv` har färre kolumner än den gamla filen
+  (`ExposureCompensation`/`ShutterCount` borttagna) eftersom inget läste
+  dem — om du vill ha dem tillbaka för manuell felsökning är det en liten
+  utökning av `ExifReader`/`writeExifDebugCSV`.
+- Ingen ny inställning lades till — bracket-parametrarna
+  (`maxTimeGap`/`minBracketSize`) styrs fortfarande av samma
+  `AppSettings` som förut, bara motorn under huven bytt ut.
