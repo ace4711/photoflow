@@ -68,6 +68,20 @@ struct DictationPanelView: View {
                 .keyboardShortcut("r", modifiers: [.command])
             }
 
+            // Dictation status indicator (t.ex. "Laddar ner språkmodell…"
+            // medan DictationService laddar ner taligenkänningsmodellen
+            // första gången ett språk används)
+            if let statusText = dictation.statusText {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .scaleEffect(0.5)
+                        .frame(width: 12, height: 12)
+                    Text(statusText)
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                }
+            }
+
             // Recording indicator
             if dictation.isRecording {
                 HStack(spacing: 6) {
