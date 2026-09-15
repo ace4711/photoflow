@@ -941,3 +941,220 @@ fungerar; NEF går via samma `CIRAWFilter`-väg som DNG).
   tester (`RAWRenderer.render`/`readWhiteBalance` kräver en riktig DNG/NEF,
   vilket testmålet inte har tillgång till) — verifierat manuellt i stället
   med kopierade testbilder i scratchpad (se punkt 6).
+
+## Fas 3b – Vision-analys och beslutsstöd
+
+Utfört autonomt på branchen `forbattringar` medan användaren sov, ett steg i
+taget med bygge + tester gröna före varje commit. Se `git log --oneline` för
+commit-för-commit-historik.
+
+Mål: modernisera Vision-användningen, lägga till Vision-baserat
+kvalitetsbeslutsstöd (estetik, horisont, skärpa, dubbletter) i gallringen,
+och återaktivera AI-taggningssteget som stod avstängt sedan tidigare.
+
+### 1. Modernisering av `VisionTaggingService`
+
+Verifierat i SDK:n (`grep` i
+`Vision.framework/Modules/Vision.swiftmodule/*.swiftinterface`) att
+`ClassifyImageRequest`, `CalculateImageAestheticsScoresRequest`,
+`DetectHorizonRequest` och `GenerateImageFeaturePrintRequest` alla finns som
+nya async Swift-API:er (macOS 15+, väl inom projektets macOS 26-mål).
+`VisionTaggingService.tagPhoto` skrevs om från
+`VNClassifyImageRequest`/`VNImageRequestHandler` (synkront, manuellt
+GCD-dispatchat) till `try await ClassifyImageRequest().perform(on: url)` —
+kortare kod, och `perform(on:)` är redan async/icke-blockerande så den
+manuella `DispatchQueue.global()`-dispatchen och `loadCGImage`-hjälparen
+kunde tas bort helt. Den svenska taggmappningstabellen (engelska
+Vision-labels → svenska fastighetstermer) och all klassificeringslogik
+lämnades oförändrad — den ersätts av Foundation Models i en senare fas,
+inte den här.
+
+### 2. Ny `Services/PhotoQualityService.swift`
+
+Skriven som `nonisolated enum` (samma mönster som `HDREngine`/
+`RAWRenderer`/`ExposureFusion`/`HDRAlignment`/`HDRWriter` från Fas 3a) i
+stället för en `actor` som `VisionTaggingService` — ingen instansstatus att
+skydda, och projektets `SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor` hade annars
+tvingat `computeSharpness` (riktigt CPU-arbete: CGContext-ritning +
+vImage-faltning) att seriealiseras på huvudtråden eller en enda
+actor-executor i stället för att köra parallellt över TaskGroupens ~6
+samtidiga jobb.
+
+- **Estetik/kvalitet**: `CalculateImageAestheticsScoresRequest` →
+  `overallScore` (Float, -1...1 enligt Apple — verifierat mot
+  [createwithswift.com](https://www.createwithswift.com/scoring-the-aesthetics-of-an-image-with-the-vision-framework/)
+  och Apples egen dokumentation) normaliseras till 0...1 för visning
+  (`normalizedQualityScore`), plus `isUtility`.
+- **Horisont**: `DetectHorizonRequest` → `HorizonObservation?` (nil om ingen
+  horisontlinje kunde detekteras — vanligt för närbilder/interiörer, inte
+  ett fel). `angle.converted(to: .radians).value` → `tiltDegrees(fromRadians:)`
+  som konverterar till grader och viker in resultatet till (-90, 90] (en
+  horisontlinje är oriktad — en 180°-rotation beskriver samma linje).
+  Flaggas i UI när |vinkel| > 1.0°.
+- **Skärpa**: egen metrik — varians av en 3×3 Laplace-faltning på en
+  nedskalad (max 512px lång sida) gråskalebild, via
+  `vImageConvert_Planar8toPlanarF` + `vImageConvolve_PlanarF` +
+  `vDSP_meanv`/`vDSP_measqv` (verifierat mot en referensimplementation med
+  manuell dubbel for-loop i kalibreringsskriptet — vImage-versionen matchade
+  inom ~0.5%, skillnaden är bara kantutfyllnadens exakta hantering). Bara
+  meningsfull relativt andra bilder i samma dubblettgrupp/session, inte som
+  ett absolut mått.
+- **Dubbletter/nästan-dubbletter**: `GenerateImageFeaturePrintRequest` +
+  `distance(to:)`, klustrade med single-linkage (union-find) under ett
+  tröskelvärde. Par inom samma HDR-bracket-grupp exkluderas alltid från
+  klustring (de är avsiktligt olika exponeringar av samma motiv, inte
+  oavsiktliga upprepningar, och hanteras redan av bracket-granskningen).
+  **Kalibrering** (se punkt 5 nedan för fullständig data): ett första försök
+  med tröskel 0.15 (baserat på enkla percentiler) visade sig i praktiken
+  kedja ihop olika vykomponeringar i samma rum via single-linkage-klustringens
+  kända "chaining"-problem — verifierat visuellt genom att läsa in JPEG-filer
+  direkt och jämföra. Sänkt till **0.05** efter att ha jämfört
+  klustringsresultat vid flera trösklar och granskat klustrens ändpunkter
+  visuellt; vid 0.05 innehöll varje kluster uteslutande verifierat identiska
+  kompositioner.
+- **Orkestrering**: `analyzeSession()` kör en `TaskGroup` med max 6 samtidiga
+  jobb (motsvarande `VisionTaggingService.tagPhotos`), rapporterar förlopp via
+  en `@MainActor`-callback, och respekterar avbrytning
+  (`Task.checkCancellation()` mellan varje slutfört jobb — strukturerad
+  concurrency avbryter då automatiskt alla kvarvarande jobb i gruppen).
+- **Persistens**: `photo_quality.json` i outputDir (Codable, versionerad via
+  `PersistedFile.version`/`PhotoQualityService.currentVersion`) så analysen
+  inte körs om i onödan — samma "hoppa över om redan sparat"-mönster som
+  `ai_tags.json` sedan tidigare.
+
+### 3. Datamodell + pipeline
+
+`PhotoItem` fick fem nya fält: `qualityScore`, `isUtility`, `horizonAngle`,
+`sharpness`, `duplicateGroupID` (valt i stället för en sidotabell i
+`PipelineState` — minst ändring eftersom `PhotoItem` redan bär `aiTags`/
+`aiDescription` från samma typ av Vision-analys).
+
+`PipelineRunner.startPipeline`s TODO/avstängda AI-taggningsblock togs bort —
+steget kördes tidigare **aldrig**, oavsett `AppSettings.aiTaggingEnabled`.
+Steget körs nu och respekterar inställningen precis som de andra valfria
+stegen (`findCalendarInfo`/`writeIPTCTags`/`createHDR`).
+`DashboardStep.aiTagging`s undertext byttes till "Vision-analys" eftersom
+steget nu gör mer än bara klassificering.
+
+`PipelineRunner+AITagging.swift`s `runAITagging()` delades upp i
+`runVisionTagging()` (den oförändrada AI-taggningslogiken) +
+`runVisionQualityAnalysis()` (den nya kvalitetsanalysen), båda med samma
+"hoppa över om redan sparat"-cache-mönster men separata JSON-filer
+(`ai_tags.json` / `photo_quality.json`) så de kan cachas/köras om oberoende
+av varandra. Bracket-gruppmedlemskap läses direkt från `bracket_groups.json`
+(redan skrivet av det tidigare bracket-analyssteget) för att bygga
+uteslutningslistan till dubblettklustringen.
+`PipelineRunner+LoadSession.loadBracketGroups` laddar `photo_quality.json`
+(i-minnet-först, disk-fallback — samma mönster som `aiTagResults`) och fyller
+i `PhotoItem`s nya fält. `rerunStep(.aiTagging)` rensar nu både
+`ai_tags.json` och `photo_quality.json`.
+
+### 4. UI i gallringen (`PreviewCullView`)
+
+- **Info-raden** visar kvalitetspoäng (⭐ 0.00–1.00) och varningschips:
+  "Dubblett 2/3" (position/antal i dubblettgruppen), "Suddig?" (lägst
+  skärpa i sin dubblettgrupp), "Skev horisont 2,3°" (>1° lutning, svensk
+  decimalkomma), "Nyttobild" (Vision's `isUtility`).
+- **Filmremsan** visar en liten ikon per dubblettgrupp (blå
+  `square.on.square`) och för låg kvalitet (orange varningstriangel,
+  tröskel 0.7 normaliserad — en grov, dokumenterad gissning baserad på den
+  kalibrerade sessionens poängfördelning, inte lika hårt verifierad som
+  dubblett-tröskeln).
+- **`s` = "Föreslå gallring"**: `PhotoQualityService.suggestCulling()`
+  markerar (sätter `rejected = true`, raderar aldrig direkt — radering sker
+  som förut först i `finishCulling`) den sämsta bilden i varje
+  dubblettgrupp (behåller den med högst kvalitet/skärpa) plus alla
+  `isUtility`-bilder. Rör aldrig redan beslutade bilder. Visar en orange
+  banner överst med hur många som föreslogs.
+- **`z`** ångrar senaste `s`-omgång (enda-nivås undo-buffert med varje
+  berörd bilds tidigare beslut).
+- Beslut sparas fortfarande via `pipeline.saveCullDecisions()`, precis som
+  manuell accept/reject.
+- "Sortera efter kvalitet"/"Visa bara ogranskade" (steg 4:s valfria
+  tilläggspunkt) gjordes **inte** — bedömdes som lägre prioritet än att få
+  kärnfunktionerna (kalibrering, beslutsstöd, föreslå/ångra) rätt och väl
+  testade inom den tillgängliga tiden.
+
+### 5. Kalibrering och skarpt experiment mot en riktig session
+
+Kopierade en riktig 142-bilders preview-session (`Exempelgatan 7/processed/
+previews/`, Nikon Z8, 25 bracket-/singelgrupper) till scratchpad och körde ett
+fristående Swift-skript (`swiftc` direkt mot Vision-ramverket, samma
+metodik som HDREngine-testningen i Fas 3a) som beräknade riktiga
+Vision-mätningar för alla 142 bilder.
+
+**Dubblettkalibrering** (se punkt 2 ovan för själva beslutet): vid tröskel
+0.05, exklusive par inom samma bracket-grupp, hittades **4 dubblettkluster**
+om totalt **44/142 bilder (31%)**. Varje klusters ändpunkter granskades
+visuellt (läste in JPEG-filerna direkt) — samtliga var bekräftat identiska
+kompositioner som fotografen råkat bracketa två gånger i rad (t.ex.
+`DSC_9440`/`DSC_9448`: pixel-för-pixel samma vy av ett elskåp, fotograferat
+som två separata 4–5-exponeringars brackets). Vid tröskel 0.15 (det första,
+icke-visuellt-verifierade försöket) kedjade single-linkage-klustringen ihop
+**27 bilder** i ett enda kluster som vid granskning innehöll tydligt olika
+vykomponeringar av samma vardagsrum — en viktig läxa: **percentilstatistik
+över parvisa avstånd räcker inte för att kalibrera en tröskel som sedan
+används med single-linkage-transitivitet; klustren måste också granskas
+visuellt vid den valda tröskeln.**
+
+**Horisont**: 12/142 bilder (8,5%) fick |lutning| > 1° — tre distinkta
+grupper av bilder (samma rum fotograferat i en bracket-serie ger samma
+lutning för alla exponeringar, som väntat): ~-1,0 till -1,13° (8 bilder),
+-2,12° (1 bild), och 7,0–7,25° (3 bilder, den mest påtagligt skeva
+gruppen).
+
+**Estetik**: `overallScore` (rå Vision-skala -1...1) låg mellan 0,28 och
+0,86 för hela sessionen (median 0,56) — aldrig negativt för dessa
+fastighetsfoton, vilket är förväntat för välbelysta, komponerade bilder.
+
+**Nyttobilder (`isUtility`)**: **48/142 (34%)** flaggades som nyttobilder av
+Vision — **betydligt fler än väntat**, se "Manuell testning" nedan.
+
+### Manuell testning användaren bör göra
+
+1. **`isUtility`-andelen (34% i testsessionen) känns hög** för professionell
+   fastighetsfotografering — Vision's estetikmodell är sannolikt tränad mest
+   på personliga foton, där "nyttobild" betyder kvitton/skärmdumpar/dokument,
+   och kan felaktigt klassificera enkla, symmetriska, jämnt belysta
+   interiörbilder (precis vad bra fastighetsfoto ofta är!) som "nyttobilder".
+   **Testa "Föreslå gallring" på en riktig session och kontrollera manuellt
+   att den inte föreslår avvisning av fullt godkända rumsbilder** innan du
+   litar på knappen rakt av. Om det visar sig vara ett systematiskt problem
+   är den enklaste fixen att ta bort `isUtility`-villkoret ur
+   `suggestCulling` (eller kräva `isUtility && qualityScore < X`) i en
+   uppföljande fas.
+2. **Dubblett-tröskeln (0.05) är kalibrerad mot en enda session** (142
+   bilder, en fastighet, en fotograf). Testa på fler/olika sessioner
+   (olika kameror, olika fotograferingsstilar) och granska filmremsans
+   dubblett-ikoner — om tröskeln visar sig för sträng (missar riktiga
+   dubbletter) eller för lös (kedjar ihop olika vyer igen), justera
+   `PhotoQualityService.duplicateDistanceThreshold`.
+3. **Låg-kvalitet-tröskeln i filmremsan (0.7 normaliserat)** är en grov
+   gissning, inte lika hårt kalibrerad som dubblett-tröskeln — justera i
+   `PreviewCullView.lowQualityThreshold` om den känns fel i praktiken.
+4. **Prestanda på en stor session**: `analyzeSession` kör
+   `CalculateImageAestheticsScoresRequest` + `DetectHorizonRequest` +
+   `GenerateImageFeaturePrintRequest` + skärpeberäkning per bild, plus en
+   O(n²) parvis dubblettklustring. 142 bilder tog ~21s i kalibreringsskriptet
+   (fristående, ej i appen) — testa uppskalat på en session med flera hundra
+   bilder och håll koll på att `.aiTagging`-steget fortfarande känns rimligt
+   snabbt.
+5. **Horisontflaggan** testades bara på en session utan extremt sneda
+   bilder (max ~7°) — verifiera att riktigt sneda bilder (t.ex. handhållna
+   externa/drönarbilder) ger rimliga gradvärden och inte falska nollor.
+
+### Kvarstående / inte gjort i Fas 3b
+
+- "Sortera efter kvalitet"/"Visa bara ogranskade"-filtret i gallringsvyn
+  (valfri tilläggspunkt) gjordes inte — se punkt 4 ovan.
+- Ingen ny inställning lades till för att stänga av enbart
+  kvalitetsanalysen separat från AI-taggningen — den delar
+  `AppSettings.aiTaggingEnabled` med taggningen (båda är del av samma
+  `.aiTagging`-pipelinesteg, vilket redan var avstängningsbart).
+- `isUtility`-andelen i kalibreringssessionen (34%) är hög nog att den bör
+  ses som en öppen fråga, inte ett löst kalibreringsproblem — se "Manuell
+  testning", punkt 1.
+- Ingen jämförelse gjordes mot en andra riktig session (t.ex. någon av
+  `lint/*/processed/previews/`-mapparna, som är betydligt större) på grund
+  av tidsåtgången för Vision-analys av flera hundra/tusen bilder i den här
+  miljön — kalibreringen vilar på en (visuellt väl verifierad) session.
