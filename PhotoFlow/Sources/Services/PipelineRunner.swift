@@ -57,6 +57,29 @@ class PipelineRunner: ObservableObject {
         self.state = state
     }
 
+    // MARK: - Tool resolution
+
+    private func requireExiftool() throws -> String {
+        guard let path = ToolLocator.exiftool else {
+            throw PipelineError.toolNotFound("exiftool saknas. Installera med: brew install exiftool")
+        }
+        return path
+    }
+
+    private func requirePython3ForAnalysis() throws -> String {
+        guard let path = ToolLocator.python3ForAnalysis else {
+            throw PipelineError.toolNotFound("python3 saknas. Installera med: brew install python3")
+        }
+        return path
+    }
+
+    private func requirePython3WithOpenCV() throws -> String {
+        guard let path = ToolLocator.python3WithOpenCV else {
+            throw PipelineError.toolNotFound("python3 med OpenCV (cv2) och numpy saknas — krävs för HDR-sammanslagning. Installera med: pip3 install opencv-python numpy")
+        }
+        return path
+    }
+
     func loadExistingSession(inputDir: URL, outputDir: URL? = nil) async {
         state.reset()
         state.inputDirectory = inputDir
@@ -655,7 +678,7 @@ class PipelineRunner: ObservableObject {
 
         pipelineLog("  bracket: startar exiftool...")
         _ = try await runProcess(
-            executablePath: "/opt/homebrew/bin/exiftool",
+            executablePath: try requireExiftool(),
             arguments: ["-csv", "-FileName", "-ExposureTime", "-FNumber", "-ISO",
                         "-DateTimeOriginal", "-SubSecTimeOriginal",
                         "-ExposureCompensation", "-ShutterCount", "-@", "-"],
@@ -671,7 +694,7 @@ class PipelineRunner: ObservableObject {
         let pythonScript = bracketAnalysisPython()
 
         _ = try await runProcess(
-            executablePath: "/usr/bin/python3",
+            executablePath: try requirePython3ForAnalysis(),
             arguments: ["-c", pythonScript, exifCSV.path, groupsJSON.path, "\(maxTimeGap)", "\(minBracketSize)"]
         )
         pipelineLog("  bracket: python bracket-analys klar")
@@ -680,7 +703,7 @@ class PipelineRunner: ObservableObject {
         pipelineLog("  bracket: startar python organize...")
         let organizeScript = organizeGroupsPython()
         _ = try await runProcess(
-            executablePath: "/usr/bin/python3",
+            executablePath: try requirePython3ForAnalysis(),
             arguments: ["-c", organizeScript, groupsJSON.path, inputDir.path,
                         outputDir.appendingPathComponent("dng").path, groupsDir.path]
         )
@@ -1252,6 +1275,12 @@ class PipelineRunner: ObservableObject {
             return
         }
 
+        guard let exiftoolPath = ToolLocator.exiftool else {
+            state.appendStepLog(.writeIPTCTags, "exiftool saknas. Installera med: brew install exiftool", type: .error)
+            state.appendLog("Metadata kunde inte skrivas — exiftool saknas.", type: .error)
+            return
+        }
+
         state.updateStepProgress(.writeIPTCTags, processed: 0, total: totalFiles)
 
         // Split argfile lines into chunks of ~100 files for continuous progress
@@ -1290,7 +1319,7 @@ class PipelineRunner: ObservableObject {
 
             do {
                 let output = try await runProcess(
-                    executablePath: "/opt/homebrew/bin/exiftool",
+                    executablePath: exiftoolPath,
                     arguments: ["-@", argfileURL.path]
                 )
                 pipelineLog("Exiftool chunk \(chunkIndex + 1)/\(chunks.count) output: \(output)")
@@ -1396,7 +1425,7 @@ class PipelineRunner: ObservableObject {
             let formatString = previewDir.path + "/%f.jpg"
 
             _ = try await runProcess(
-                executablePath: "/opt/homebrew/bin/exiftool",
+                executablePath: try requireExiftool(),
                 arguments: ["-b", "-JpgFromRaw", "-W", formatString, "-@", "-"],
                 stdinData: pathsList.data(using: .utf8)
             )
@@ -1587,6 +1616,10 @@ class PipelineRunner: ObservableObject {
             return
         }
 
+        // Resolve python3+OpenCV once up front — failing per-group would produce
+        // "N misslyckades" instead of one clear "installera OpenCV" message.
+        let python3Path = try requirePython3WithOpenCV()
+
         // Write the Python fusion script
         let scriptPath = FileManager.default.temporaryDirectory.appendingPathComponent("photoflow_mertens.py")
         let pyScript = mertensFusionPython()
@@ -1618,7 +1651,7 @@ class PipelineRunner: ObservableObject {
 
             do {
                 let output = try await runProcess(
-                    executablePath: "/opt/homebrew/bin/python3",
+                    executablePath: python3Path,
                     arguments: [scriptPath.path, outputPath] + group.previewPaths
                 )
                 if FileManager.default.fileExists(atPath: outputPath) {
@@ -1689,6 +1722,11 @@ class PipelineRunner: ObservableObject {
 
         guard previewPaths.count >= 2 else { return }
 
+        guard let python3Path = ToolLocator.python3WithOpenCV else {
+            state.appendLog("python3 med OpenCV (cv2) och numpy saknas — installera med: pip3 install opencv-python numpy", type: .error)
+            return
+        }
+
         state.appendLog("Gör om HDR för grupp \(group.id) med \(previewPaths.count) bilder (Mertens fusion)...", type: .info)
 
         let scriptPath = FileManager.default.temporaryDirectory.appendingPathComponent("photoflow_mertens.py")
@@ -1698,7 +1736,7 @@ class PipelineRunner: ObservableObject {
 
         do {
             _ = try await runProcess(
-                executablePath: "/opt/homebrew/bin/python3",
+                executablePath: python3Path,
                 arguments: [scriptPath.path, hdrTiff.path] + previewPaths
             )
         } catch {

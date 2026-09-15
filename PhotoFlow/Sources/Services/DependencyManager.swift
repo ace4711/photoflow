@@ -86,7 +86,19 @@ class DependencyManager: ObservableObject {
             versionArgs: nil,
             installMethod: .builtin
         ),
+        ToolDef(
+            name: openCVToolName,
+            description: "HDR-sammanslagning (Mertens exposure fusion)",
+            importance: .optional,
+            checkPaths: ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"],
+            versionArgs: nil,
+            installMethod: .download(url: "https://pypi.org/project/opencv-python/")
+        ),
     ]
+
+    /// Special-cased in checkTool: existence of python3 isn't enough — cv2/numpy
+    /// must actually import, which is what ToolLocator.python3WithOpenCV verifies.
+    nonisolated private static let openCVToolName = "OpenCV (python3 + cv2/numpy)"
 
     // MARK: - Check
 
@@ -111,6 +123,11 @@ class DependencyManager: ObservableObject {
     }
 
     nonisolated private static func checkTool(_ tool: ToolDef) -> DependencyCheck {
+        // OpenCV needs an actual `import cv2, numpy` check, not just python3's presence.
+        if tool.name == openCVToolName {
+            return checkOpenCV(tool)
+        }
+
         // For .app bundles, check existence only
         if let path = tool.checkPaths.first, path.contains(".app") {
             let exists = FileManager.default.fileExists(atPath: path)
@@ -159,6 +176,44 @@ class DependencyManager: ObservableObject {
                 if let v = version, v.count > 80 { version = String(v.prefix(80)) }
             } catch {}
         }
+
+        return DependencyCheck(
+            name: tool.name,
+            description: tool.description,
+            status: .ok,
+            detail: path,
+            version: version,
+            importance: tool.importance,
+            installMethod: tool.installMethod
+        )
+    }
+
+    nonisolated private static func checkOpenCV(_ tool: ToolDef) -> DependencyCheck {
+        guard let path = ToolLocator.python3WithOpenCV else {
+            return DependencyCheck(
+                name: tool.name,
+                description: tool.description,
+                status: .missing,
+                detail: "Installera med: pip3 install opencv-python numpy",
+                version: nil,
+                importance: tool.importance,
+                installMethod: tool.installMethod
+            )
+        }
+
+        var version: String? = nil
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: path)
+        proc.arguments = ["-c", "import cv2; print(cv2.__version__)"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = pipe
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            version = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {}
 
         return DependencyCheck(
             name: tool.name,
