@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import AppKit
+import CoreServices
 
 @MainActor
 class WatchService: ObservableObject {
@@ -11,10 +12,27 @@ class WatchService: ObservableObject {
     @Published var statusMessage: String = "Vantar..."
     @Published var logLines: [String] = []
 
+    /// Fallback-pollning (`AppSettings.watchIntervalSeconds`, default 60 s) —
+    /// FSEvents (`fsEventStream` nedan) är den primära bevakningsmekanismen
+    /// och reagerar i praktiken inom sekunder, men timern körs ändå parallellt
+    /// som skyddsnät ifall FSEvents skulle missa något (t.ex. efter att
+    /// strömmen tappat händelser, `kFSEventStreamEventFlagKernelDropped`).
     private var watchTimer: Timer?
     private var volumeObserver: Any?
+    private var unmountObserver: Any?
     private let settings = AppSettings.shared
     private let audio = AudioService.shared
+
+    /// FSEvents-ström för inputmappen (rekursiv, upptäcker även filer som
+    /// landar i undermappar, t.ex. kamerans "100NIKON"-liknande mappnamn).
+    /// Vi bryr oss inte om VILKEN sökväg som ändrades — varje händelse
+    /// (oavsett innehåll) matar bara `fsEventDebouncer` och en efterföljande
+    /// omkontroll skannar mappen på samma sätt som fallback-pollningen redan
+    /// gjorde.
+    private var fsEventStream: FSEventStreamRef?
+    private var watchedInputPath: String?
+    private let fsEventDebouncer = FSEventDebouncer(interval: 2.0)
+    private var debounceTickTimer: Timer?
 
     /// Files we've already triggered processing for, identified by content (not
     /// just filename — a Nikon restarts its counter at DSC_0001 after a card
@@ -121,13 +139,13 @@ class WatchService: ObservableObject {
             log("Outputmapp: (använder 'processed' i inputmappen)")
         }
 
-        // Periodic check
+        // Fallback-pollning — se kommentaren vid `watchTimer`.
         let interval = TimeInterval(settings.watchIntervalSeconds)
-        log("Kontrollintervall: \(settings.watchIntervalSeconds) sekunder")
+        log("Fallback-kontrollintervall: \(settings.watchIntervalSeconds) sekunder (FSEvents är primär bevakning)")
 
         watchTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.checkForNewFiles()
+                await self?.checkForNewFiles()
             }
         }
 
@@ -147,27 +165,129 @@ class WatchService: ObservableObject {
             }
         }
 
+        // Watch for volume unmounts, so we can clear transient per-volume
+        // state (e.g. `detectedVolumes`) and log it — a card can be pulled
+        // mid-session.
+        unmountObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didUnmountNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let volumeURL = notification.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL else { return }
+            Task { @MainActor [weak self] in
+                self?.handleVolumeUnmounted(volumeURL)
+            }
+        }
+
+        // Primary watching: FSEvents on the input directory (recursive),
+        // debounced ~2s so a whole card copy settles before we react.
+        if let inputDir = settings.inputDirectory {
+            startFSEventsWatching(path: inputDir.path)
+        }
+        debounceTickTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.fsEventDebouncer.tick() else { return }
+                self.log("FSEvents: ändringar upptäckta, kontrollerar (efter debounce)...")
+                await self.checkForNewFiles()
+            }
+        }
+
         // Initial check immediately
-        checkForNewFiles()
+        Task { @MainActor [weak self] in
+            await self?.checkForNewFiles()
+        }
     }
 
     func stopWatching() {
         isWatching = false
         watchTimer?.invalidate()
         watchTimer = nil
+        debounceTickTimer?.invalidate()
+        debounceTickTimer = nil
+        stopFSEventsWatching()
         if let observer = volumeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
             volumeObserver = nil
         }
+        if let observer = unmountObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            unmountObserver = nil
+        }
         log("Bevakning stoppad")
     }
 
-    private func checkForNewFiles() {
+    // MARK: - FSEvents
+
+    /// Startar (eller, om redan igång med en annan sökväg, startar om) en
+    /// rekursiv FSEvents-bevakning av `path`. Vi struntar i vilka sökvägar
+    /// som faktiskt ändrades i callbacken — varje händelse matar bara
+    /// debouncern, och den efterföljande omkontrollen skannar mappen precis
+    /// som fallback-pollningen gör.
+    private func startFSEventsWatching(path: String) {
+        guard watchedInputPath != path else { return }
+        stopFSEventsWatching()
+        watchedInputPath = path
+
+        var context = FSEventStreamContext(
+            version: 0,
+            info: Unmanaged.passUnretained(self).toOpaque(),
+            retain: nil,
+            release: nil,
+            copyDescription: nil
+        )
+        let callback: FSEventStreamCallback = { (_, clientCallBackInfo, _, _, _, _) in
+            guard let info = clientCallBackInfo else { return }
+            let service = Unmanaged<WatchService>.fromOpaque(info).takeUnretainedValue()
+            service.fsEventDebouncer.recordEvent()
+        }
+
+        guard let stream = FSEventStreamCreate(
+            kCFAllocatorDefault,
+            callback,
+            &context,
+            [path] as CFArray,
+            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
+            0.5,
+            FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer)
+        ) else {
+            log("FSEvents: kunde inte skapa bevakningsström för \(path), förlitar mig på fallback-pollning")
+            watchedInputPath = nil
+            return
+        }
+
+        fsEventStream = stream
+        FSEventStreamSetDispatchQueue(stream, DispatchQueue.main)
+        FSEventStreamStart(stream)
+        log("FSEvents: bevakar \(path) rekursivt")
+    }
+
+    private func stopFSEventsWatching() {
+        watchedInputPath = nil
+        guard let stream = fsEventStream else { return }
+        FSEventStreamStop(stream)
+        FSEventStreamInvalidate(stream)
+        FSEventStreamRelease(stream)
+        fsEventStream = nil
+    }
+
+    private func handleVolumeUnmounted(_ volumeURL: URL) {
+        log("Media bortkopplat: \(volumeURL.lastPathComponent)")
+        detectedVolumes.removeAll { $0 == volumeURL }
+    }
+
+    private func checkForNewFiles() async {
         lastCheckTime = Date()
+
+        // Om inputmappens sökväg ändrats sedan senast (t.ex. användaren bytte
+        // mapp i Inställningar medan bevakningen redan var igång): flytta
+        // FSEvents-strömmen dit i stället för att fortsätta bevaka den gamla.
+        if isWatching, let inputDir = settings.inputDirectory {
+            startFSEventsWatching(path: inputDir.path)
+        }
 
         // Check input directory
         if let inputDir = settings.inputDirectory {
-            checkDirectory(inputDir)
+            await checkDirectory(inputDir)
         } else {
             log("Kontroll: Ingen inputmapp konfigurerad")
         }
@@ -184,7 +304,7 @@ class WatchService: ObservableObject {
         }
     }
 
-    private func checkDirectory(_ dir: URL) {
+    private func checkDirectory(_ dir: URL) async {
         // Find NEF files: first check directly, then search subdirectories
         var allNEFs: [URL] = []
         var nefSourceDir = dir
@@ -235,13 +355,27 @@ class WatchService: ObservableObject {
             return
         }
 
+        // Vänta tills filstorlekarna slutat växa innan filerna räknas som
+        // färdigkopierade — viktigt vid kopiering direkt från ett SD-kort
+        // (t.ex. Bild-tagning/Finder) rakt in i inputmappen, där en fil kan
+        // dyka upp i en FSEvents-händelse/pollning mitt i skrivningen. Se
+        // `stableFiles(_:sizesBefore:sizesAfter:)` för den rena logiken.
+        let stableNEFs = await stableFiles(among: unprocessedNEFs)
+        let stillGrowing = unprocessedNEFs.count - stableNEFs.count
+        if stillGrowing > 0 {
+            log("Kontroll: \(stillGrowing) fil(er) verkar fortfarande kopieras, väntar till nästa kontroll")
+        }
+        if stableNEFs.isEmpty {
+            return
+        }
+
         // We have unprocessed files!
-        newFilesFound = unprocessedNEFs.count
+        newFilesFound = stableNEFs.count
 
         if outputExists {
-            log("HITTADE: \(unprocessedNEFs.count) nya NEF-filer (utover redan bearbetade)")
+            log("HITTADE: \(stableNEFs.count) nya NEF-filer (utover redan bearbetade)")
         } else {
-            log("HITTADE: \(unprocessedNEFs.count) NEF-filer att bearbeta i \(dir.lastPathComponent)")
+            log("HITTADE: \(stableNEFs.count) NEF-filer att bearbeta i \(dir.lastPathComponent)")
         }
 
         // Spela bara "behöver din hjälp" om pipelinen INTE startar automatiskt.
@@ -252,7 +386,7 @@ class WatchService: ObservableObject {
         }
 
         // Mark as processed so we don't trigger again
-        for f in unprocessedNEFs {
+        for f in stableNEFs {
             processedFiles.markProcessed(source: f.deletingLastPathComponent().path, key: Self.fileKey(for: f))
         }
         processedFiles.save()
@@ -260,10 +394,22 @@ class WatchService: ObservableObject {
         // Trigger callback - use nefSourceDir (the folder containing the actual NEF files)
         if settings.autoStartPipeline {
             log("Startar automatisk bearbetning av \(nefSourceDir.lastPathComponent)...")
-            onNewFilesDetected?(nefSourceDir, unprocessedNEFs)
+            onNewFilesDetected?(nefSourceDir, stableNEFs)
         } else {
             log("Automatisk bearbetning avstaengd - starta manuellt")
         }
+    }
+
+    /// Väntar `Self.stabilityCheckDelay` sekunder och jämför filstorlekar före
+    /// och efter — returnerar bara de filer vars storlek var oförändrad
+    /// (dvs. inte längre växer). Filer som fortfarande kopieras lämnas kvar
+    /// till nästa kontroll (nästa debounce-utlösning eller fallback-poll)
+    /// snarare än att räknas som nya direkt.
+    private func stableFiles(among files: [URL]) async -> [URL] {
+        let before = Self.currentFileSizes(for: files)
+        try? await Task.sleep(nanoseconds: UInt64(Self.stabilityCheckDelay * 1_000_000_000))
+        let after = Self.currentFileSizes(for: files)
+        return Self.stableFiles(files, sizesBefore: before, sizesAfter: after)
     }
 
     private func searchVolumeForNEFs(_ volumeURL: URL) {
@@ -319,6 +465,70 @@ class WatchService: ObservableObject {
         let size = values?.fileSize ?? -1
         let mtime = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
         return "\(url.lastPathComponent)|\(size)|\(mtime)"
+    }
+
+    // MARK: - Stabilitetskontroll (ren logik, se `WatchServiceStabilityTests`)
+
+    /// Hur länge vi väntar mellan de två storleksmätningarna i
+    /// `stableFiles(among:)`.
+    static let stabilityCheckDelay: TimeInterval = 1.0
+
+    nonisolated static func currentFileSizes(for files: [URL]) -> [URL: Int64] {
+        var result: [URL: Int64] = [:]
+        for file in files {
+            if let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                result[file] = Int64(size)
+            }
+        }
+        return result
+    }
+
+    /// En fil anses klar kopierad om den syntes i båda mätningarna med
+    /// identisk storlek. Saknas den i endera mätningen (t.ex. borttagen,
+    /// eller ett läsfel) räknas den INTE som stabil — hellre vänta en
+    /// kontroll till än att skicka en trasig/ofullständig fil till pipelinen.
+    nonisolated static func isFileStable(sizeBefore: Int64?, sizeAfter: Int64?) -> Bool {
+        guard let sizeBefore, let sizeAfter else { return false }
+        return sizeBefore == sizeAfter
+    }
+
+    nonisolated static func stableFiles(_ files: [URL], sizesBefore: [URL: Int64], sizesAfter: [URL: Int64]) -> [URL] {
+        files.filter { isFileStable(sizeBefore: sizesBefore[$0], sizeAfter: sizesAfter[$0]) }
+    }
+}
+
+/// Samlar ihop en skur av FSEvents-händelser till en enda omkontroll, körd
+/// `interval` sekunder efter den SENASTE händelsen — en hel kortkopiering rör
+/// inputmappen många gånger i följd under några sekunder, och en omkontroll
+/// per enskild händelse vore både onödigt och skulle kunna råka fånga en fil
+/// mitt i kopiering.
+///
+/// Klockan är injicerbar (`recordEvent(at:)`/`tick(now:)` tar ett explicit
+/// `Date`), så beslutslogiken går att enhetstesta helt utan riktiga timers
+/// eller `sleep` — se `WatchServiceDebounceTests`. I produktion drivs
+/// `tick(now:)` av en kort repeterande `Timer` (var 0.3:e sekund) i
+/// `WatchService`.
+final class FSEventDebouncer {
+    let interval: TimeInterval
+    private var lastEventAt: Date?
+
+    init(interval: TimeInterval) {
+        self.interval = interval
+    }
+
+    /// Anropas för varje rå FSEvents-händelse.
+    func recordEvent(at time: Date = Date()) {
+        lastEventAt = time
+    }
+
+    /// Anropas periodiskt. Returnerar `true` exakt en gång per skur — första
+    /// gången minst `interval` sekunder har passerat sedan senast
+    /// registrerade händelse — och nollställer sig själv så nästa skur
+    /// upptäcks på nytt.
+    func tick(now: Date = Date()) -> Bool {
+        guard let lastEventAt, now.timeIntervalSince(lastEventAt) >= interval else { return false }
+        self.lastEventAt = nil
+        return true
     }
 }
 

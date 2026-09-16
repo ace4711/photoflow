@@ -7,7 +7,13 @@ class AppSettings: ObservableObject {
     @AppStorage("inputDirectoryPath") var inputDirectoryPath: String = ""
     @AppStorage("outputDirectoryPath") var outputDirectoryPath: String = ""
     @AppStorage("watchEnabled") var watchEnabled: Bool = false
-    @AppStorage("watchIntervalSeconds") var watchIntervalSeconds: Int = 10
+    /// Fas 3e: numera bara FALLBACK-pollning. FSEvents (`WatchService`) är den
+    /// primära bevakningsmekanismen och reagerar inom sekunder via ett
+    /// debounce-fönster (~2 s) — den här timern körs parallellt som
+    /// skyddsnät ifall FSEvents skulle missa en händelse. 60 s (upp från
+    /// tidigare 10 s, då pollningen var den enda mekanismen) räcker gott om
+    /// som skyddsnät.
+    @AppStorage("watchIntervalSeconds") var watchIntervalSeconds: Int = 60
     @AppStorage("autoStartPipeline") var autoStartPipeline: Bool = true
     @AppStorage("soundEnabled") var soundEnabled: Bool = true
     @AppStorage("speechEnabled") var speechEnabled: Bool = true

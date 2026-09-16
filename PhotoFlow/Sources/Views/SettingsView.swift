@@ -277,7 +277,7 @@ struct WatchTab: View {
         Form {
             Section("Bevakning") {
                 HStack {
-                    Text("Kontrollintervall")
+                    Text("Fallback-kontrollintervall")
                     Spacer()
                     TextField("", value: $settings.watchIntervalSeconds, format: .number)
                         .frame(width: 60)
@@ -285,12 +285,15 @@ struct WatchTab: View {
                     Text("sekunder")
                         .foregroundColor(.secondary)
                 }
+                Text("Inputmappen bevakas i realtid via FSEvents — det här intervallet är bara ett skyddsnät ifall en filsystemhändelse skulle missas.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
 
                 Toggle("Starta pipeline automatiskt vid nya filer", isOn: $settings.autoStartPipeline)
             }
 
             Section("Information") {
-                Text("I bevakningsläge övervakas inputmappen och alla anslutna volymer (SD-kort) för nya NEF-filer. När nya filer hittas kan pipelinen startas automatiskt.")
+                Text("I bevakningsläge övervakas inputmappen (via FSEvents, med ~2 sekunders debounce) och alla anslutna volymer (SD-kort) för nya NEF-filer. Filer väntas ut tills storleken slutat växa innan de räknas som färdigkopierade. När nya filer hittas kan pipelinen startas automatiskt.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
