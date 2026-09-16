@@ -3,6 +3,7 @@ options:
   bundleIdPrefix: com.photoflow
   deploymentTarget:
     macOS: "26.0"
+    iOS: "26.0"
   xcodeVersion: "16.0"
   minimumXcodeGenVersion: "2.30"
 
@@ -32,9 +33,6 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.photoflow.app
-        INFOPLIST_KEY_NSHumanReadableCopyright: ""
-        INFOPLIST_KEY_CFBundleDisplayName: PhotoFlow
-        GENERATE_INFOPLIST_FILE: YES
         PRODUCT_NAME: PhotoFlow
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         MARKETING_VERSION: "1.0.0"
@@ -42,10 +40,38 @@ targets:
         ENABLE_HARDENED_RUNTIME: NO
         CODE_SIGN_IDENTITY: "-"
         CODE_SIGNING_REQUIRED: NO
-        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.photography"
-        INFOPLIST_KEY_NSCalendarsUsageDescription: "PhotoFlow läser din kalender för att matcha fotograferingar med bokningsadresser och organisera filerna i adressmappar."
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: "PhotoFlow använder mikrofonen för att spela in röstanteckningar till bilder."
-        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "PhotoFlow använder taligenkänning för att transkribera röstanteckningar till text."
+    # Fas 7: bytt från GENERATE_INFOPLIST_FILE + INFOPLIST_KEY_*-inställningar
+    # till en explicit genererad Info.plist (info.path/properties) — behövs
+    # för att kunna deklarera UTImportedTypeDeclarations/CFBundleDocumentTypes
+    # (arrayer av dictionaries, som INFOPLIST_KEY_*-mekanismen inte uttrycker)
+    # för fältanteckningsformatet `.photoflownotes` från PhotoFlowField (iOS).
+    # Verifierat i ett scratchpad-XcodeGen-projekt innan användning här att
+    # `info.path` + `info.properties` faktiskt genererar en Info.plist med
+    # dessa nycklar och sätter INFOPLIST_FILE åt en (i stället för
+    # GENERATE_INFOPLIST_FILE), så alla tidigare INFOPLIST_KEY_*-värden
+    # migrerades hit oförändrade i innehåll.
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: PhotoFlow
+        NSHumanReadableCopyright: ""
+        LSApplicationCategoryType: "public.app-category.photography"
+        NSCalendarsUsageDescription: "PhotoFlow läser din kalender för att matcha fotograferingar med bokningsadresser och organisera filerna i adressmappar."
+        NSMicrophoneUsageDescription: "PhotoFlow använder mikrofonen för att spela in röstanteckningar till bilder."
+        NSSpeechRecognitionUsageDescription: "PhotoFlow använder taligenkänning för att transkribera röstanteckningar till text."
+        # Fas 7: PhotoFlowField (iOS) exporterar den här typen (den skapar
+        # filerna) — PhotoFlow (macOS) bara importerar/konsumerar den.
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: com.photoflow.fieldnotes
+            UTTypeDescription: "PhotoFlow fältanteckningar"
+            UTTypeConformsTo: [public.json]
+            UTTypeTagSpecification:
+              public.filename-extension: [photoflownotes]
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: "PhotoFlow fältanteckningar"
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Owner
+            LSItemContentTypes: [com.photoflow.fieldnotes]
     # Fas 3f: utan en explicit länkad AppIntents.framework-dependency hoppar
     # Xcodes build-system över App Intents-metadataextraktionen ("Metadata
     # extraction skipped, no AppIntents.framework dependency found") även om
@@ -58,6 +84,51 @@ targets:
       properties:
         com.apple.security.app-sandbox: false
         com.apple.security.files.user-selected.read-write: true
+
+  PhotoFlowField:
+    type: application
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - Sources/Shared
+      - SourcesField
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.photoflow.field
+        PRODUCT_NAME: "PhotoFlow Fält"
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        # Fas 7: inget riktigt signeringsteam finns för det här projektet —
+        # appen är avsiktligt begränsad till Simulator (se FORBATTRINGAR.md).
+        # Samma ad hoc-signeringsinställning som PhotoFlow (macOS)-målet ovan,
+        # så `xcodebuild ... -destination 'generic/platform=iOS Simulator'
+        # build` går igenom utan ett Apple-utvecklarkonto/-team.
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+    info:
+      path: InfoField.plist
+      properties:
+        CFBundleDisplayName: "PhotoFlow Fält"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown]
+        NSLocationWhenInUseUsageDescription: "PhotoFlow Fält använder din plats för att spara var varje fältanteckning gjordes, så Mac-appen kan sätta rätt position på bilderna."
+        NSMicrophoneUsageDescription: "PhotoFlow Fält använder mikrofonen för att spela in dikterade fältanteckningar."
+        NSSpeechRecognitionUsageDescription: "PhotoFlow Fält använder taligenkänning för att transkribera dikterade fältanteckningar till text."
+        # Fas 7: PhotoFlowField äger/exporterar den här typen — se motsvarande
+        # UTImportedTypeDeclarations-kommentar i PhotoFlow (macOS)-målet ovan.
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.photoflow.fieldnotes
+            UTTypeDescription: "PhotoFlow fältanteckningar"
+            UTTypeConformsTo: [public.json]
+            UTTypeTagSpecification:
+              public.filename-extension: [photoflownotes]
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: "PhotoFlow fältanteckningar"
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Owner
+            LSItemContentTypes: [com.photoflow.fieldnotes]
 
   PhotoFlowTests:
     type: bundle.unit-test
@@ -81,3 +152,9 @@ schemes:
     test:
       targets:
         - PhotoFlowTests
+  PhotoFlowField:
+    build:
+      targets:
+        PhotoFlowField: all
+    run:
+      config: Debug
