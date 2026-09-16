@@ -198,6 +198,20 @@ struct PipelineTab: View {
                         .foregroundColor(.orange)
                 }
 
+                Toggle("Generera AI-bildbeskrivningar (Foundation Models)", isOn: $settings.aiDescriptionsEnabled)
+
+                if settings.aiDescriptionsEnabled {
+                    Text(PhotoDescriptionService.isAvailable
+                         ? "Ett urval bilder (en per bracket-/singelgrupp) beskrivs på svenska av Apples on-device språkmodell (Foundation Models) — rum, kategori, särdrag och en kort bildtext. Skrivs till samma IPTC/XMP-fält som Vision-taggarna."
+                         : "Kräver Apple Intelligence med bildstöd (Foundation Models, macOS 27+) — inte tillgängligt på den här enheten just nu. Vision-taggning används som vanligt tills dess.")
+                        .font(.caption)
+                        .foregroundColor(PhotoDescriptionService.isAvailable ? .secondary : .orange)
+                } else {
+                    Text("Bara Apple Vision-taggning (rumstyp, interiör/exteriör) används — ingen bildtext genereras.")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+
                 Toggle("\"Föreslå gallring\" ska även föreslå nyttobilder", isOn: $settings.cullSuggestUtility)
 
                 Text(settings.cullSuggestUtility

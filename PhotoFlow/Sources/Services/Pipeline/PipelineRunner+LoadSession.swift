@@ -46,17 +46,26 @@ extension PipelineRunner {
             nefLookup[url.lastPathComponent] = url
         }
 
-        // Load persisted AI tags if available
+        // Load persisted AI tags if available (Fas 3b Vision-taggar, Fas 3d
+        // kompletterade med Foundation Models-bildbeskrivningar — se
+        // `AITagsStore`. ML-särdrag/bildtext, när de finns, slås redan in i
+        // `tags`/`description` här precis som i `PipelineRunner+AITagging.
+        // mergeMLDescription`, så en återinladdad session visar samma
+        // berikade taggar/beskrivning som precis efter en körning.)
         var loadedAITags: [String: VisionTaggingService.PhotoTags] = [:]
-        let aiTagsFile = outputDir.appendingPathComponent("ai_tags.json")
-        if let aiData = try? Data(contentsOf: aiTagsFile),
-           let aiJSON = try? JSONSerialization.jsonObject(with: aiData) as? [String: [String: Any]] {
-            for (filename, info) in aiJSON {
-                let tags = (info["tags"] as? [String]) ?? []
-                let desc = (info["description"] as? String) ?? ""
-                let cat = (info["category"] as? String) ?? ""
+        if let entries = AITagsStore.load(from: outputDir) {
+            for (filename, entry) in entries {
+                var tags = entry.tags
+                for feature in entry.mlFeatures ?? [] where !tags.contains(feature) {
+                    tags.append(feature)
+                }
+                if let room = entry.mlRoom, !tags.contains(room) {
+                    tags.insert(room, at: 0)
+                }
                 loadedAITags[filename] = VisionTaggingService.PhotoTags(
-                    tags: tags, description: desc, primaryCategory: cat,
+                    tags: tags,
+                    description: entry.mlCaption ?? entry.description,
+                    primaryCategory: entry.mlCategory ?? entry.category,
                     confidence: 1.0, rawLabels: []
                 )
             }

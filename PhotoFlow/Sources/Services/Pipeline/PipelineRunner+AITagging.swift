@@ -16,6 +16,8 @@ extension PipelineRunner {
 
         try await runVisionTagging(outputDir: outputDir, previewFiles: previewFiles)
         try await checkCancellationAndWaitIfPaused()
+        try await runPhotoDescriptions(outputDir: outputDir, previewFiles: previewFiles)
+        try await checkCancellationAndWaitIfPaused()
         try await runVisionQualityAnalysis(outputDir: outputDir, previewFiles: previewFiles)
 
         state.progress = 1.0
@@ -25,32 +27,24 @@ extension PipelineRunner {
     // MARK: - AI-taggning (Vision-klassificering + svensk taggmappning)
 
     private func runVisionTagging(outputDir: URL, previewFiles: [URL]) async throws {
-        let fm = FileManager.default
-
         // Check if ai_tags.json already exists with matching file count
-        let tagsJSON = outputDir.appendingPathComponent("ai_tags.json")
         let previewNames = Set(previewFiles.map { $0.deletingPathExtension().lastPathComponent })
 
-        if fm.fileExists(atPath: tagsJSON.path),
-           let existingData = try? Data(contentsOf: tagsJSON),
-           let existingJSON = try? JSONSerialization.jsonObject(with: existingData) as? [String: [String: Any]],
-           previewNames.isSubset(of: Set(existingJSON.keys)) {
+        if let existingEntries = AITagsStore.load(from: outputDir),
+           previewNames.isSubset(of: Set(existingEntries.keys)) {
             // Load from disk instead of re-running Vision
             aiTagResults = [:]
-            for (filename, info) in existingJSON {
-                let tags = (info["tags"] as? [String]) ?? []
-                let desc = (info["description"] as? String) ?? ""
-                let cat = (info["category"] as? String) ?? ""
+            for (filename, entry) in existingEntries {
                 aiTagResults[filename] = VisionTaggingService.PhotoTags(
-                    tags: tags, description: desc, primaryCategory: cat,
+                    tags: entry.tags, description: entry.description, primaryCategory: entry.category,
                     confidence: 1.0, rawLabels: []
                 )
             }
             logDecision(step: "ai_tagging", decision: "skipped", details: [
                 "reason": "json_exists",
-                "tagCount": "\(existingJSON.count)"
+                "tagCount": "\(existingEntries.count)"
             ])
-            state.appendStepLog(.aiTagging, "AI-taggar redan sparade (\(existingJSON.count) bilder) — hoppar over", type: .info)
+            state.appendStepLog(.aiTagging, "AI-taggar redan sparade (\(existingEntries.count) bilder) — hoppar over", type: .info)
             state.appendLog("AI-taggning redan klar — laddar fran ai_tags.json.", type: .info)
 
             // Log loaded tags
@@ -108,17 +102,148 @@ extension PipelineRunner {
         state.appendLog("AI-taggning klar: \(aiTagResults.count) bilder. Vanligaste: \(summary)", type: .success)
 
         // Save tags to JSON for persistence
-        var jsonDict: [String: [String: Any]] = [:]
+        var entries: [String: AITagsStore.Entry] = [:]
         for (filename, tags) in aiTagResults {
-            jsonDict[filename] = [
-                "tags": tags.tags,
-                "description": tags.description,
-                "category": tags.primaryCategory
-            ]
+            entries[filename] = AITagsStore.Entry(tags: tags.tags, description: tags.description, category: tags.primaryCategory)
         }
-        if let data = try? JSONSerialization.data(withJSONObject: jsonDict, options: .prettyPrinted) {
-            try? data.write(to: tagsJSON)
+        AITagsStore.save(entries, to: outputDir)
+    }
+
+    // MARK: - AI-bildbeskrivningar (Foundation Models, Fas 3d)
+
+    /// Genererar en svensk bildtext + särdrag för ett urval bilder (en per
+    /// bracket-/singelgrupp) via `PhotoDescriptionService`, efter den snabba
+    /// Vision-klassificeringen ovan. Berikar `aiTagResults` (samma dict som
+    /// `writeIPTCMetadata` läser via `photo.aiTags`/`photo.aiDescription`) i
+    /// stället för att kräva ändringar nedströms: Vision-taggarna + ML-
+    /// särdragen slås ihop till en enda taggmängd, och ML-bildtexten
+    /// ersätter Vision's mall-genererade beskrivning när den finns.
+    private func runPhotoDescriptions(outputDir: URL, previewFiles: [URL]) async throws {
+        guard AppSettings.shared.aiDescriptionsEnabled else {
+            state.appendStepLog(.aiTagging, "AI-bildbeskrivningar avstängda i inställningar — hoppar över", type: .info)
+            return
         }
+        guard PhotoDescriptionService.isAvailable else {
+            state.appendStepLog(.aiTagging, "Foundation Models bildbeskrivning inte tillgänglig på den här enheten (kräver Apple Intelligence, macOS 27+) — hoppar över, Vision-taggar används som tidigare", type: .info)
+            return
+        }
+        guard !previewFiles.isEmpty else { return }
+
+        var stored = AITagsStore.load(from: outputDir) ?? [:]
+
+        // Slå in redan sparade ML-beskrivningar (från en tidigare körning) i
+        // aiTagResults direkt, så att en omkörning av pipelinen (t.ex. efter
+        // att ha laddat en sparad session) fortfarande skriver den berikade
+        // taggmängden till IPTC utan att anropa modellen igen.
+        for (filename, entry) in stored where entry.mlCaption != nil {
+            mergeMLDescription(filename: filename, entry: entry)
+        }
+
+        let bracketGroupByFilename = loadBracketGroupIDs(outputDir: outputDir)
+
+        // En representativ bild per bracket-/singelgrupp (första filen i
+        // varje grupp, i preview-filnamnsordning) + alla ogrupperade bilder —
+        // håller modellanropen nere. Se FORBATTRINGAR.md för uppmätt tid/bild
+        // och varför ett fullständigt urval inte gjordes.
+        var seenGroups: Set<Int> = []
+        var sampleFiles: [URL] = []
+        for file in previewFiles {
+            let base = file.deletingPathExtension().lastPathComponent
+            if stored[base]?.mlCaption != nil { continue }
+            if let groupID = bracketGroupByFilename[base] {
+                if seenGroups.contains(groupID) { continue }
+                seenGroups.insert(groupID)
+            }
+            sampleFiles.append(file)
+        }
+
+        guard !sampleFiles.isEmpty else {
+            state.appendStepLog(.aiTagging, "Alla urvalsbilder har redan AI-bildbeskrivningar — hoppar över", type: .info)
+            return
+        }
+
+        state.appendStepLog(.aiTagging, "Genererar svenska bildbeskrivningar med Foundation Models för \(sampleFiles.count) av \(previewFiles.count) bilder (ett urval per bracket-/singelgrupp)...")
+        state.statusMessage = "AI-bildbeskrivningar: \(sampleFiles.count) bilder..."
+
+        let service = PhotoDescriptionService.shared
+        var durations: [TimeInterval] = []
+
+        for (index, file) in sampleFiles.enumerated() {
+            if await shouldAbort() {
+                state.appendStepLog(.aiTagging, "Avbrutet efter \(index)/\(sampleFiles.count) bildbeskrivningar", type: .warning)
+                markActiveStepsCancelled()
+                break
+            }
+
+            let base = file.deletingPathExtension().lastPathComponent
+            let start = Date()
+            let result = await service.describe(imageAt: file)
+            let elapsed = Date().timeIntervalSince(start)
+            durations.append(elapsed)
+
+            var entry = stored[base] ?? AITagsStore.Entry(
+                tags: aiTagResults[base]?.tags ?? [],
+                description: aiTagResults[base]?.description ?? "",
+                category: aiTagResults[base]?.primaryCategory ?? ""
+            )
+
+            if let result {
+                entry.mlRoom = result.room
+                entry.mlCategory = result.category
+                entry.mlFeatures = result.features
+                entry.mlCaption = result.caption
+                stored[base] = entry
+                mergeMLDescription(filename: base, entry: entry)
+                state.appendStepLog(.aiTagging, "[\(index + 1)/\(sampleFiles.count)] \(base): \(result.caption) (\(String(format: "%.1f", elapsed))s)")
+            } else {
+                stored[base] = entry
+                state.appendStepLog(.aiTagging, "[\(index + 1)/\(sampleFiles.count)] \(base): ingen ML-beskrivning (\(String(format: "%.1f", elapsed))s)", type: .warning)
+            }
+
+            state.updateStepProgress(.aiTagging, processed: index + 1, total: sampleFiles.count)
+            if (index + 1) % 5 == 0 || index + 1 == sampleFiles.count {
+                state.statusMessage = "AI-bildbeskrivningar: \(index + 1)/\(sampleFiles.count)..."
+            }
+        }
+
+        // Fyll på med oförändrade Vision-only-poster för bilder som inte
+        // ingick i urvalet, så ai_tags.json fortsätter täcka alla previews.
+        for file in previewFiles {
+            let base = file.deletingPathExtension().lastPathComponent
+            if stored[base] == nil, let tags = aiTagResults[base] {
+                stored[base] = AITagsStore.Entry(tags: tags.tags, description: tags.description, category: tags.primaryCategory)
+            }
+        }
+        AITagsStore.save(stored, to: outputDir)
+
+        if !durations.isEmpty {
+            let avg = durations.reduce(0, +) / Double(durations.count)
+            state.appendStepLog(.aiTagging, "AI-bildbeskrivningar klart: \(durations.count) bilder, snitt \(String(format: "%.2f", avg))s/bild", type: .success)
+            state.appendLog("AI-bildbeskrivningar klara (\(durations.count) bilder, snitt \(String(format: "%.2f", avg))s/bild).", type: .success)
+        }
+    }
+
+    /// Slår ihop Vision-taggarna för `filename` med Foundation Models
+    /// särdrag/rum (unika, rummet först) och ersätter beskrivningen med
+    /// ML-bildtexten, direkt i `aiTagResults` — samma dict `writeIPTCMetadata`
+    /// och `photo.aiTags`/`photo.aiDescription` (via `PipelineRunner+LoadSession`)
+    /// läser, så resten av pipelinen inte behöver veta varifrån taggarna kom.
+    private func mergeMLDescription(filename: String, entry: AITagsStore.Entry) {
+        guard let caption = entry.mlCaption else { return }
+        var mergedTags = aiTagResults[filename]?.tags ?? entry.tags
+        for feature in entry.mlFeatures ?? [] where !mergedTags.contains(feature) {
+            mergedTags.append(feature)
+        }
+        if let room = entry.mlRoom, !mergedTags.contains(room) {
+            mergedTags.insert(room, at: 0)
+        }
+        aiTagResults[filename] = VisionTaggingService.PhotoTags(
+            tags: mergedTags,
+            description: caption,
+            primaryCategory: entry.mlCategory ?? aiTagResults[filename]?.primaryCategory ?? entry.category,
+            confidence: aiTagResults[filename]?.confidence ?? 1.0,
+            rawLabels: aiTagResults[filename]?.rawLabels ?? []
+        )
     }
 
     // MARK: - Vision-kvalitetsanalys (estetik, horisont, skärpa, dubbletter)

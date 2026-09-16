@@ -271,3 +271,76 @@ actor VisionTaggingService {
         return parts.joined(separator: " ")
     }
 }
+
+/// Persistens för `ai_tags.json` (Fas 3b: Vision-taggar, Fas 3d: kompletterad
+/// med Foundation Models-bildbeskrivningar). `nonisolated enum` i samma stil
+/// som `PhotoQualityService` — ren I/O, ingen instansstatus.
+nonisolated enum AITagsStore {
+    /// v1 (Fas 3b) var en helt oversionerad, platt `[filnamn: {tags,
+    /// description, category}]`-dict (skriven/lästen direkt med
+    /// `JSONSerialization` i `PipelineRunner+AITagging.swift`/
+    /// `+LoadSession.swift`). v2 (Fas 3d) lägger till valfria `ml*`-fält för
+    /// Foundation Models bildbeskrivningar och slår in allt i ett versionerat
+    /// hölje — men läser fortfarande gamla v1-filer transparent (se `load`),
+    /// så befintliga sessioners `ai_tags.json` inte behöver räknas om.
+    static let currentVersion = 2
+
+    struct Entry: Codable, Sendable, Equatable {
+        var tags: [String]
+        var description: String
+        var category: String
+        /// Fas 3d: rum/motiv enligt Foundation Models (t.ex. "Kök", "Fasad").
+        var mlRoom: String?
+        /// Fas 3d: "Interiör"/"Exteriör" enligt Foundation Models.
+        var mlCategory: String?
+        /// Fas 3d: ytterligare särdrag Foundation Models såg i bilden.
+        var mlFeatures: [String]?
+        /// Fas 3d: kort svensk bildtext från Foundation Models — används som
+        /// `description` i IPTC/XMP när den finns (se
+        /// `PipelineRunner+AITagging.runPhotoDescriptions`).
+        var mlCaption: String?
+
+        init(tags: [String], description: String, category: String, mlRoom: String? = nil, mlCategory: String? = nil, mlFeatures: [String]? = nil, mlCaption: String? = nil) {
+            self.tags = tags
+            self.description = description
+            self.category = category
+            self.mlRoom = mlRoom
+            self.mlCategory = mlCategory
+            self.mlFeatures = mlFeatures
+            self.mlCaption = mlCaption
+        }
+    }
+
+    private struct PersistedFile: Codable {
+        var version: Int
+        var photos: [String: Entry]
+    }
+
+    /// v1-formen — bara till för att kunna läsa in gamla filer.
+    private struct LegacyEntry: Codable {
+        var tags: [String]
+        var description: String
+        var category: String
+    }
+
+    static func load(from outputDir: URL) -> [String: Entry]? {
+        let file = outputDir.appendingPathComponent("ai_tags.json")
+        guard let data = try? Data(contentsOf: file) else { return nil }
+        if let persisted = try? JSONDecoder().decode(PersistedFile.self, from: data) {
+            return persisted.photos
+        }
+        if let legacy = try? JSONDecoder().decode([String: LegacyEntry].self, from: data) {
+            return legacy.mapValues { Entry(tags: $0.tags, description: $0.description, category: $0.category) }
+        }
+        return nil
+    }
+
+    static func save(_ photos: [String: Entry], to outputDir: URL) {
+        let file = outputDir.appendingPathComponent("ai_tags.json")
+        let persisted = PersistedFile(version: currentVersion, photos: photos)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        guard let data = try? encoder.encode(persisted) else { return }
+        try? data.write(to: file)
+    }
+}

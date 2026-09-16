@@ -32,6 +32,16 @@ class AppSettings: ObservableObject {
     @AppStorage("calendarMatchEnabled") var calendarMatchEnabled: Bool = true
     @AppStorage("calendarName") var calendarName: String = "Exempelkalender"
     @AppStorage("aiTaggingEnabled") var aiTaggingEnabled: Bool = true
+    /// Fas 3d: genererar svenska bildbeskrivningar (rum, kategori, särdrag,
+    /// bildtext) med Apples on-device Foundation Models, för ett urval
+    /// bilder (en per bracket-/singelgrupp) efter Vision-taggningen. Default
+    /// `true`, men körs bara i praktiken när
+    /// `PhotoDescriptionService.isAvailable` är sant (kräver Apple
+    /// Intelligence + macOS 27, se den typens dokumentation) — annars
+    /// hoppas steget alltid över och Vision-taggarna används som tidigare,
+    /// så det finns inget läge där detta "tvingas på" på en enhet som inte
+    /// stödjer det.
+    @AppStorage("aiDescriptionsEnabled") var aiDescriptionsEnabled: Bool = true
     /// Styr om "Föreslå gallring" (`s` i gallringsvyn) även föreslår Vision's
     /// `isUtility`-flaggade bilder för avvisning, utöver dubbletter (som alltid
     /// föreslås). Av som standard (Fas 3c): kalibreringen i Fas 3b visade att
