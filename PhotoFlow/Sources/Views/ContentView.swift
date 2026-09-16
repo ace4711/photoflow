@@ -1,8 +1,14 @@
 import SwiftUI
+import Combine
 
+/// Fas 3e: `RunnerWrapper` (och därmed `WatchService`) ägs numera av
+/// `PhotoFlowApp` i stället för av `ContentView` — den behöver leva i
+/// app-scope så `MenuBarExtra`-menyn kan visa/styra samma bevaknings- och
+/// pipeline-state som huvudfönstret, även när fönstret är stängt.
+/// `ContentView` tar bara emot den och beter sig i övrigt exakt som förut.
 struct ContentView: View {
     @EnvironmentObject var pipeline: PipelineState
-    @StateObject private var runner: RunnerWrapper = RunnerWrapper()
+    @ObservedObject var runner: RunnerWrapper
 
     var body: some View {
         DashboardView(runner: runner)
@@ -18,6 +24,20 @@ class RunnerWrapper: ObservableObject {
     var runner: PipelineRunner?
     private var state: PipelineState?
     let watcher = WatchService()
+    private var watcherSubscription: AnyCancellable?
+
+    init() {
+        // Forward `watcher`'s own `@Published` changes (isWatching,
+        // newFilesFound, ...) as changes to THIS object — needed since Fas
+        // 3e's `MenuBarExtra` reads `runner.watcher.isWatching` to pick its
+        // icon/menu text, and SwiftUI only re-evaluates a Scene's body when
+        // an object it directly holds via a property wrapper (here: `runner`
+        // on `PhotoFlowApp`) announces a change, not when a nested child
+        // object (here: `watcher`) does so on its own.
+        watcherSubscription = watcher.objectWillChange.sink { [weak self] in
+            self?.objectWillChange.send()
+        }
+    }
 
     func setup(state: PipelineState) {
         self.state = state

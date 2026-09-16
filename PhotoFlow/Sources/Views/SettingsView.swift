@@ -1,4 +1,5 @@
 import SwiftUI
+import ServiceManagement
 
 struct SettingsView: View {
     @ObservedObject var settings = AppSettings.shared
@@ -272,6 +273,7 @@ struct PipelineTab: View {
 
 struct WatchTab: View {
     @ObservedObject var settings: AppSettings
+    @State private var launchAtLoginError: String?
 
     var body: some View {
         Form {
@@ -292,6 +294,23 @@ struct WatchTab: View {
                 Toggle("Starta pipeline automatiskt vid nya filer", isOn: $settings.autoStartPipeline)
             }
 
+            Section("Bakgrundsläge") {
+                Toggle("Visa i menyraden", isOn: $settings.showMenuBarExtra)
+                Text("Låter dig starta/stoppa bevakning och se status från menyraden, utan att huvudfönstret behöver vara öppet.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Toggle("Starta vid inloggning", isOn: Binding(
+                    get: { settings.launchAtLoginRequested },
+                    set: { setLaunchAtLogin($0) }
+                ))
+                if let launchAtLoginError {
+                    Text(launchAtLoginError)
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
+
             Section("Information") {
                 Text("I bevakningsläge övervakas inputmappen (via FSEvents, med ~2 sekunders debounce) och alla anslutna volymer (SD-kort) för nya NEF-filer. Filer väntas ut tills storleken slutat växa innan de räknas som färdigkopierade. När nya filer hittas kan pipelinen startas automatiskt.")
                     .font(.caption)
@@ -299,6 +318,42 @@ struct WatchTab: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear {
+            // Håll den lagrade önskan i synk med det faktiska systemläget —
+            // användaren kan ha stängt av det i Systeminställningar sedan sist.
+            settings.launchAtLoginRequested = LaunchAtLogin.isEnabled
+        }
+    }
+
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            try LaunchAtLogin.setEnabled(enabled)
+            settings.launchAtLoginRequested = enabled
+            launchAtLoginError = nil
+        } catch {
+            launchAtLoginError = "Kunde inte \(enabled ? "aktivera" : "avaktivera") inloggningsobjekt: \(error.localizedDescription)"
+            // Spegla det faktiska (oförändrade) systemläget, inte önskan.
+            settings.launchAtLoginRequested = LaunchAtLogin.isEnabled
+        }
+    }
+}
+
+/// Tunn wrapper runt `SMAppService.mainApp` (Fas 3e) — registrerar PhotoFlow
+/// som inloggningsobjekt. Signaturer verifierade mot SDK:n
+/// (`ServiceManagement.framework/Headers/SMAppService.h`,
+/// macOS 27-SDK): `SMAppService.mainApp` (klassegenskap, `NS_SWIFT_NAME`),
+/// `register()`/`unregister()` (kastande), `.status` (`SMAppServiceStatus`).
+enum LaunchAtLogin {
+    static var isEnabled: Bool {
+        SMAppService.mainApp.status == .enabled
+    }
+
+    static func setEnabled(_ enabled: Bool) throws {
+        if enabled {
+            try SMAppService.mainApp.register()
+        } else {
+            try SMAppService.mainApp.unregister()
+        }
     }
 }
 

@@ -15,6 +15,14 @@ class AppSettings: ObservableObject {
     /// som skyddsnät.
     @AppStorage("watchIntervalSeconds") var watchIntervalSeconds: Int = 60
     @AppStorage("autoStartPipeline") var autoStartPipeline: Bool = true
+    /// Fas 3e: en `MenuBarExtra` (ikon: kamera/öga beroende på om bevakning är
+    /// aktiv) så appen kan bevakas utan öppet huvudfönster. Default på.
+    @AppStorage("showMenuBarExtra") var showMenuBarExtra: Bool = true
+    /// Fas 3e: registrerar appen som inloggningsobjekt via `SMAppService`.
+    /// Denna flagga speglar bara ANVÄNDARENS önskan — `SettingsView` läser
+    /// `SMAppService.mainApp.status` för det faktiska systemläget (som kan
+    /// skilja sig, t.ex. om användaren stängde av det i Systeminställningar).
+    @AppStorage("launchAtLoginRequested") var launchAtLoginRequested: Bool = false
     @AppStorage("soundEnabled") var soundEnabled: Bool = true
     @AppStorage("speechEnabled") var speechEnabled: Bool = true
     /// Fas 3e: systemnotiser (Notification Center) — komplement till ljud/tal,
