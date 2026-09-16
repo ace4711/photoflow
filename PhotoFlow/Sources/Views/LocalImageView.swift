@@ -7,6 +7,7 @@ struct LocalImageView: View {
     var maxSize: CGFloat? = nil
 
     @State private var nsImage: NSImage?
+    @State private var loadTask: Task<Void, Never>?
 
     var body: some View {
         Group {
@@ -29,20 +30,30 @@ struct LocalImageView: View {
         }
         .onAppear { loadImage() }
         .onChange(of: url) { _, _ in loadImage() }
+        .onDisappear { loadTask?.cancel() }
     }
 
     private func loadImage() {
-        guard let url else {
-            nsImage = nil
+        loadTask?.cancel()
+        nsImage = nil
+
+        guard let url else { return }
+        let maxDim = maxSize ?? 2400
+
+        // Fas 5: filmremsan/förhandsvisningen hoppar ofta fram och tillbaka
+        // mellan samma bilder — kolla cachen innan vi avkodar från disk igen.
+        if let cached = ImageCache.shared.image(for: url, tier: .fullSize) {
+            nsImage = cached
             return
         }
 
-        DispatchQueue.global(qos: .userInitiated).async {
-            let maxDim = maxSize ?? 2400
-            let image = ImageLoader.downsampledImage(at: url, maxDimension: maxDim)
-            DispatchQueue.main.async {
-                self.nsImage = image
+        loadTask = Task {
+            let image = await ImageLoader.downsampledImageAsync(at: url, maxDimension: maxDim)
+            guard !Task.isCancelled else { return }
+            if let image {
+                ImageCache.shared.store(image, for: url, tier: .fullSize)
             }
+            nsImage = image
         }
     }
 }
@@ -58,6 +69,7 @@ struct ProgressiveImageView: View {
     @State private var previewImage: NSImage?
     @State private var fullResImage: NSImage?
     @State private var isHighRes: Bool = false
+    @State private var previewTask: Task<Void, Never>?
     @State private var loadTask: Task<Void, Never>?
 
     private var displayImage: NSImage? {
@@ -97,9 +109,9 @@ struct ProgressiveImageView: View {
                         .foregroundColor(.white)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(
-                            Capsule().fill(Color.accentColor.opacity(0.85))
-                        )
+                        // Fas 5: glaseffekt i stället för solid färgbakgrund,
+                        // i samma anda som Fas 3g:s övriga flytande badges.
+                        .glassEffect(.regular.tint(Color.accentColor.opacity(0.85)), in: Capsule())
                         .transition(.opacity.combined(with: .scale(scale: 0.8)))
                         Spacer()
                     }
@@ -110,11 +122,15 @@ struct ProgressiveImageView: View {
         .onAppear { startLoading() }
         .onChange(of: previewURL) { _, _ in startLoading() }
         .onChange(of: fullResURL) { _, _ in startLoading() }
-        .onDisappear { loadTask?.cancel() }
+        .onDisappear {
+            previewTask?.cancel()
+            loadTask?.cancel()
+        }
     }
 
     private func startLoading() {
         // Cancel any pending full-res load
+        previewTask?.cancel()
         loadTask?.cancel()
         fullResImage = nil
         isHighRes = false
@@ -125,10 +141,18 @@ struct ProgressiveImageView: View {
             return
         }
 
-        DispatchQueue.global(qos: .userInitiated).async {
-            let img = ImageLoader.downsampledImage(at: previewURL, maxDimension: 2400)
-            DispatchQueue.main.async {
-                self.previewImage = img
+        // Fas 5: cache-uppslag innan vi avkodar från disk igen.
+        if let cached = ImageCache.shared.image(for: previewURL, tier: .fullSize) {
+            previewImage = cached
+        } else {
+            previewImage = nil
+            previewTask = Task {
+                let img = await ImageLoader.downsampledImageAsync(at: previewURL, maxDimension: 2400)
+                guard !Task.isCancelled else { return }
+                if let img {
+                    ImageCache.shared.store(img, for: previewURL, tier: .fullSize)
+                }
+                previewImage = img
             }
         }
 
@@ -141,18 +165,27 @@ struct ProgressiveImageView: View {
 
         guard let rawURL else { return }
 
+        // Fas 5: en tidigare RAW-rendering av exakt denna fil (t.ex. vid
+        // återbesök efter att ha bläddrat vidare och tillbaka) hämtas direkt
+        // ur cachen i stället för att köras om (RAW-rendering är den
+        // dyraste operationen i hela vyn).
+        if let cachedRaw = ImageCache.shared.image(for: rawURL, tier: .fullSize) {
+            fullResImage = cachedRaw
+            isHighRes = true
+            return
+        }
+
         loadTask = Task {
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled else { return }
 
             let img = await ImageLoader.renderRAW(at: rawURL, maxDimension: 4800)
             guard !Task.isCancelled, let img else { return }
+            ImageCache.shared.store(img, for: rawURL, tier: .fullSize)
 
-            await MainActor.run {
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    self.fullResImage = img
-                    self.isHighRes = true
-                }
+            withAnimation(.easeInOut(duration: 0.25)) {
+                self.fullResImage = img
+                self.isHighRes = true
             }
         }
     }
@@ -181,6 +214,18 @@ nonisolated enum ImageLoader {
         }
 
         return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+    }
+
+    /// Async wrapper around `downsampledImage`, so views can use `Task`
+    /// (cancellable, structured) instead of dispatching to
+    /// `DispatchQueue.global` themselves (Fas 5) — the actual decode still
+    /// runs off the main thread here, same as before.
+    static func downsampledImageAsync(at url: URL, maxDimension: CGFloat) async -> NSImage? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: downsampledImage(at: url, maxDimension: maxDimension))
+            }
+        }
     }
 
     /// Render a RAW file (NEF/DNG) using Core Image's RAW processing pipeline.
@@ -250,6 +295,7 @@ struct LocalThumbnailView: View {
     let url: URL?
 
     @State private var nsImage: NSImage?
+    @State private var loadTask: Task<Void, Never>?
 
     var body: some View {
         Group {
@@ -263,13 +309,28 @@ struct LocalThumbnailView: View {
         }
         .onAppear { loadThumb() }
         .onChange(of: url) { _, _ in loadThumb() }
+        .onDisappear { loadTask?.cancel() }
     }
 
     private func loadThumb() {
-        guard let url else { return }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let img = ImageLoader.downsampledImage(at: url, maxDimension: 200)
-            DispatchQueue.main.async { self.nsImage = img }
+        loadTask?.cancel()
+        guard let url else {
+            nsImage = nil
+            return
+        }
+
+        if let cached = ImageCache.shared.image(for: url, tier: .thumbnail) {
+            nsImage = cached
+            return
+        }
+
+        loadTask = Task {
+            let img = await ImageLoader.downsampledImageAsync(at: url, maxDimension: 200)
+            guard !Task.isCancelled else { return }
+            if let img {
+                ImageCache.shared.store(img, for: url, tier: .thumbnail)
+            }
+            nsImage = img
         }
     }
 }

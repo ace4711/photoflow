@@ -164,14 +164,16 @@ struct PreviewCullView: View {
             if let photo = currentPhoto, notesManager.noteFor(photoId: photo.id) != nil {
                 showNotes = true
             }
+            prefetchNeighbors(around: pipeline.currentCullIndex)
         }
-        .onChange(of: pipeline.currentCullIndex) { _, _ in
+        .onChange(of: pipeline.currentCullIndex) { _, newIndex in
             // Auto-show notes if photo has a note, auto-hide if not (and not recording)
             if let photo = currentPhoto, notesManager.noteFor(photoId: photo.id) != nil {
                 showNotes = true
             } else if !dictation.isRecording {
                 showNotes = false
             }
+            prefetchNeighbors(around: newIndex)
         }
         .overlay(alignment: .bottom) {
             CountdownOverlay()
@@ -861,6 +863,31 @@ struct PreviewCullView: View {
         // — bilden bakom kan vara ljus, och vit text måste vara läsbar oavsett
         // vad som råkar synas igenom glaset.
         .glassEffect(.regular.tint(.black.opacity(0.35)), in: Rectangle())
+    }
+
+    // MARK: - Förhämtning (Fas 5)
+
+    /// Hur många grannar (åt varje håll) i `filteredIndexedPhotos`-ordningen
+    /// som förhämtas till `ImageCache` runt ett givet index. Täcker både
+    /// huvudvyns förhandsbild och filmremsans miniatyr för samma bilder —
+    /// SwiftUI har inget dedikerat lazy-förhämtnings-API för
+    /// `ScrollView`/`LazyHStack` i den här SDK:n (verifierat: bara
+    /// `onScrollTargetVisibilityChange`/`scrollPosition` finns, inget som
+    /// motsvarar UIKit/AppKit-cellprefetching), så det här är egen,
+    /// indexbaserad logik i stället.
+    private static let prefetchRadius = 3
+
+    private func prefetchNeighbors(around index: Int) {
+        let list = filteredIndexedPhotos
+        guard let pos = list.firstIndex(where: { $0.index == index }) else { return }
+
+        for offset in 1...Self.prefetchRadius {
+            for neighborPos in [pos - offset, pos + offset] where list.indices.contains(neighborPos) {
+                let photo = list[neighborPos].photo
+                ImageCache.shared.prefetch(url: photo.previewURL, tier: .thumbnail, maxDimension: 200)
+                ImageCache.shared.prefetch(url: photo.previewURL, tier: .fullSize, maxDimension: 2400)
+            }
+        }
     }
 
     // MARK: - Actions

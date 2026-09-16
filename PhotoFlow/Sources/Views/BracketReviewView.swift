@@ -76,7 +76,9 @@ struct BracketReviewView: View {
                 outputDir: pipeline.outputDirectory,
                 address: pipeline.matchedAddress
             )
+            prefetchCurrentGroup()
         }
+        .onChange(of: selectedGroupIndex) { _, _ in prefetchCurrentGroup() }
         .focusable()
         .focused($isFocused)
         .onAppear { isFocused = true }
@@ -456,6 +458,19 @@ struct BracketReviewView: View {
         if photo.rejected { return .red }
         if isSelected { return .accentColor }
         return .clear
+    }
+
+    // MARK: - Förhämtning (Fas 5)
+
+    /// En bracket-/singelgrupp har typiskt bara 1–5 bilder, så hela gruppens
+    /// miniatyrer + förhandsbilder förhämtas till `ImageCache` så fort den
+    /// väljs — billigt (ingen kostnad om gruppen redan är i cachen) och
+    /// täcker både klick i gruppslistan och pil upp/ner-navigering.
+    private func prefetchCurrentGroup() {
+        for photo in currentGroupPhotos {
+            ImageCache.shared.prefetch(url: photo.previewURL, tier: .thumbnail, maxDimension: 200)
+            ImageCache.shared.prefetch(url: photo.previewURL, tier: .fullSize, maxDimension: 2400)
+        }
     }
 
     // MARK: - Actions
