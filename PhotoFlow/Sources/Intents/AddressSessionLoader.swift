@@ -30,7 +30,13 @@ enum AddressSessionLoader {
 
     static func loadCurrentSessions() -> [AddressSessionEntity] {
         guard let outputDir = AppSettings.shared.outputDirectory else { return [] }
+        return loadSessions(outputDir: outputDir)
+    }
 
+    /// Kärnlogiken, separerad från `AppSettings.shared` så den går att testa
+    /// mot en tillfällig mapp (se `AddressSessionLoaderTests`) utan att röra
+    /// den riktiga konfigurerade outputmappen.
+    static func loadSessions(outputDir: URL) -> [AddressSessionEntity] {
         let matches = loadCalendarMatches(outputDir: outputDir)
         guard !matches.isEmpty else { return [] }
 

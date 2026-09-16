@@ -2260,3 +2260,245 @@ ljust läge.
   gamla `chevron.right`-pilen mellan dem (verktygsfältets egen gruppering
   gör pilen överflödig) — en liten visuell ändring, inte en
   funktionsförlust.
+
+## Fas 3f – App Intents, Genvägar och Spotlight
+
+Utfört autonomt på branchen `forbattringar` medan användaren sov. Bakgrund:
+appbygget varnade sedan tidigare "Metadata extraction skipped, no
+AppIntents.framework dependency found" — PhotoFlow hade ingen App
+Intents-integration alls. Alla nya API:er (`AppIntents`-modulen: `AppIntent`,
+`AppEntity`, `IndexedEntity`, `EntityQuery`/`EnumerableEntityQuery`,
+`AppShortcutsProvider`, `IntentFile`, `CSSearchableIndex.indexAppEntities`)
+verifierades mot **`AppIntents.swiftinterface`** i den installerade
+macOS 27-SDK:n (`arm64e-apple-macos.swiftinterface`) innan de användes —
+inga gissade signaturer.
+
+### 1. Fyra grundläggande intents (`PhotoFlow/Sources/Intents/`)
+
+- **`StartPipelineIntent`** ("Bearbeta bilder med PhotoFlow"):
+  `@Parameter var folder: IntentFile?` med `supportedContentTypes: [.folder]`
+  (en mappväljare i Genvägar/Siri, inte en filväljare) — standard när inget
+  valts är `AppSettings.shared.inputDirectory`. `openAppWhenRun = true`
+  (pipelinen körs i huvudappens process — det finns ingen separat App
+  Intents-extension i det här projektet, se punkt 4).
+- **`ToggleWatchIntent`** ("Starta/stoppa PhotoFlow-bevakning"): växlar
+  `RunnerWrapper.watcher.isWatching`. Ingen `openAppWhenRun` (default
+  `false`) — om appen redan kör (huvudfönster ELLER bara menyradsläge från
+  Fas 3e) växlas bevakningen utan att tvinga fram/aktivera något fönster.
+- **`SessionStatusIntent`** ("Status för PhotoFlow"): `IntentResult &
+  ProvidesDialog` med svensk dialog — aktuellt steg (`PipelineState
+  .currentStep.title`), antal bilder, antal ogranskade
+  (`!accepted && !rejected`) och senaste matchade adress
+  (`matchedAddress`).
+- **`ShowReviewIntent`** ("Granska bilder i PhotoFlow"): återanvänder EXAKT
+  samma mekanism som notisknappen "Granska nu" från Fas 3e — sätter
+  `PipelineState.reviewRequestedFromNotification = true`, som
+  `DashboardView` redan observerar för att växla till granskningsvyn. Ingen
+  ny koppling till vyerna behövdes.
+
+Alla fyra svarar med en tydlig svensk dialog ("PhotoFlow är inte igång.")
+i stället för att krascha eller tyst misslyckas om appen inte kör (se
+punkt 3).
+
+### 2. `AddressSessionEntity` + `FindSessionsIntent` + Spotlight-indexering
+
+`AddressSessionEntity` (adress, bokningstitel, datum, antal bilder, antal
+godkända) läses av `AddressSessionLoader` ur den **aktuella outputmappens**
+`calendar_matches.json` (adresser + datumintervall), `bracket_groups.json`
+(per-foto capture-tid, för att räkna antal bilder per adressintervall) och
+`cull_decisions.json` (för att räkna godkända — samma `"\(groupId)_
+\(filename)"`-nyckelformat som `PipelineRunner+LoadSession` redan bygger
+`photoId` med).
+
+**Viktig begränsning, medvetet vald**: PhotoFlow har inget begrepp om
+sessionshistorik — en outputmapp motsvarar en körning, och en ny körning i
+SAMMA mapp skriver över `calendar_matches.json`. `AddressSessionLoader` kan
+därför bara återspegla SENASTE sessionen i den mapp som just nu är
+konfigurerad (`AppSettings.shared.outputDirectory`), inte flera veckors
+historik över olika mappar. En riktig sessionshistorik (t.ex. en lista över
+tidigare outputmappar med tidsstämpel) fanns inte i någon tidigare fas och
+byggdes inte i den här — bedömdes vara för stor en förändring för att göra
+"i förbifarten" i en fas om App Intents. Dokumenterat under "Kvarstående"
+nedan.
+
+`AddressSessionQuery` konformar till `EnumerableEntityQuery` (så både
+`FindSessionsIntent` och Spotlight-indexeringen kan lista ALLA sessioner,
+inte bara slå upp kända id:n) och `AddressSessionEntity` konformar till
+`IndexedEntity` (macOS 15+, verifierat i SDK:n — appens deployment target
+är macOS 26 så det är alltid tillgängligt). `AddressSessionQuery
+.allEntities()` anropar `CSSearchableIndex.default()
+.indexAppEntities(sessions)` (best-effort, `try?` — ett indexeringsfel ska
+aldrig hindra att sessionerna ändå returneras) varje gång den körs, med
+standardimplementationen av `attributeSet` (titel/undertitel från
+`displayRepresentation`) — ingen handbyggd `CSSearchableItemAttributeSet`,
+bedömdes vara "enkelt nog" enligt uppdragets kriterium utan att behöva bygga
+en egen attributmappning.
+
+### 3. `AppServices` — koppling till appens delade tillstånd
+
+Ny `@MainActor final class AppServices` (singleton) med `weak var pipeline:
+PipelineState?`/`weak var runner: RunnerWrapper?`. `PhotoFlowApp
+.startupChecks()` registrerar sig där (`AppServices.shared.register
+(pipeline:runner:)`) — INTE direkt i `body` som ett bart statement: ett
+void-returnerande funktionsanrop mitt i `WindowGroup`s `@SceneBuilder`
+gav `error: type '()' cannot conform to 'Scene'` (SceneBuilder tolkar varje
+statement som en komponent, till skillnad från vanlig kod). `.task`-blocket
+körs gott om i tid — inget intent förväntas köras innan fönstret ens hunnit
+visas en första gång.
+
+Referenserna är `weak` av två skäl: dels äger `PhotoFlowApp` originalen
+redan via `@StateObject`, dels ska ett intent som råkar köras efter att
+appen avslutats aldrig kunna hålla appens objekt vid liv i onödan. Om appen
+inte kör alls (kallt anrop via Spotlight/Siri) är båda `nil` — intents utan
+`openAppWhenRun` hanterar det med en tydlig dialog i stället för att krascha.
+
+### 4. `PhotoFlowShortcuts` (`AppShortcutsProvider`)
+
+Svenska fraser för alla fem intents (`\(.applicationName)`-token ersätts av
+systemet med appens visningsnamn, "PhotoFlow") — t.ex. "Bearbeta bilder med
+PhotoFlow", "Starta PhotoFlow-bevakning", "Status för PhotoFlow", "Granska
+bilder i PhotoFlow", "Hitta sessioner i PhotoFlow". Ingen egen konfiguration
+behövs — `AppShortcutsProvider` gör dem sökbara i Genvägar/Spotlight/Siri
+automatiskt.
+
+### 5. `project.yml`: länkad `AppIntents.framework`-dependency
+
+Lade till `dependencies: [{sdk: AppIntents.framework}]` på `PhotoFlow`-
+targetet. Utan en riktig LÄNKNINGS-dependency (bara `import AppIntents` i
+koden räcker inte) hoppar Xcodes build-system över hela
+App Intents-metadataextraktionen — det var precis det den ursprungliga
+varningen ("Metadata extraction skipped, no AppIntents.framework dependency
+found") beskrev. `xcodegen generate` kördes och `.xcodeproj` committades.
+
+**Verifierat efter ändringen**: `xcodebuild build`-loggen visar nu ett
+`ExtractAppIntentsMetadata`-byggsteg (`appintentsmetadataprocessor`) i
+stället för att hoppa över det, och:
+
+```
+ls PhotoFlow.app/Contents/Resources | grep -i appintents
+# Metadata.appintents
+
+ls PhotoFlow.app/Contents/Resources/Metadata.appintents
+# version.json  extract.actionsdata
+```
+
+`extract.actionsdata` (JSON) verifierades innehålla alla fem intents under
+`"actions"` (`StartPipelineIntent`, `ToggleWatchIntent`,
+`SessionStatusIntent`, `ShowReviewIntent`, `FindSessionsIntent`), entiteten
+under `"entities"` (`AddressSessionEntity`) och frågan under `"queries"`
+(`AddressSessionQuery`), samt de svenska frastemplaten (`"Bearbeta bilder
+med ${applicationName}"` osv.) under `"autoShortcuts"`.
+
+### 6. Swift 6-fälla: `static var` på `AppIntent`/`AppEntity`-krav under `SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor`
+
+Alla nya typer gav till en början byggfel av typen:
+
+```
+error: static property 'title' is not concurrency-safe because it is
+nonisolated global shared mutable state [#MutableGlobalVariable]
+```
+
+för varje `static var title/description/typeDisplayRepresentation
+/defaultQuery/openAppWhenRun` som implementerade ett `AppIntent`/
+`AppEntity`-protokollkrav. Orsak: `AppIntents`-protokollens statiska krav
+är `nonisolated` (de måste vara läsbara från vilken körningskontext som
+helst, inte bara huvudtråden) — men det här projektets `SWIFT_DEFAULT_ACTOR
+_ISOLATION: MainActor`-inställning (Fas 2b) gör alla egna typer
+huvudtråd-isolerade som standard om inget annat anges. En MUTERBAR
+(`var`) statisk property som "råkar" hamna på huvudtråden kan då inte bevisa
+att den är säker att läsa från ett icke-isolerat sammanhang. **Fix**: byt
+`static var` → `static let` överallt (alla protokollkraven är `{ get }`,
+aldrig `{ get set }`) — en immutabel konstant behöver ingen
+isolerings-bevisning. Ingen funktionell skillnad, bara en syntaxändring.
+Läxa för framtida App Intents-kod i det här projektet.
+
+### 7. Verifiering utan GUI
+
+Kunde INTE klicka i Genvägar-appen eller Spotlight (ingen GUI-interaktion
+möjlig den här autonoma körningen). Testat och verifierat via
+kommandorad/loggar i stället, enligt uppdragets instruktion — pipelinen och
+bevakningen startades ALDRIG (bekräftat: `DashboardView.toggleWatchMode`/
+`startPipeline` är de enda ställena som anropar `startWatchingForSDCards`/
+kör pipelinen, och ingendera nås bara av att appen startar):
+
+- **Bygg**: `Metadata.appintents/extract.actionsdata` innehåller allt
+  förväntat (se punkt 5).
+- **`open -n PhotoFlow.app` + `pkill -x PhotoFlow`**: appen startades en
+  gång och avslutades igen utan att röra några användarmappar. `log show
+  --predicate 'eventMessage contains "photoflow"'` visar att
+  `com.apple.appintents:IndexCoordinator`/`linkd` faktiskt reagerar på
+  appstarten (`"Looking for bundle: com.photoflow.app"`,
+  `"Requesting new set donation <AppIntentsIndexedEntity
+  :sourceIdentifier=com.photoflow.app...>"`), dvs. systemets
+  AppIntents-indexering känner av appen.
+- **`linkd` avvisar klienten**: samma logg visar `"Failed to generate
+  bundleIdentity"` / `"Rejecting invalid client due to
+  requiresValidatedBundle"` när appen försöker registrera sig för
+  auto-shortcuts-donation. Det här är EN KÄND begränsning för en
+  ad-hoc-signerad utvecklarbuild som körs direkt från en scratch-
+  `DerivedData`-mapp (inte installerad i `/Applications`,
+  `CODE_SIGN_IDENTITY: "-"` i `project.yml`) — `requiresValidatedBundle`
+  kräver en riktigt signerad/registrerad app. Med andra ord: metadatan
+  extraheras och paketeras korrekt (bekräftat), men Siri/Spotlight-
+  DONATIONEN (att fraserna faktiskt dyker upp som körbara förslag) kunde
+  INTE verifieras end-to-end i den här miljön.
+- **`shortcuts list`**: visar bara redan sparade genvägar i Genvägar-appen,
+  inte `AppShortcutsProvider`s automatiskt donerade "App Shortcuts" (de är
+  en annan mekanism — indexerade av Siri/Spotlight, inte listade av CLI:t).
+  Ingen PhotoFlow-post förväntades här och ingen syntes.
+- **`pluginkit -m`**: ingen PhotoFlow-post, som förväntat — appen har ingen
+  separat App Intents-EXTENSION (`AppIntentsExtension`), alla intents körs
+  hostade i huvudapp-processen (samma mönster som `openAppWhenRun`-
+  kommentarerna i koden beskriver), vilket inte kräver en egen
+  `pluginkit`-registrering.
+
+### Manuell testning användaren bör göra
+
+1. **Genvägar-appen**: öppna Genvägar → Appar → PhotoFlow (efter att ha
+   byggt/kört en riktigt signerad version, inte en ad-hoc-build) och
+   bekräfta att alla fem App Shortcuts syns med rätt svenska titlar/ikoner.
+2. **Siri/Spotlight**: säg eller skriv en av fraserna ("Bearbeta bilder med
+   PhotoFlow", "Status för PhotoFlow" osv.) och bekräfta att rätt intent
+   körs och ger rätt svensk dialog.
+3. **`StartPipelineIntent` med mappval**: kör genvägen med en riktig NEF-
+   mapp vald i mappväljaren och bekräfta att PhotoFlow öppnas och pipelinen
+   startar mot RÄTT mapp (inte bara standardmappen).
+4. **`ToggleWatchIntent` i bakgrunden**: med PhotoFlow körande bara i
+   menyradsläge (huvudfönster stängt), kör genvägen och bekräfta att
+   bevakningen växlar utan att huvudfönstret plötsligt öppnas.
+5. **`FindSessionsIntent`/Spotlight**: kör en riktig session med
+   kalendermatchning, sök sedan på adressen i Spotlight och bekräfta att
+   sessionen dyker upp (kräver en korrekt signerad/registrerad build, se
+   punkt 7 ovan).
+
+### Kvarstående / inte gjort i Fas 3f
+
+- **Ingen riktig sessionshistorik** — `AddressSessionEntity` ser bara den
+  SENASTE körningen i den just nu konfigurerade outputmappen (se punkt 2).
+  Att bygga en riktig historik (t.ex. en lista över tidigare körningars
+  outputmappar, med tidsstämpel) är en större förändring som inte fanns i
+  någon tidigare fas och bedömdes ligga utanför den här fasens scope.
+- **End-to-end Siri/Spotlight-donation kunde inte verifieras** i den här
+  miljön (ad-hoc-signerad build, `requiresValidatedBundle` avvisar den, se
+  punkt 7) — bara att metadatan extraheras och paketeras korrekt.
+  Användaren bör verifiera med en riktigt signerad build (punkt 1–2 i
+  "Manuell testning").
+- Ingen ny inställning för att stänga av App Intents/Genvägar — bedömdes
+  inte nödvändigt: intents ändrar bara beteende när användaren AKTIVT kör
+  dem (via Genvägar/Siri/Spotlight), till skillnad från t.ex. bakgrunds-
+  bevakning eller notiser som kör kontinuerligt/automatiskt. De omfattas
+  därför inte av regeln om avstängningsbara pipeline-beteenden.
+- `ToggleWatchIntent`/`SessionStatusIntent`/`ShowReviewIntent` har inga
+  egna enhetstester (de är tunna wrappers runt redan testad logik i
+  `RunnerWrapper`/`PipelineState` — se Fas 3e:s tester för den underliggande
+  bevaknings-/state-logiken, och `perform()` kräver en riktig `AppIntent`-
+  körningskontext som inte går att skapa i ett enhetstest). Kärnlogiken i
+  `AddressSessionLoader` (den delen som FAKTISKT kan testas utan GUI/utan
+  App Intents-runtimen) fick egna tester i stället:
+  `AddressSessionLoaderTests.swift` — en `loadSessions(outputDir:)`-variant
+  bröts ut från `loadCurrentSessions()` (som fortfarande läser
+  `AppSettings.shared.outputDirectory`) just för att göra det möjligt, med
+  syntetiska `calendar_matches.json`/`bracket_groups.json`/
+  `cull_decisions.json`-filer i en tillfällig mapp (tom outputmapp, en
+  adress med bilder både inom och utanför datumintervallet, flera adresser,
+  och en trasig post utan `range_start`/`range_end`).
