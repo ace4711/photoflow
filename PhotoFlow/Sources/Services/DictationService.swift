@@ -81,8 +81,11 @@ class DictationService: ObservableObject {
     private var finalizedText = ""
     private var volatileText = ""
 
-    /// Stop words that end dictation (case-insensitive)
-    static let stopWords: Set<String> = ["stopp", "stop", "stopp.", "stop."]
+    /// Stop words that end dictation (case-insensitive). Fas 7: den faktiska
+    /// listan bor nu i `DictationTextAccumulator` (Sources/Shared), delad med
+    /// iOS-appens fält-diktering — kvar här som en alias så befintliga
+    /// anropsställen/tester inte behövde ändras.
+    static let stopWords: Set<String> = DictationTextAccumulator.stopWords
 
     var currentLanguage: PhotoNote.NoteLanguage = .swedish
 
@@ -353,20 +356,14 @@ class DictationService: ObservableObject {
     static func accumulate(
         finalizedText: String, volatileText: String, newText: String, isFinal: Bool
     ) -> (finalizedText: String, volatileText: String) {
-        if isFinal {
-            return (finalizedText + newText, "")
-        } else {
-            return (finalizedText, newText)
-        }
+        DictationTextAccumulator.accumulate(finalizedText: finalizedText, volatileText: volatileText, newText: newText, isFinal: isFinal)
     }
 
     /// Om `combined`s sista mellanslagsseparerade ord (skiftlägesokänsligt)
     /// är ett stoppord: returnerar texten med det ordet borttaget. `nil` om
     /// inget stoppord hittades.
     static func stripTrailingStopWord(from combined: String, stopWords: Set<String>) -> String? {
-        let words = combined.split(separator: " ")
-        guard let last = words.last, stopWords.contains(last.lowercased()) else { return nil }
-        return words.dropLast().joined(separator: " ")
+        DictationTextAccumulator.stripTrailingStopWord(from: combined, stopWords: stopWords)
     }
 
     func stopRecording() {

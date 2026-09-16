@@ -29,6 +29,7 @@
 		1E93AFB7726AF98B211ECFF2 /* StepStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 522CA5C3C17A8E64E615BF3F /* StepStatusTests.swift */; };
 		220473BEF62812870BB7435C /* ShowReviewIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A0A7827D86EA12C4E5D679B /* ShowReviewIntent.swift */; };
 		2426E63F1EF24FE42444257F /* PipelineRunner+Metadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18FEAA9B84EC62BC44C9AEB6 /* PipelineRunner+Metadata.swift */; };
+		24587874136958E911813E03 /* DictationTextAccumulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFA534DEB245581E81F83693 /* DictationTextAccumulator.swift */; };
 		245D25D0DDBB6D8812A35D62 /* SessionHistoryStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEDBF202BE7BEA2DE2BA5F38 /* SessionHistoryStoreTests.swift */; };
 		27554CDFAA48F1DB3AD0F72F /* RAWRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8873C4CE06787497464EE6E6 /* RAWRenderer.swift */; };
 		2B4826D74AF5BBF694349A19 /* DictationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8C117DD311BF15484E64F9F /* DictationServiceTests.swift */; };
@@ -256,6 +257,7 @@
 		FE736FC6AE961F0303A83433 /* StepStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StepStatus.swift; sourceTree = "<group>"; };
 		FE92644971AE2162D199B866 /* ImageCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCacheTests.swift; sourceTree = "<group>"; };
 		FEDBF202BE7BEA2DE2BA5F38 /* SessionHistoryStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionHistoryStoreTests.swift; sourceTree = "<group>"; };
+		FFA534DEB245581E81F83693 /* DictationTextAccumulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationTextAccumulator.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -341,6 +343,7 @@
 		5CC7D5AA4BEDCCEEBBE3ECB0 /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				FFA534DEB245581E81F83693 /* DictationTextAccumulator.swift */,
 				29E248F241C6E12D1E3044CA /* FieldNote.swift */,
 				6C9C601A9BD9772BFB405246 /* FieldNoteBundle.swift */,
 				881FEA0DBA1629EB3BC2AA74 /* FieldNoteMatcher.swift */,
@@ -670,6 +673,7 @@
 				73EEFBCCB85532865E3F63E9 /* DependencyManager.swift in Sources */,
 				7187E7AB4A00672596608C12 /* DictationPanelView.swift in Sources */,
 				5286C11972938728901F1FE8 /* DictationService.swift in Sources */,
+				24587874136958E911813E03 /* DictationTextAccumulator.swift in Sources */,
 				B188A57475FF936519295B32 /* ExifReader.swift in Sources */,
 				7CE65CE8AF5D4E4EA3C7C70B /* ExposureFusion.swift in Sources */,
 				D99D933C100CB517176FD63E /* FieldNote.swift in Sources */,
