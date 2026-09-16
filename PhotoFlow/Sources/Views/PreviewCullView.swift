@@ -16,6 +16,63 @@ struct PreviewCullView: View {
     /// förstöra data.
     @State private var showDeleteConfirmation: Bool = false
 
+    // MARK: - Filter/sortering (Fas 4, kvarstående från Fas 3b)
+
+    private enum CullFilter: CaseIterable {
+        case all, unreviewed, rejected
+        var label: String {
+            switch self {
+            case .all: return "Alla"
+            case .unreviewed: return "Ogranskade"
+            case .rejected: return "Avvisade"
+            }
+        }
+    }
+
+    private enum CullSortOrder: CaseIterable {
+        case filename, quality
+        var label: String {
+            switch self {
+            case .filename: return "Filnamn"
+            case .quality: return "Kvalitet"
+            }
+        }
+    }
+
+    @State private var cullFilter: CullFilter = .all
+    @State private var cullSortOrder: CullSortOrder = .filename
+
+    /// `pipeline.allPhotos` filtered by `cullFilter` and sorted by
+    /// `cullSortOrder`, paired with each photo's real index into `allPhotos`
+    /// (which is what `pipeline.currentCullIndex`/`setDecision` actually
+    /// address) — the filmstrip and `navigate(_:)` iterate this instead of
+    /// `allPhotos` directly, so filtering/sorting never touches decisions,
+    /// only what's shown and in what order.
+    private var filteredIndexedPhotos: [(index: Int, photo: PhotoItem)] {
+        let indexed = pipeline.allPhotos.enumerated().map { (index: $0.offset, photo: $0.element) }
+        let filtered = indexed.filter { entry in
+            switch cullFilter {
+            case .all: return true
+            case .unreviewed: return !entry.photo.accepted && !entry.photo.rejected
+            case .rejected: return entry.photo.rejected
+            }
+        }
+        switch cullSortOrder {
+        case .filename:
+            return filtered.sorted { $0.photo.filename.localizedStandardCompare($1.photo.filename) == .orderedAscending }
+        case .quality:
+            // Highest quality first; photos with no score (nil) sort last regardless of side.
+            return filtered.sorted { lhs, rhs in
+                switch (lhs.photo.qualityScore, rhs.photo.qualityScore) {
+                case let (l?, r?): return l > r
+                case (nil, nil): return false
+                case (nil, _): return false
+                case (_, nil): return true
+                }
+            }
+        }
+    }
+
     // MARK: - Ångra (Fas 4: generell ångra-stack, tidigare bara "Föreslå gallring")
 
     /// One undoable action: the decisions its affected photo(s) had
@@ -293,27 +350,65 @@ struct PreviewCullView: View {
     // MARK: - Header (normal mode)
 
     private var headerBar: some View {
-        HStack(spacing: 12) {
-            Text("Gallring")
-                .font(.system(size: 18, weight: .bold, design: .rounded))
-
-            AddressBanner()
-
-            Spacer()
-
+        VStack(spacing: 8) {
             HStack(spacing: 12) {
-                StatPill(icon: "checkmark.circle.fill", count: acceptedCount, color: .green)
-                StatPill(icon: "xmark.circle.fill", count: rejectedCount, color: .red)
-                StatPill(icon: "questionmark.circle", count: unreviewedCount, color: .gray)
+                Text("Gallring")
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+
+                AddressBanner()
+
+                Spacer()
+
+                HStack(spacing: 12) {
+                    StatPill(icon: "checkmark.circle.fill", count: acceptedCount, color: .green)
+                    StatPill(icon: "xmark.circle.fill", count: rejectedCount, color: .red)
+                    StatPill(icon: "questionmark.circle", count: unreviewedCount, color: .gray)
+                }
+
+                Text("\(pipeline.currentCullIndex + 1) / \(pipeline.allPhotos.count)")
+                    .font(.system(size: 20, weight: .bold, design: .monospaced))
+                    .foregroundColor(.accentColor)
             }
 
-            Text("\(pipeline.currentCullIndex + 1) / \(pipeline.allPhotos.count)")
-                .font(.system(size: 20, weight: .bold, design: .monospaced))
-                .foregroundColor(.accentColor)
+            filterSortBar
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    /// Fas 4 (kvarstående från Fas 3b): filtrera filmremsan till alla/bara
+    /// ogranskade/bara avvisade, och sortera den efter filnamn eller
+    /// Vision-kvalitet. Rör inga beslut — bara vad som visas och i vilken
+    /// ordning `navigate(_:)`/filmremsan hoppar mellan.
+    private var filterSortBar: some View {
+        HStack(spacing: 16) {
+            Picker("Visa", selection: $cullFilter) {
+                ForEach(CullFilter.allCases, id: \.self) { filter in
+                    Text(filter.label).tag(filter)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 280)
+            .labelsHidden()
+
+            Picker("Sortera", selection: $cullSortOrder) {
+                ForEach(CullSortOrder.allCases, id: \.self) { order in
+                    Text(order.label).tag(order)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 200)
+            .labelsHidden()
+
+            if filteredIndexedPhotos.count != pipeline.allPhotos.count {
+                Text("Visar \(filteredIndexedPhotos.count) av \(pipeline.allPhotos.count)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+        }
     }
 
     // MARK: - Main preview area (normal mode)
@@ -407,11 +502,11 @@ struct PreviewCullView: View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    ForEach(Array(pipeline.allPhotos.enumerated()), id: \.element.id) { index, photo in
-                        filmstripThumb(photo: photo, index: index)
-                            .id(index)
+                    ForEach(filteredIndexedPhotos, id: \.index) { entry in
+                        filmstripThumb(photo: entry.photo, index: entry.index)
+                            .id(entry.index)
                             .onTapGesture {
-                                pipeline.currentCullIndex = index
+                                pipeline.currentCullIndex = entry.index
                             }
                     }
                 }
@@ -758,10 +853,34 @@ struct PreviewCullView: View {
 
     // MARK: - Actions
 
+    /// Moves within `filteredIndexedPhotos`' order, not raw `allPhotos`
+    /// adjacency — so ←/→ and Return/x (which call this after deciding) skip
+    /// over whatever the current filter/sort hides.
     private func navigate(_ direction: Int) {
-        let newIndex = pipeline.currentCullIndex + direction
-        if newIndex >= 0 && newIndex < pipeline.allPhotos.count {
-            pipeline.currentCullIndex = newIndex
+        let list = filteredIndexedPhotos
+        guard !list.isEmpty else { return }
+
+        if let pos = list.firstIndex(where: { $0.index == pipeline.currentCullIndex }) {
+            let newPos = pos + direction
+            guard newPos >= 0 && newPos < list.count else { return }
+            pipeline.currentCullIndex = list[newPos].index
+            return
+        }
+
+        // The current photo just fell out of the filtered list (typical case:
+        // accepting/rejecting it while filtered to "Ogranskade"/"Avvisade") —
+        // jump to the nearest remaining item in the direction we were moving,
+        // so accept/reject's trailing navigate(1) still advances sensibly.
+        if direction >= 0 {
+            if let next = list.first(where: { $0.index > pipeline.currentCullIndex }) {
+                pipeline.currentCullIndex = next.index
+            } else if let last = list.last {
+                pipeline.currentCullIndex = last.index
+            }
+        } else if let prev = list.last(where: { $0.index < pipeline.currentCullIndex }) {
+            pipeline.currentCullIndex = prev.index
+        } else if let first = list.first {
+            pipeline.currentCullIndex = first.index
         }
     }
 
