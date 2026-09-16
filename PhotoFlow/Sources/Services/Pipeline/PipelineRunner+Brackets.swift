@@ -17,6 +17,42 @@ extension PipelineRunner {
         let nefFiles = findNEFFiles(in: inputDir)
         let maxTimeGap = AppSettings.shared.maxTimeGap
         let minBracketSize = AppSettings.shared.minBracketSize
+
+        // Fas 6: fingerprint-baserad skip-kontroll — samma NEF-filer (namn +
+        // total storlek) OCH samma maxTimeGap/minBracketSize som förra gången
+        // detta steg lyckades. Satt HÄR (innan något skip-beslut fattas) så
+        // manifestet får rätt fingerprint oavsett vilken väg funktionen tar
+        // nedanför — `completeStep(.createHDR)` (som kör senare i
+        // startPipeline, efter en eventuell HDR-sammanslagning) plockar upp
+        // den via `pendingStepFingerprints`.
+        let fingerprint = SessionManifestStore.fingerprint(
+            fileURLs: nefFiles,
+            settings: ["maxTimeGap": "\(maxTimeGap)", "minBracketSize": "\(minBracketSize)"]
+        )
+        state.setPendingFingerprint(fingerprint, for: .createHDR)
+
+        if let manifestRecord = state.sessionManifest?.steps[DashboardStep.createHDR.manifestKey],
+           manifestRecord.inputFingerprint == fingerprint,
+           FileManager.default.fileExists(atPath: groupsJSON.path) {
+            logDecision(step: "bracket_analysis", decision: "skipped", details: [
+                "reason": "manifest_fingerprint_match",
+                "fingerprint": fingerprint
+            ])
+            state.appendStepLog(.createHDR, "Bracket-analys redan klar (manifest matchar) — hoppar over", type: .info)
+            state.appendLog("Bracket-analys redan klar — hoppar over.", type: .info)
+            if let data = try? Data(contentsOf: groupsJSON),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let groups = json["groups"] as? [[String: Any]] {
+                let bracketCount = groups.filter { ($0["is_bracket"] as? Bool) == true }.count
+                let singleCount = groups.count - bracketCount
+                state.appendStepLog(.createHDR, "\(groups.count) grupper: \(bracketCount) brackets, \(singleCount) singlar", type: .success)
+            }
+            state.progress = 1.0
+            return
+        }
+
+        // Fallback för sessioner utan (eller med omatchande) manifest-
+        // fingerprint: samma marker-fil-baserade kontroll som innan Fas 6.
         if FileManager.default.fileExists(atPath: groupsJSON.path) {
             if let data = try? Data(contentsOf: groupsJSON),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

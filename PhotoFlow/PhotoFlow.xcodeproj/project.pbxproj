@@ -64,6 +64,7 @@
 		75AAE4D2FD5931E697F5B2A0 /* PipelineStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B5C78734D65FD86D57C916F /* PipelineStep.swift */; };
 		768168E0617FC976E2F3936F /* SessionStatusIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2FF546BEC5023F23323CDC0 /* SessionStatusIntent.swift */; };
 		76AD25703B7CD22D2AF084E4 /* CalendarServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 230AF67C14F78CC9A5F63D1F /* CalendarServiceTests.swift */; };
+		77932461C99C00B057428947 /* SessionHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80F4734D27E144D9ED40671F /* SessionHistoryStore.swift */; };
 		7815F46A102D51998D8B4D8C /* SessionManifestStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B778E538EE39AE2387680410 /* SessionManifestStoreTests.swift */; };
 		7989A2940BFFD47970671D95 /* AppServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6FD32CA129606476C3DAB16 /* AppServices.swift */; };
 		7CE65CE8AF5D4E4EA3C7C70B /* ExposureFusion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80F00E018557CCC542713B03 /* ExposureFusion.swift */; };
@@ -101,6 +102,7 @@
 		D8D8FFA6CAFDE04A092BB491 /* AddressBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = F59167C3EF5ADC97D2062D84 /* AddressBanner.swift */; };
 		D922C28ED4E9A2CCE49C29F9 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83D7AE05B80A7B44D2B244CB /* AppSettings.swift */; };
 		DE054EA5F41BBFB3ED6F9697 /* BracketReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7B2958CAA674C585FF19619 /* BracketReviewView.swift */; };
+		E3A447AC3A5605054F0C75DA /* PipelineStateManifestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F795A5BA4CDEF5F498D8C2F6 /* PipelineStateManifestTests.swift */; };
 		E7E42A0887D9258A3FCE7B8C /* PipelineRunner+Lightroom.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04F7EB11531DBB10EA697354 /* PipelineRunner+Lightroom.swift */; };
 		E9F8D54758C9BB977709079A /* PipelineStateAddressCorrectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7DE505DE352E780722B1B10 /* PipelineStateAddressCorrectionTests.swift */; };
 		EA06314597C317B4BD9069BB /* PipelineRunnerAddressCorrectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7CBAC052E63A0845336EE11 /* PipelineRunnerAddressCorrectionTests.swift */; };
@@ -175,6 +177,7 @@
 		7CFA4B712D2C1C7EB5465997 /* CalendarService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarService.swift; sourceTree = "<group>"; };
 		80B78757C80052743BF6680B /* BracketGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BracketGroup.swift; sourceTree = "<group>"; };
 		80F00E018557CCC542713B03 /* ExposureFusion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExposureFusion.swift; sourceTree = "<group>"; };
+		80F4734D27E144D9ED40671F /* SessionHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionHistoryStore.swift; sourceTree = "<group>"; };
 		81818FB45B057F04C0487565 /* PhotoItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoItem.swift; sourceTree = "<group>"; };
 		83D7AE05B80A7B44D2B244CB /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
 		845C5F71357AA5905F1BDFBC /* SessionManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionManifest.swift; sourceTree = "<group>"; };
@@ -235,6 +238,7 @@
 		E7D6EBC16408E26632B79421 /* PhotoQualityService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoQualityService.swift; sourceTree = "<group>"; };
 		EFE1925080EB1C0287843A6E /* PipelineRunner+AITagging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+AITagging.swift"; sourceTree = "<group>"; };
 		F59167C3EF5ADC97D2062D84 /* AddressBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddressBanner.swift; sourceTree = "<group>"; };
+		F795A5BA4CDEF5F498D8C2F6 /* PipelineStateManifestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineStateManifestTests.swift; sourceTree = "<group>"; };
 		F979ECB7EF516ED8CAE172B0 /* bracket5_dark.expected.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = bracket5_dark.expected.json; sourceTree = "<group>"; };
 		FA78BF98C76E73289FDE191D /* PipelineRunner+Calendar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+Calendar.swift"; sourceTree = "<group>"; };
 		FD8B3E2EDBB94C385E77AC28 /* WatchService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchService.swift; sourceTree = "<group>"; };
@@ -365,6 +369,7 @@
 				D7DE505DE352E780722B1B10 /* PipelineStateAddressCorrectionTests.swift */,
 				0AB4187FD228E28ADF0414F2 /* PipelineStateCullDecisionsTests.swift */,
 				59790CA706990AC3AC474EB2 /* PipelineStateLoggingTests.swift */,
+				F795A5BA4CDEF5F498D8C2F6 /* PipelineStateManifestTests.swift */,
 				8F5619320F3617DDF430B6C8 /* ProcessCancellationBoxTests.swift */,
 				1232E269C2AE3EC7F7B9017B /* RAWRendererTests.swift */,
 				B778E538EE39AE2387680410 /* SessionManifestStoreTests.swift */,
@@ -464,6 +469,7 @@
 				130D67322F34D53E2FC1D475 /* NotificationService.swift */,
 				29BD20E600D143019797F30D /* PhotoDescriptionService.swift */,
 				E7D6EBC16408E26632B79421 /* PhotoQualityService.swift */,
+				80F4734D27E144D9ED40671F /* SessionHistoryStore.swift */,
 				D4A38FD1EFF2B96F70EF36FA /* SessionManifestStore.swift */,
 				B05548288B2EBB830BA02C5E /* ToolLocator.swift */,
 				946EF029FC6B8E82370D3CED /* TranslationService.swift */,
@@ -601,6 +607,7 @@
 				E9F8D54758C9BB977709079A /* PipelineStateAddressCorrectionTests.swift in Sources */,
 				CA69A9936A1575D09D4FE8CF /* PipelineStateCullDecisionsTests.swift in Sources */,
 				58966C64E8FB2BC7A9681D24 /* PipelineStateLoggingTests.swift in Sources */,
+				E3A447AC3A5605054F0C75DA /* PipelineStateManifestTests.swift in Sources */,
 				0F80E6F85550AF9B6387D636 /* ProcessCancellationBoxTests.swift in Sources */,
 				108B328AE8B95041422CC2DE /* RAWRendererTests.swift in Sources */,
 				7815F46A102D51998D8B4D8C /* SessionManifestStoreTests.swift in Sources */,
@@ -669,6 +676,7 @@
 				65BF33C26FC4038D88720266 /* PreviewCullView.swift in Sources */,
 				141C35E348C121F5A5419E43 /* ProcessRunner.swift in Sources */,
 				27554CDFAA48F1DB3AD0F72F /* RAWRenderer.swift in Sources */,
+				77932461C99C00B057428947 /* SessionHistoryStore.swift in Sources */,
 				3446EBB677DA1309A8C68BD6 /* SessionManifest.swift in Sources */,
 				3B19DBA03EEC64D96A32902D /* SessionManifestStore.swift in Sources */,
 				768168E0617FC976E2F3936F /* SessionStatusIntent.swift in Sources */,

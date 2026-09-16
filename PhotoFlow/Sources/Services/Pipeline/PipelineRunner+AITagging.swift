@@ -30,6 +30,39 @@ extension PipelineRunner {
         // Check if ai_tags.json already exists with matching file count
         let previewNames = Set(previewFiles.map { $0.deletingPathExtension().lastPathComponent })
 
+        // Fas 6: fingerprint över preview-filerna (namn + total storlek) —
+        // satt oavsett skip-beslut nedan, så manifestet alltid får rätt värde
+        // när `.aiTagging` senare markeras klar (se `runAITagging`).
+        let fingerprint = SessionManifestStore.fingerprint(fileURLs: previewFiles)
+        state.setPendingFingerprint(fingerprint, for: .aiTagging)
+
+        if let manifestRecord = state.sessionManifest?.steps[DashboardStep.aiTagging.manifestKey],
+           manifestRecord.inputFingerprint == fingerprint,
+           let existingEntries = AITagsStore.load(from: outputDir),
+           previewNames.isSubset(of: Set(existingEntries.keys)) {
+            aiTagResults = [:]
+            for (filename, entry) in existingEntries {
+                aiTagResults[filename] = VisionTaggingService.PhotoTags(
+                    tags: entry.tags, description: entry.description, primaryCategory: entry.category,
+                    confidence: 1.0, rawLabels: []
+                )
+            }
+            logDecision(step: "ai_tagging", decision: "skipped", details: [
+                "reason": "manifest_fingerprint_match",
+                "tagCount": "\(existingEntries.count)"
+            ])
+            state.appendStepLog(.aiTagging, "AI-taggar redan sparade (manifest matchar, \(existingEntries.count) bilder) — hoppar over", type: .info)
+            state.appendLog("AI-taggning redan klar — laddar fran ai_tags.json.", type: .info)
+            for (filename, tags) in aiTagResults.sorted(by: { $0.key < $1.key }) {
+                let tagStr = tags.tags.joined(separator: ", ")
+                let catStr = tags.primaryCategory.isEmpty ? "" : " [\(tags.primaryCategory)]"
+                state.appendStepLog(.aiTagging, "\(filename): \(tagStr)\(catStr)")
+            }
+            return
+        }
+
+        // Fallback för sessioner utan (eller med omatchande) manifest-
+        // fingerprint: samma marker-fil-baserade kontroll som innan Fas 6.
         if let existingEntries = AITagsStore.load(from: outputDir),
            previewNames.isSubset(of: Set(existingEntries.keys)) {
             // Load from disk instead of re-running Vision

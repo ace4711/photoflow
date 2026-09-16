@@ -25,6 +25,22 @@ class PipelineState: ObservableObject {
     @Published var inputDirectory: URL?
     @Published var outputDirectory: URL?
 
+    /// Fas 6: sessionens manifest (se `SessionManifest`/`SessionManifestStore`)
+    /// — lazily skapad/inläst/migrerad av `syncManifest()` första gången den
+    /// behövs (första `updateStep`/`completeStep`/... efter att
+    /// `outputDirectory` satts). `nil` bara innan en outputmapp är känd.
+    @Published var sessionManifest: SessionManifest?
+
+    /// Fingerprints ett steg har räknat ut men ännu inte hunnit committa till
+    /// `sessionManifest` via `syncManifest(step:)` — satt av pipeline-stegen
+    /// (t.ex. `runBracketAnalysis`) INNAN de anropar `updateStep`/
+    /// `completeStep` för samma steg, se `setPendingFingerprint`.
+    private var pendingStepFingerprints: [DashboardStep: String] = [:]
+
+    func setPendingFingerprint(_ fingerprint: String, for step: DashboardStep) {
+        pendingStepFingerprints[step] = fingerprint
+    }
+
     @Published var bracketGroups: [BracketGroup] = []
     @Published var allPhotos: [PhotoItem] = [] {
         didSet { rebuildPhotoIndex() }
@@ -199,6 +215,8 @@ class PipelineState: ObservableObject {
         for step in DashboardStep.allCases {
             stepStatuses[step] = .idle
         }
+        sessionManifest = nil
+        pendingStepFingerprints = [:]
     }
 
     /// Correct a mismatched address with new name and GPS coordinates
@@ -214,6 +232,7 @@ class PipelineState: ObservableObject {
         // threw the manual GPS correction away again.
         saveCalendarMatches()
         invalidateWrittenMetadataIfNeeded()
+        syncManifest()
     }
 
     /// Write current address matches back to calendar_matches.json so corrections survive restarts.
@@ -262,6 +281,7 @@ class PipelineState: ObservableObject {
         if phase == .active {
             stepStatuses[step]?.startedAt = Date()
         }
+        syncManifest(step: step)
     }
 
     func updateStepProgress(_ step: DashboardStep, processed: Int, total: Int) {
@@ -269,6 +289,7 @@ class PipelineState: ObservableObject {
         stepStatuses[step]?.totalCount = total
         stepStatuses[step]?.phase = .active
         stepStatuses[step]?.lastUpdated = Date()
+        syncManifest(step: step)
     }
 
     func completeStep(_ step: DashboardStep, count: Int = 0) {
@@ -280,6 +301,90 @@ class PipelineState: ObservableObject {
         stepStatuses[step]?.processedCount = count
         stepStatuses[step]?.totalCount = count
         stepStatuses[step]?.lastUpdated = now
+        syncManifest(step: step)
+    }
+
+    // MARK: - Fas 6: sessionsmanifest (photoflow_session.json)
+
+    /// Skapar (läser in/migrerar via `SessionManifestStore.loadOrMigrate`)
+    /// manifestet om det inte redan finns i minnet. En no-op om
+    /// `outputDirectory` inte är satt än (t.ex. innan användaren valt en
+    /// mapp) eller om manifestet redan är inläst.
+    private func ensureManifestLoaded() {
+        guard sessionManifest == nil, let outputDir = outputDirectory else { return }
+        let inputDir = inputDirectory ?? outputDir
+        if let loaded = SessionManifestStore.loadOrMigrate(inputDir: inputDir, outputDir: outputDir) {
+            sessionManifest = loaded
+        } else {
+            sessionManifest = SessionManifest(
+                schemaVersion: SessionManifest.currentSchemaVersion,
+                sessionID: UUID(),
+                createdAt: Date(),
+                updatedAt: Date(),
+                inputDirectory: inputDir.path,
+                outputDirectory: outputDir.path,
+                photoCount: 0,
+                groupCount: 0,
+                addresses: [],
+                steps: [:],
+                cullSummary: SessionManifest.CullSummary(accepted: 0, rejected: 0, unreviewed: 0)
+            )
+        }
+    }
+
+    /// Enda stället som skriver `sessionManifest` till disk — anropas från
+    /// `updateStep`/`updateStepProgress`/`completeStep` (med `step` satt) och
+    /// från `saveCullDecisions`/`correctAddress` (utan `step`, bara för att
+    /// uppdatera adresser/gallringssammanfattning). Uppdaterar också
+    /// sessionshistorikregistret (`SessionHistoryStore`) så "Historik"-vyn
+    /// alltid speglar den senaste kända statusen.
+    func syncManifest(step: DashboardStep? = nil) {
+        guard let outputDir = outputDirectory else { return }
+        ensureManifestLoaded()
+        guard var manifest = sessionManifest else { return }
+
+        if let step, let status = stepStatuses[step] {
+            var record = manifest.steps[step.manifestKey] ?? SessionManifest.StepRecord(
+                stepID: step.manifestKey, phase: "", processedCount: 0, totalCount: 0,
+                duration: nil, finishedAt: nil, inputFingerprint: nil
+            )
+            record.phase = "\(status.phase)"
+            record.processedCount = status.processedCount
+            record.totalCount = status.totalCount
+            record.duration = status.lastDuration
+            if status.phase == .complete {
+                record.finishedAt = Date()
+            }
+            if let fingerprint = pendingStepFingerprints[step] {
+                record.inputFingerprint = fingerprint
+            }
+            manifest.steps[step.manifestKey] = record
+        }
+
+        manifest.photoCount = allPhotos.count
+        manifest.groupCount = bracketGroups.count
+        manifest.addresses = allMatchedAddresses.map { match in
+            SessionManifest.AddressRecord(
+                address: match.address,
+                eventTitle: match.eventTitle,
+                latitude: match.coordinate?.latitude,
+                longitude: match.coordinate?.longitude,
+                manuallyCorrected: correctedCoordinates[match.address] != nil
+            )
+        }
+        let accepted = allPhotos.filter(\.accepted).count
+        let rejected = allPhotos.filter(\.rejected).count
+        manifest.cullSummary = SessionManifest.CullSummary(
+            accepted: accepted, rejected: rejected,
+            unreviewed: max(0, allPhotos.count - accepted - rejected)
+        )
+        manifest.inputDirectory = (inputDirectory ?? outputDir).path
+        manifest.outputDirectory = outputDir.path
+        manifest.updatedAt = Date()
+
+        sessionManifest = manifest
+        SessionManifestStore.save(manifest, to: outputDir)
+        SessionHistoryStore.record(manifest)
     }
 
     func appendStepLog(_ step: DashboardStep, _ text: String, type: LogLine.LogType = .info) {
@@ -323,6 +428,7 @@ class PipelineState: ObservableObject {
         if let data = try? JSONSerialization.data(withJSONObject: decisions, options: .prettyPrinted) {
             try? data.write(to: file)
         }
+        syncManifest()
     }
 
     func loadCullDecisions() -> [String: String] {

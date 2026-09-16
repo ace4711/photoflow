@@ -11,6 +11,13 @@ extension PipelineRunner {
             state.currentStep = .reviewingBrackets
             state.statusMessage = "Granska bracket-grupper och välj bilder för HDR"
             audio.playNeedsAttention()
+            // loadBracketGroups only populates allPhotos/bracketGroups — it
+            // doesn't go through updateStep/completeStep (no single "step" is
+            // being run here), so the manifest/history registry wouldn't
+            // otherwise learn about this session until the user re-runs a
+            // step. Opening an old session should show up in "Historik"
+            // immediately, so sync explicitly.
+            state.syncManifest()
         } catch {
             state.errorMessage = error.localizedDescription
             state.appendLog(error.localizedDescription, type: .error)

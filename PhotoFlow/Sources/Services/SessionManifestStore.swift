@@ -21,7 +21,9 @@ enum SessionManifestStore {
     /// precision, which made a `save` -> `load` round trip of a freshly
     /// created `Date()` compare unequal purely from formatting, not from an
     /// actual bug. Same pattern as `PipelineRunner.decisionLogTimestampFormatter`.
-    private static let dateFormatter: ISO8601DateFormatter = {
+    // nonisolated(unsafe): see `SessionHistoryStore.dateFormatter`'s comment —
+    // same JSONEncoder/JSONDecoder `.custom`-closure-Sendable situation.
+    nonisolated(unsafe) private static let dateFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
