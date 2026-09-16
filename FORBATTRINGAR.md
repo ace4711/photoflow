@@ -2943,3 +2943,260 @@ kör något automatiskt.
   egna indexbaserade förhämtningen (±3 runt `currentCullIndex`) täcker
   redan appens faktiska navigeringsmönster (sekventiell bläddring med
   ←/→, inte fri skrollning) bättre.
+
+## Fas 6 – Sessionsmanifest och historik
+
+Utfört autonomt på branchen `forbattringar` medan användaren sov, ett steg i
+taget med bygge + tester gröna före varje commit. Se `git log --oneline` för
+commit-för-commit-historik. 194 tester totalt efter denna fas (upp från 178),
+alla gröna.
+
+### Bakgrund
+
+En körning lämnade tidigare efter sig ett dussin löst kopplade filer i
+outputmappen (`bracket_groups.json`, `exif_data.csv`, `calendar_matches.json`,
+`cull_decisions.json`, `ai_tags.json`, `photo_quality.json`,
+`photo_notes.json`, `files_sorted.json`, `metadata_written.json`,
+`decision_log.jsonl`, `pipeline.log`), och "hoppa över"-beslut byggde nästan
+uteslutande på **antal** (t.ex. "samma antal NEF-filer som sist" i
+bracket-analysen) — en ändrad inställning (t.ex. `maxTimeGap`) upptäcktes bara
+om den händelsevis också råkade ändra filantalet. Appen hade heller ingen
+historik: den kände bara till den senast körda sessionen i den just nu
+konfigurerade outputmappen (dokumenterad begränsning i Fas 3f för
+`AddressSessionLoader`/App Intents).
+
+### 1. `Models/SessionManifest.swift` + `Services/SessionManifestStore.swift`
+
+`SessionManifest` är en versionerad (`schemaVersion`) `Codable`-modell för EN
+körning: `sessionID` (UUID), `createdAt`/`updatedAt`, in-/outputmapp,
+`photoCount`/`groupCount`, adresser (`AddressRecord`: adress, eventtitel,
+koordinat, om den är manuellt rättad), per-steg-status (`StepRecord`:
+`stepID`, `phase`, `processedCount`/`totalCount`, `duration`, `finishedAt`,
+`inputFingerprint`), och en `CullSummary` (accepterade/avvisade/ogranskade).
+Nyckeln i `steps`-dictionaryt är `DashboardStep.manifestKey` — en stabil
+sträng (case-namnet), INTE `rawValue` (en positionsberoende `Int` som skulle
+kunna peka på fel steg om `DashboardStep`s ordning någonsin ändras).
+
+`SessionManifestStore` (statiska funktioner mot en explicit `outputDir`, inte
+en singleton-instans — testbart mot en tillfällig mapp):
+
+- `save`/`load`: atomisk skrivning (temp-fil i samma mapp + `replaceItemAt`,
+  eller `moveItem` om filen inte redan finns) till `photoflow_session.json`.
+  Datum kodas med en egen fraktionerad-sekunder-ISO8601-formatter (via
+  `JSONEncoder`/`JSONDecoder`s `.custom`-strategi) — `JSONEncoder`s
+  inbyggda `.iso8601` tappar sub-sekundprecision, vilket annars gjorde en
+  ren save→load-rundtripp av en färsk `Date()` jämföra ojämlikt trots att
+  inget faktiskt var fel.
+- `migrate(inputDir:outputDir:)`: **bakåtkompatibiliteten som krävdes** —
+  bygger ett manifest retroaktivt från de gamla lösa filerna
+  (`bracket_groups.json` → photoCount/groupCount + `.createHDR`-steget,
+  `calendar_matches.json` → adresser + `.findCalendarInfo`, `cull_decisions.
+  json` → gallringssammanfattning, `files_sorted.json` → `.moveToFolders`,
+  `metadata_written.json` → `.writeIPTCTags`, `ai_tags.json` → `.aiTagging`)
+  för sessioner som kördes FÖRE denna fas. Returnerar `nil` (inget att
+  migrera) bara om INGEN av de gamla filerna finns — en genuint ny,
+  aldrig körd session. `loadOrMigrate` sparar det migrerade manifestet
+  direkt så nästa `load` hittar det utan att migrera om (samma `sessionID`
+  bevaras).
+- `fingerprint(fileURLs:settings:)`: en billig, **stabil** hash (filnamn
+  sorterade + total filstorlek + en sorterad inställnings-ögonblicksbild)
+  via FNV-1a över en kanonisk sträng. Medvetet INTE Swift's inbyggda
+  `Hasher`/`hash(into:)` — den har en slumpad seed per processtart
+  (dokumenterat i `Hashable`) och skulle aldrig ge samma värde mellan två
+  körningar av appen, vilket hade omintetgjort hela poängen med att spara
+  ett fingerprint på disk.
+- De gamla lösa filerna rörs INTE — bara läses vid migrering. Lightroom-
+  pluginet och användarens egen felsökning förlitar sig på dem
+  (`agent-rules.md`), och `PipelineRunner`s befintliga steg fortsätter
+  skriva dem precis som förut.
+
+### 2. Inkopplat i pipelinen — `PipelineState.syncManifest()`
+
+`PipelineState.updateStep`/`updateStepProgress`/`completeStep` (dashboardens
+befintliga steg-status-väg) samt `saveCullDecisions`/`correctAddress` funnlar
+alla via EN enda `syncManifest(step:)`-funktion — begärt i uppdraget som "ett
+ställe":
+
+- `ensureManifestLoaded()`: läser in/migrerar manifestet lazily första gången
+  `outputDirectory` är satt, annars skapar ett tomt.
+- Vid ett stegs `updateStep`/`completeStep`-anrop: uppdaterar det stegets
+  `StepRecord` (fas, antal, varaktighet, `finishedAt`), och tar med sig ett
+  eventuellt `inputFingerprint` satt via `state.setPendingFingerprint(_:for:)`
+  (se punkt 2b nedan).
+- Vid VARJE sync: räknar om `photoCount`/`groupCount`/`addresses`/
+  `cullSummary` från `allPhotos`/`bracketGroups`/`allMatchedAddresses` (redan
+  den enda sanningskällan sedan tidigare faser), sparar manifestet till disk,
+  och uppdaterar `SessionHistoryStore`s register.
+- `reset()` nollställer `sessionManifest`/väntande fingerprints.
+- `loadExistingSession` (öppna en gammal session) anropar `syncManifest()`
+  explicit efter `loadBracketGroups()`, eftersom den vägen inte går via
+  `updateStep`/`completeStep` för något visst steg — annars hade en öppnad
+  session inte synts i Historik förrän användaren körde om ett steg.
+
+**2b. Fingerprint-baserad skip-logik** — inplumbad för de två stegen där en
+inställningsändring konkret kan göra en gammal markörfil vilseledande:
+
+- **Bracket-analysen** (`runBracketAnalysis`, `.createHDR`-nyckeln):
+  fingerprint av NEF-filerna + `maxTimeGap`/`minBracketSize`. Manifestets
+  fingerprint kollas FÖRST (`manifest_fingerprint_match` i
+  `decision_log.jsonl`); den gamla marker-fil-kontrollen (antal + params i
+  `bracket_groups.json`s `"params"`-fält) finns kvar oförändrad som fallback
+  för sessioner utan (eller med omatchande) manifest.
+- **AI-taggning/Vision-klassificering** (`runVisionTagging`,
+  `.aiTagging`-nyckeln): fingerprint av preview-filerna. Samma
+  fingerprint-först-sedan-fallback-mönster.
+- Fingerprint sätts (`state.setPendingFingerprint`) INNAN något skip-beslut
+  fattas, oavsett vilken väg funktionen tar — så manifestet alltid får rätt
+  värde när steget senare markeras klart via `completeStep`, som kan hända
+  längre fram i `startPipeline` (t.ex. `.createHDR` markeras klar efter en
+  eventuell HDR-sammanslagning, inte direkt efter bracket-analysen).
+- **Medveten avgränsning**: kalendermatchning, filsortering och
+  metadataskrivning fick INTE fingerprint-gating i denna fas — de har redan
+  egen, innehållsbaserad skip-logik (kalendermatchning läser tillbaka exakt
+  det den sparade; filsortering/metadata jämför sparat antal mot
+  `state.allPhotos.count`/`calendarMappings.count`, vilket i praktiken
+  fångar det mesta) och saknar en lika tydlig "inställning som kan ändras
+  utan att räkna om filantal"-risk som `maxTimeGap` var det uttryckliga
+  exemplet på. Markerad som en rimlig men medveten scope-avgränsning, inte
+  en försummelse — se "Kvarstående" nedan.
+
+### 3. `Services/SessionHistoryStore.swift` — historikregistret
+
+En rad per `SessionManifest.sessionID` i
+`~/Library/Application Support/PhotoFlow/sessions.json` (adresser, datum,
+in-/outputmapp, antal bilder, gallringssammanfattning, status
+"Klar"/"Pågående"). `record(_:)` upsertar (samma `sessionID` uppdaterar,
+dupliceras aldrig) och anropas från `PipelineState.syncManifest()` — så
+registret uppdateras både när en session körs OCH när en gammal session
+öppnas igen. `pruneMissingOutputDirectories()` tar bort poster vars
+outputmapp inte längre finns på disk — **loggar bara (os.Logger), frågar
+aldrig**, enligt uppdragets explicita instruktion. Körs vid appstart
+(`PhotoFlowApp.startupChecks`) och varje gång Historik-vyn öppnas.
+
+**Viktig bugg hittad och fixad under arbetet**: `SessionHistoryStore`s
+`defaultRegistryURL` pekar normalt på den riktiga
+`~/Library/Application Support/PhotoFlow/`-mappen — men eftersom MÅNGA
+befintliga tester (skrivna i tidigare faser, långt innan detta register
+fanns) anropar `PipelineState.completeStep`/`correctAddress`/
+`saveCullDecisions` mot temporära `/var/folders/...`-mappar, hade en full
+testkörning omedelbart börjat skriva låtsassessioner rakt in i
+ANVÄNDARENS RIKTIGA `sessions.json` (verifierat: hände faktiskt, filen
+innehöll efter en testkörning poster som pekade på
+`PipelineRunnerHDROrphanTests-...`-temp-mappar). Fixat genom att
+`defaultRegistryURL` känner av `XCTestConfigurationFilePath`
+(miljövariabeln Xcode/`xcodebuild` alltid sätter på den hostade
+testprocessen) och omdirigerar till en temp-fil i det fallet — den riktiga
+registerfilen rördes aldrig av något annat än detta autonoma arbetes egna
+manuella experiment, som städades bort igen (`rm sessions.json`) innan
+commit. **Använd­aren bör dubbelkolla** att
+`~/Library/Application Support/PhotoFlow/sessions.json` ser rimlig ut
+(bara riktiga sessioner, inga `/var/folders/...`-sökvägar) första gången
+appen körs efter denna fas, som en sista koll.
+
+### 4. `SessionHistoryView.swift` — Historikvyn
+
+Ny knapp ("klocka"-ikon) i `DashboardView`s verktygsfält, bredvid logg/
+inställningar, öppnar vyn som ett sheet. Listar alla kända sessioner
+(senast uppdaterade först), med sökfält (adress eller mapp-sökväg), antal
+bilder/ogranskade, status-chip ("Klar"/"Pågående"), och knapparna:
+
+- **"Öppna"**: pekar om `AppSettings.shared.inputDirectory`/
+  `outputDirectory` på den valda sessionen och anropar
+  `RunnerWrapper.loadExistingSession` — samma väg som redan fanns i
+  `PipelineRunner+LoadSession.swift` men som (förvånande nog) inte hade
+  NÅGON UI-koppling i appen före denna fas.
+- **"Visa i Finder"**: `NSWorkspace.shared.activateFileViewerSelecting`.
+- Rader vars outputmapp inte längre finns på disk är gråtonade och
+  knapparna inaktiverade i stället för att krascha eller öppna en tom mapp.
+
+### 5. App Intents — `AddressSessionLoader`/`SessionStatusIntent`
+
+`AddressSessionLoader.loadCurrentSessions()` (bakom `FindSessionsIntent`/
+`AddressSessionQuery`, alltså "Hitta sessioner i PhotoFlow" och dess
+Spotlight-indexering) läser nu `SessionHistoryStore`s register och
+aggregerar adress-sessioner över ALLA kända outputmappar — Fas 3f:s
+dokumenterade begränsning ("bara senaste körningen i den just nu
+konfigurerade outputmappen") är därmed löst. Faller tillbaka till den
+gamla enkla-mapp-läsningen om historikregistret råkar vara helt tomt (t.ex.
+en session som aldrig hann synkas mot registret). `loadSessions(outputDir:)`
+(kärnlogiken per mapp) är oförändrad — fortfarande det direkt testbara
+stället.
+
+`SessionStatusIntent` svarar nu med något användbart även när ingen session
+är inladdad i minnet: antal ogranskade bilder summerat över
+historikregistrets sessioner, i stället för bara "PhotoFlow är redo. Ingen
+session pågår just nu."
+
+### 6. Tester
+
+Nya testfiler: `SessionManifestStoreTests.swift` (rundtripp, atomisk
+skrivning, migrering från en fixture-mapp med bara de gamla lösa filerna,
+fingerprint-stabilitet/-känslighet för filordning/filstorlek/filantal/
+inställningar), `PipelineStateManifestTests.swift` (completeStep/
+updateStep/saveCullDecisions synkar manifestet korrekt, pending-fingerprint
+följer med, reset nollställer, migrering triggas automatiskt av första
+synken), `SessionHistoryStoreTests.swift` (upsert, status Klar/Pågående,
+pruning av saknade mappar, flera adresser per session). Utökade
+`AddressSessionLoaderTests.swift` med aggregering över flera outputmappar
+via historikregistret.
+
+### Manuell testning användaren bör göra
+
+1. **Kontrollera `~/Library/Application Support/PhotoFlow/sessions.json`**
+   (se "Viktig bugg" ovan) — ska bara innehålla riktiga sessioner.
+2. **Kör en full pipeline-session** och öppna Historik-knappen i
+   verktygsfältet — sessionen ska dyka upp med rätt adress/antal bilder,
+   status "Pågående" tills gallringen är klar.
+3. **Öppna en session via "Öppna" i Historik** och kontrollera att den
+   laddas korrekt (bracket-grupper/bilder syns, `AppSettings`s in-/
+   outputmapp pekar om) och att "Visa i Finder" öppnar rätt mapp.
+4. **En gammal session från FÖRE denna fas** (om en sådan finns kvar på
+   disk, med bara de gamla lösa filerna och inget `photoflow_session.json`)
+   — öppna den (via Historik EFTER att ha kört pipelinen en gång så den
+   hamnar i registret, eller direkt via "Kör om" på ett steg) och
+   kontrollera att den migreras korrekt (rätt antal bilder/adresser,
+   `photoflow_session.json` skapas i dess outputmapp).
+5. **Ändra `maxTimeGap` i Inställningar och kör om en session** som redan
+   har en klar bracket-analys — bracket-analysen ska nu köras om (inte
+   hoppas över), och `decision_log.jsonl` ska visa `bracket_analysis` med
+   `decision: "ran"` (inte `"skipped"`) för det steget.
+6. **Spotlight/"Hitta sessioner i PhotoFlow"** (Siri/Genvägar) efter att ha
+   kört flera sessioner i OLIKA outputmappar — ska nu lista adresser från
+   ALLA av dem, inte bara den senaste.
+7. **Radera en sessions outputmapp manuellt i Finder**, öppna sedan
+   Historik-vyn (eller starta om appen) — posten ska försvinna tyst ur
+   listan (loggat, ingen dialog).
+
+### Kvarstående / inte gjort i Fas 6
+
+- Fingerprint-baserad skip-gating implementerades bara för bracket-analysen
+  och AI-taggningens Vision-klassificering (de två stegen med tydligast
+  "inställning kan ändras utan att filantalet ändras"-risk, `maxTimeGap`
+  var uppdragets uttryckliga exempel). Kalendermatchning, filsortering och
+  metadataskrivning har INTE fått motsvarande manifest-fingerprint-kontroll
+  — de behåller sin befintliga (innehålls-/antalsbaserade) skip-logik
+  oförändrad. Om en framtida inställning som påverkar just DESSA steg utan
+  att ändra räknade antal dyker upp, är mönstret redan etablerat
+  (`SessionManifestStore.fingerprint` + `setPendingFingerprint`) för att
+  utöka dit.
+- Historikvyn har inget sätt att RADERA en session från registret eller
+  disk direkt i UI:t (bara "Öppna"/"Visa i Finder") — bedömdes vara utanför
+  scope för denna fas (radering av riktiga filer är känsligt, se
+  `agent-rules.md`s regel om att aldrig röra användarens original utan att
+  vara mycket försiktig) och kan läggas till separat om användaren vill ha
+  det, t.ex. en knapp som bara tar bort REGISTERPOSTEN (inte filerna) eller
+  öppnar mappen i Finder för manuell radering.
+- `SessionManifest.StepRecord.phase` är en fritext-spegling
+  (`"\(StepPhase)"`) av `StepPhase`, inte en egen `Codable`-representation
+  av hela `StepPhase`-enumet (som har ett associerat värde i `.error`-fallet)
+  — gott nog för visning/felsökning i den råa JSON-filen och för
+  `SessionHistoryStore`s "Klar"/"Pågående"-jämförelse (`== "complete"`/
+  `"disabled"`), men ingen kod försöker parsa strängen tillbaka till en
+  riktig `StepPhase`.
+- Ingen UI-inställning för att stänga av fingerprint-baserad skip-gating
+  separat (den lägger sig bara ovanpå/före de befintliga markörfils-
+  kontrollerna och kan aldrig göra ett steg köras OFTARE än förut — bara
+  potentiellt köra om ett steg som markörfilen ensam hade hoppat över).
+  Bedömdes inte behöva en egen avstängningsbar inställning eftersom
+  beteendet strikt är "samma eller bättre" (uppdragets krav), inte ett nytt
+  automatiskt beteende i pipelinen som skulle behöva kunna stängas av.
