@@ -47,7 +47,11 @@ final class FieldDictationService: ObservableObject {
         checkAuthorization()
     }
 
-    func checkAuthorization() {
+    /// `nonisolated` är nödvändigt: Speech anropar completion-blocket på en
+    /// bakgrundskö. Med default MainActor-isolering blir blocket annars
+    /// MainActor-isolerat, och Swift 6:s isoleringskontroll kraschar appen
+    /// (dispatch_assert_queue) redan innan blockets kropp körs.
+    nonisolated func checkAuthorization() {
         SFSpeechRecognizer.requestAuthorization { [weak self] status in
             Task { @MainActor in
                 self?.authorized = (status == .authorized)

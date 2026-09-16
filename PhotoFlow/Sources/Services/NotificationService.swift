@@ -67,7 +67,10 @@ final class NotificationService: NSObject, ObservableObject {
     func requestAuthorizationIfNeeded() {
         guard !didRequestAuthorization else { return }
         didRequestAuthorization = true
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+        // Blocket måste vara nonisolated: UserNotifications svarar på en
+        // bakgrundskö, och ett MainActor-isolerat block kraschar då direkt
+        // i Swift 6:s isoleringskontroll innan kroppen körs.
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { @Sendable granted, error in
             if let error {
                 print("[Notiser] Fel vid behörighetsbegäran: \(error.localizedDescription)")
             } else if !granted {
