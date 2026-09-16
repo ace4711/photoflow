@@ -22,6 +22,13 @@ class PipelineState: ObservableObject {
     /// nåbar från både `PhotoFlowApp`/`NotificationService` och vyerna.
     @Published var reviewRequestedFromNotification: Bool = false
 
+    /// Fas 7: satt av `PhotoFlowApp`s `.onOpenURL` när användaren
+    /// dubbelklickar en `.photoflownotes`-fil i Finder (eller "Öppna med" →
+    /// PhotoFlow). `DashboardView` observerar den, kör importen, och
+    /// nollställer den direkt igen — samma mönster som
+    /// `reviewRequestedFromNotification` ovan.
+    @Published var pendingFieldNotesImportURL: URL?
+
     @Published var inputDirectory: URL?
     @Published var outputDirectory: URL?
 

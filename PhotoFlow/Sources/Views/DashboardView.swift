@@ -11,6 +11,8 @@ struct DashboardView: View {
     @State private var showHistory: Bool = false
     @State private var nefCount: Int = 0
     @State private var hasProcessedOutput: Bool = false
+    // Fas 7: fältanteckningsimport — se importFieldNotes()/handleFieldNotesImport(at:).
+    @State private var fieldNotesImportResult: FieldNotesImportResult?
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 5)
 
@@ -46,6 +48,23 @@ struct DashboardView: View {
             guard requested else { return }
             showReview = true
             pipeline.reviewRequestedFromNotification = false
+        }
+        .onChange(of: pipeline.pendingFieldNotesImportURL) { _, url in
+            guard let url else { return }
+            handleFieldNotesImport(at: url)
+            pipeline.pendingFieldNotesImportURL = nil
+        }
+        .alert(
+            fieldNotesImportResult?.title ?? "",
+            isPresented: Binding(
+                get: { fieldNotesImportResult != nil },
+                set: { isPresented in if !isPresented { fieldNotesImportResult = nil } }
+            ),
+            presenting: fieldNotesImportResult
+        ) { _ in
+            Button("OK") { fieldNotesImportResult = nil }
+        } message: { result in
+            Text(result.message)
         }
         .onChange(of: settings.inputDirectoryPath) { _, _ in refreshFileCount() }
         .onChange(of: settings.outputDirectoryPath) { _, _ in refreshFileCount() }
@@ -192,6 +211,11 @@ struct DashboardView: View {
                 Image(systemName: "clock.arrow.circlepath")
             }
             .help("Historik — tidigare sessioner")
+
+            Button(action: { importFieldNotes() }) {
+                Image(systemName: "square.and.arrow.down.on.square")
+            }
+            .help("Importera fältanteckningar… (.photoflownotes från PhotoFlow Fält)")
 
             Button(action: { showSettings = true }) {
                 Image(systemName: "gearshape")
@@ -347,6 +371,45 @@ struct DashboardView: View {
         }
     }
 
+    // MARK: - Fas 7: fältanteckningsimport
+
+    private func importFieldNotes() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.photoFlowFieldNotes]
+        panel.message = "Välj en .photoflownotes-fil (exporterad från PhotoFlow Fält)"
+        panel.prompt = "Importera"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        handleFieldNotesImport(at: url)
+    }
+
+    private func handleFieldNotesImport(at url: URL) {
+        guard let bundle = FieldNoteBundle.loadFrom(url) else {
+            pipeline.appendLog("Kunde inte läsa fältanteckningsfilen \"\(url.lastPathComponent)\" — filen kanske inte är en giltig .photoflownotes-export.", type: .error)
+            fieldNotesImportResult = .failure(
+                "Filen \"\(url.lastPathComponent)\" kunde inte läsas som en fältanteckningsexport (.photoflownotes)."
+            )
+            return
+        }
+        guard let runner = runner.runner else { return }
+
+        let summary = runner.importFieldNotes(bundle)
+
+        // Applicera GPS-förslagen på matchande adresser (om någon) — samma väg
+        // som en manuell rättning i AddressBanner (PipelineState.correctAddress),
+        // så metadataskrivningen använder den riktiga positionen i stället för
+        // den geokodade adressen.
+        for corrected in summary.correctedAddresses {
+            if let idx = pipeline.allMatchedAddresses.firstIndex(where: { $0.address == corrected.address }) {
+                pipeline.correctAddress(at: idx, newAddress: corrected.address, coordinate: corrected.coordinate)
+            }
+        }
+
+        fieldNotesImportResult = .success(summary)
+    }
+
     private func handleStepTap(_ step: DashboardStep) {
         switch step {
         case .manualReview:
@@ -467,6 +530,34 @@ struct DashboardView: View {
         case .warning: return .orange
         case .error: return .red
         case .success: return .green
+        }
+    }
+}
+
+/// Resultatet av ett fältanteckningsimportförsök (Fas 7) — visas i en
+/// `.alert` på `DashboardView` (se `handleFieldNotesImport(at:)`).
+private enum FieldNotesImportResult {
+    case success(FieldNotesImportSummary)
+    case failure(String)
+
+    var title: String {
+        switch self {
+        case .success: return "Fältanteckningar importerade"
+        case .failure: return "Kunde inte importera fältanteckningar"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .success(let summary):
+            var lines = ["\(summary.totalNotes) anteckningar, \(summary.matchedPhotoCount) matchade bilder, \(summary.sessionNoteCount) sessionsanteckningar."]
+            if !summary.correctedAddresses.isEmpty {
+                let addresses = summary.correctedAddresses.map(\.address).joined(separator: ", ")
+                lines.append("GPS-position rättad från fältanteckningarna för: \(addresses).")
+            }
+            return lines.joined(separator: "\n\n")
+        case .failure(let message):
+            return message
         }
     }
 }

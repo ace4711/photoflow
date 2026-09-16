@@ -265,6 +265,30 @@ struct PipelineTab: View {
                 }
             }
 
+            Section("Fältanteckningar (iPhone-appen)") {
+                HStack {
+                    Text("Matchningsfönster")
+                    Spacer()
+                    TextField("", value: $settings.fieldNotesMatchWindowSeconds, format: .number)
+                        .frame(width: 60)
+                        .textFieldStyle(.roundedBorder)
+                    Text("sekunder")
+                        .foregroundColor(.secondary)
+                }
+                HStack {
+                    Text("Klockdrift-korrigering")
+                    Spacer()
+                    TextField("", value: $settings.fieldNotesClockOffsetSeconds, format: .number)
+                        .frame(width: 60)
+                        .textFieldStyle(.roundedBorder)
+                    Text("sekunder")
+                        .foregroundColor(.secondary)
+                }
+                Text("Vid import av en .photoflownotes-fil (\"Importera fältanteckningar…\") matchas varje anteckning mot bilden som togs närmast i tiden, inom matchningsfönstret. Anteckningar utanför fönstret blir sessionsanteckningar. Klockdrift-korrigeringen läggs till anteckningens tid innan matchning — positiv om telefonens klocka går efter kamerans.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             Section("Progress") {
                 Toggle("Detaljerad progress", isOn: $settings.detailedProgress)
                 Text("Visar input-bilder och HDR-resultat live under bearbetning.")

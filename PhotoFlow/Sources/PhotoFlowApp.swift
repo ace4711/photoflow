@@ -39,6 +39,13 @@ struct PhotoFlowApp: App {
                 .task {
                     await startupChecks()
                 }
+                // Fas 7: dubbelklick på en .photoflownotes-fil i Finder (eller
+                // "Öppna med" → PhotoFlow) — se CFBundleDocumentTypes i
+                // project.yml. `DashboardView` observerar `pendingFieldNotesImportURL`
+                // och kör själva importen (samma väg som verktygsfältsknappen).
+                .onOpenURL { url in
+                    pipeline.pendingFieldNotesImportURL = url
+                }
                 .alert("Verktyg saknas", isPresented: $showDependencyAlert) {
                     Button("Öppna Inställningar") {
                         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)

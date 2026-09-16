@@ -89,6 +89,17 @@ class AppSettings: ObservableObject {
     ///   respektive adressmapp, i stället för att röra dem alls.
     @AppStorage("cullAction") var cullAction: String = "markera"
 
+    /// Fas 7: hur många sekunder från en bilds tidsstämpel som en importerad
+    /// fältanteckning (från "PhotoFlow Fält", iOS) får ligga inom för att
+    /// räknas som en träff — se `FieldNoteMatcher`. Standard ±90s enligt
+    /// planen. Anteckningar utanför fönstret blir "sessionsanteckningar".
+    @AppStorage("fieldNotesMatchWindowSeconds") var fieldNotesMatchWindowSeconds: Double = 90
+    /// Kompenserar klockdrift mellan telefonens och kamerans klocka (sekunder
+    /// att lägga till varje antecknings tidsstämpel innan matchning). 0 =
+    /// ingen korrigering (standard — de flesta telefoner/kameror har
+    /// synkroniserad tid via NTP/GPS).
+    @AppStorage("fieldNotesClockOffsetSeconds") var fieldNotesClockOffsetSeconds: Double = 0
+
     /// The pre-Fas-4 hardcoded personal default, kept only as the migration
     /// target in `migrateCalendarNameIfNeeded`.
     private static let legacyDefaultCalendarName = "Exempelkalender"
