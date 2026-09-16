@@ -1875,3 +1875,235 @@ tillbaka till bindingen internt — tål det uppenbarligen inte).
   `checkForNewFiles`-anrop (inom en fallback-pollningsperiod, eller
   direkt om en FSEvents-händelse redan var på väg) — inte omedelbart. Inte
   testat manuellt.
+
+## Fas 4 – Arbetsflöde och Lightroom
+
+Utfört autonomt på branchen `forbattringar` medan användaren sov. Alla steg
+byggdes och testades grönt (`xcodebuild ... build`/`test`) innan varje
+commit — se `git log --oneline` för commit-för-commit-historik. Adobe
+Lightroom Classic bekräftades installerad (`ls /Applications`), men eftersom
+den här körningen inte kan klicka i GUI:t verifierades Lightroom-pluginet så
+långt det gick utan det: Lua-syntax kontrollerad med en fristående
+`lua`-interpreter (installerad via `brew install lua` för det här ändamålet),
+och hela orkestreringslogiken (JSON-tolkning, catalog-anrop,
+GUI-scriptningens `osascript`-sekvens, konfigurerbara väntetider, status-/
+done-filer) körd end-to-end mot mockade `LrXxx`-moduler i scratchpad-skript
+(inte incheckade — bara utvecklingsverktyg för den här sessionen).
+
+### 1. Gallringsbeslut till Lightroom via XMP i stället för radering
+
+Ny inställning `AppSettings.cullAction` med tre lägen:
+
+- **"markera"** (ny, default): rör inga filer. `PipelineRunner+Culling.swift`
+  (`cullExiftoolArguments`/`writeCullRatings`) skriver `XMP:Rating` — 3 för
+  accepterade, **-1** för avvisade (Lightroom Classics "Rejected"-flagga,
+  verifierat mot Adobes XMP-konvention: Lightroom visar en bild som avvisad
+  exakt när `xmp:Rating == -1`) — plus `XMP-photoshop:Urgency=8` (lägst i
+  IPTC:s 1–8-skala) på avvisade. Återanvänder samma NEF-symlänk-vs-
+  verklig-fil-uppdelning som `PipelineRunner.exiftoolArguments` i
+  `PipelineRunner+Metadata.swift` (Fas 1a): DNG/JPEG/HDR-TIFF skrivs
+  `-overwrite_original_in_place`, NEF får en XMP-sidecar.
+- **"radera"**: det gamla beteendet (`deleteRejectedFiles`), nu bakom en
+  `confirmationDialog` i `PreviewCullView` eftersom det är det enda av de tre
+  lägena som inte går att ångra.
+- **"flytta"**: flyttar (aldrig kopierar) avvisade filers symlänkar/filer
+  till en `Gallrade`-undermapp under respektive DNG-/TITTBILDER-/
+  ÖVRIGA-mapp.
+
+`PreviewCullView.finishCulling` dispatchar via en ny
+`PipelineRunner.finishCullingAction()` och visar statustext som matchar det
+valda läget (`performFinishCulling`). Ny `Picker` + förklarande text i
+`SettingsView` (Pipeline-fliken, sektion "Gallring"). Tester i
+`PipelineRunnerCullingTests` för argfile-byggandet (accepterad/avvisad, NEF
+vs DNG/sidecar-hantering).
+
+### 2. Generell ångra-stack i gallringen (upp till 50 beslut), ⌘Z
+
+`z` var tidigare bara en enda-nivå-ångra för senaste "Föreslå
+gallring"-batchen (Fas 3b). `PreviewCullView` har nu en riktig stack
+(`undoStack: [UndoAction]`, `pushUndo`/`performUndo`) som sparar upp till 50
+senaste besluten:
+
+- Varje manuell accept/avvisa (`acceptPhoto`/`rejectPhoto`) trycker en egen
+  `UndoAction` med en post (bild-id + tidigare `accepted`/`rejected`-tillstånd).
+- "Föreslå gallring" (`s`) trycker EN `UndoAction` som täcker hela batchen,
+  så en ångring återställer allihop på en gång — samma beteende som den
+  gamla enda-nivå-ångran hade, bara generaliserat.
+- Stacken begränsas till 50 poster (äldsta *action* faller bort som helhet,
+  aldrig mitt i en batch).
+- `z` och `⌘Z` hanteras av samma `onKeyPress(characters:)`-handler — AppKit
+  rapporterar samma tecken ("z") oavsett om Command hålls nere, vilket redan
+  var det underliggande beteendet de andra en-tangents-genvägarna (x/f/d/s)
+  i vyn förlitade sig på.
+- Z-knappen i både normal- och helskärmsvyn visas nu när `undoStack` inte är
+  tom, i stället för det gamla `lastSuggestionUndo != nil`-villkoret.
+
+### 3. Kalenderval via Picker i Inställningar i stället för fritext
+
+`AppSettings.calendarName` hade tidigare ETT hårdkodat personligt
+standardvärde ("Exempelkalender") och **ingen UI alls** — namnet
+kunde bara ändras genom att redigera koden. `SettingsView` (Pipeline-fliken,
+Kalendersektionen) har nu en `CalendarPickerRow`:
+
+- En riktig `Picker` som listar tillgängliga kalendrar via
+  `CalendarService.availableCalendarNames()` (`EKEventStore.calendars(for:
+  .event)`), med "Alla kalendrar" (tomt värde) som eget alternativ.
+- Om åtkomst inte beviljats än: en "Begär åtkomst"-knapp
+  (`CalendarService.authorizationStatus`, `EKAuthorizationStatus`).
+- Om åtkomst nekats/begränsats av systemet: ett fritextfält som fallback,
+  som fortfarande går genom `CalendarService.resolveCalendar`s
+  exakt/skiftlägesokänsliga/delvis-matchning mot namnet.
+
+`calendarName` har inte längre ett hårdkodat personligt standardvärde (tomt
+= alla kalendrar). En engångsmigrering (`AppSettings.
+migrateCalendarNameIfNeeded`, styrd av `calendarNameMigratedV1`) skriver in
+det gamla hårdkodade värdet explicit om användaren aldrig själv satt något —
+annars hade uppstarten efter den här ändringen tyst bytt beteende till
+"alla kalendrar" för befintliga användare som aldrig öppnat den här delen av
+Inställningar.
+
+### 4. Kvarstående från tidigare faser
+
+**Fas 1b — adressrättning uppdaterade inte mappningen:** att rätta en adress
+i `AddressBanner` uppdaterade tidigare bara `PipelineState.
+allMatchedAddresses` — `PipelineRunner.calendarMappings` (den faktiska
+källan `CalendarService.addressFolder` använder för mappnamn) förblev
+oförändrad tills kalenderstoppet kördes om helt. Ny
+`PipelineRunner+AddressCorrection.swift`:
+
+- `updateCalendarMappingAddress(from:to:)`: fixar `calendarMappings` i
+  minnet direkt, anropas från `AddressBanner`s `onSave`-callback.
+- `addressFolderAlreadySorted(_:)`: kollar om `files_sorted.json` OCH någon
+  av de tre adressmapparna redan finns på disk för den gamla adressen.
+- `resortAddressFolder(from:to:)`: döper om DNG-/TITTBILDER-/ÖVRIGA-mapparna
+  (`AddressFolderLayout`) till det nya namnet — rör bara mappar med exakt de
+  namn appen själv skapar, aldrig input-/originalmapparna.
+  `metadata_written.json` ogiltigförklaras redan av `PipelineState.
+  correctAddress` (Fas 1b), så metadata skrivs om med rätt adress vid nästa
+  körning; `files_sorted.json` påverkas inte (antalet sorterade filer ändras
+  inte av en ren mappomdöpning).
+
+`AddressBanner` visar en blå banner med knappen "Sortera om filerna till den
+nya adressmappen" när en rättning görs och filer redan sorterats under det
+gamla namnet. Tester i `PipelineRunnerAddressCorrectionTests`.
+
+**Fas 3b — filter/sortering i gallringen:** `PreviewCullView.headerBar` har
+en ny rad med två segmenterade kontroller: **"Visa"** (Alla / Ogranskade /
+Avvisade) och **"Sortera"** (Filnamn / Kvalitet).
+`filteredIndexedPhotos` filtrerar/sorterar `allPhotos` men rör aldrig
+beslut — bara vad filmremsan visar och i vilken ordning `navigate(_:)`
+(←/→, och Return/x:s automatiska "gå vidare") hoppar. `navigate` hanterar
+fallet där den aktuella bilden precis föll ur den filtrerade listan (t.ex.
+avvisas medan "Ogranskade" är valt) genom att hoppa till närmaste
+kvarvarande bild i samma riktning i stället för att fastna på en dold bild.
+
+### 5. Lightroom-integrationen
+
+- **Riktig bakgrundspollning**: appen loggade tidigare "Pluginet auto-pollar
+  var 5:e sekund" trots att inget i pluginet faktiskt pollade —
+  `RunHDRMerge.lua` kördes bara manuellt från menyn (`Library → Plug-in
+  Extras`). Ny `HDRMergeCore.lua` delas nu av `InitPlugin.lua` (startar en
+  `LrTasks.startAsyncTask`-loop som kollar trigger-filen var 5:e sekund via
+  `M.runOnce({showDialogIfMissing = false})`, `LrTasks.pcall`-skyddad per
+  varv så en trasig trigger-fil inte dödar loopen) och `RunHDRMerge.lua`
+  (kvar som manuell fallback/omedelbar koll — döpt om till "... (manuell
+  koll)" i menyn för att göra rollfördelningen tydlig).
+- **Riktig JSON-parsning**: den gamla regex-baserade `parseJSON` (letade
+  efter bokstavliga `"group_id"`/`"files"`/`"output_dir"`-mönster med
+  Lua-`%`-patterns) ersatt med en riktig liten recursive-descent
+  JSON-avkodare (`HDRMergeCore.decodeJSON`/`parseTrigger` — objekt, array,
+  sträng med alla standard-escape-sekvenser inklusive `\uXXXX`, tal,
+  bool/null). Den gamla parsern skulle t.ex. misstolka en filsökväg som
+  råkade innehålla texten `"files"` eller `"group_id"`; den nya klarar det
+  eftersom den faktiskt förstår JSON-strukturen i stället för att mönstermatcha
+  på nyckelnamn. Verifierat mot verklig, `.prettyPrinted`-formaterad
+  trigger-JSON (så som `JSONSerialization` faktiskt skriver den) med en
+  fristående Lua-interpreter under utvecklingen.
+- **Gemensam bridge-mapp**: appen skrev tidigare till
+  `NSTemporaryDirectory()`, pluginet läste från `LrPathUtils.
+  getStandardFilePath("temp")` — två olika API:er som råkar peka på samma
+  `$TMPDIR` på den här (osandboxade) maskinen, men utan någon garanti för
+  det (olika startkontext/macOS-version kan ge olika processer olika
+  `$TMPDIR`). Båda sidor använder nu `~/Library/Application Support/
+  PhotoFlow` — samma mapp `BookingTitleParser` redan använder för sin
+  cache (`booking_titles.json`) — för `lr_trigger.json`/`lr_status.json`/
+  `lr_done.json`. `PipelineRunner.lightroomBridgeDirectory` (Swift) och
+  `HDRMergeCore`s lokala `bridgeDir()` (Lua) måste hållas i exakt synk;
+  det är dokumenterat med kommentarer i båda filerna.
+- **Konfigurerbara väntetider**: GUI-scriptningen för själva
+  HDR-sammanslagningen (väljer bilderna, Ctrl+H, väntar på
+  förhandsvisningen, Enter — Lightroom SDK har fortfarande inget API för
+  HDR-merge) är oförändrad i sak, men de fyra hårdkodade `sleep()`-tiderna
+  (val-inställning, vänta på förhandsvisning, vänta på att sammanslagningen
+  blir klar, paus mellan grupper) är nu `LrPrefs`-baserade
+  (`M.selectSettleDelaySeconds()` m.fl. i `HDRMergeCore.lua`) i stället för
+  magiska tal i koden, med tydlig `logger:trace`-loggning vid varje
+  väntesteg (syns i Lightrooms egen logg,
+  `~/Library/Application Support/Adobe/Lightroom/lrc_console.log`, tack
+  vare `LrLogger:enable("print")`). En fullständig egen inställningsdialog
+  (`sectionsForTopOfDialog` i Plug-in Manager) byggdes INTE — den går inte
+  att öva in utan en riktig Lightroom-instans att klicka igenom, och att
+  leverera oprövad `LrView`-dialogkod bedömdes mer riskfyllt än
+  `LrPrefs`-värden med säkra standardvärden som ändå går att justera (redigera
+  defaultvärdena i filen, eller sätta dem direkt via Lua-konsolen).
+
+Ny Swift-test `PipelineRunnerLightroomTests` (bridge-mappens sökväg).
+`Info.lua` uppdaterad (version 1.2.0, menytexten förtydligad).
+
+### Manuell testning användaren bör göra
+
+1. **Gallring → "markera"-läget**: kör en gallring, avsluta med ESC, öppna
+   sedan adressmappen i Lightroom Classic (importera den om den inte redan
+   finns i katalogen) och kontrollera att accepterade bilder har 3 stjärnor
+   och avvisade visas som "Rejected" (svart flagga) i Lightrooms eget
+   filter/attributfält — utan att någon fil flyttats eller raderats.
+2. **Gallring → "flytta"/"radera"**: växla `cullAction` i Inställningar och
+   kontrollera att "flytta" skapar `Gallrade`-undermappar med rätt filer,
+   och att "radera" fortfarande visar bekräftelsedialogen och tar bort
+   filerna permanent när man bekräftar.
+3. **Ångra-stacken**: gör en blandning av manuella accept/avvisa och minst
+   en "Föreslå gallring"-körning, tryck `z` flera gånger i rad och
+   kontrollera att varje tryck återställer exakt ETT föregående steg (en
+   bild i taget för manuella beslut, hela batchen på en gång för ett
+   "Föreslå gallring"-tryck), samt att `⌘Z` gör samma sak.
+4. **Kalender-Pickern**: öppna Inställningar → Pipeline med och utan
+   tidigare beviljad kalenderåtkomst, kontrollera att rätt UI-läge visas
+   (Picker / "Begär åtkomst" / fritext-fallback) och att en ny installation
+   verkligen får "Alla kalendrar" som standard medan en uppgraderad
+   installation behåller sitt gamla (implicita) kalenderval.
+5. **Adressrättning + ompsortering**: kör en pipeline, låt filer sorteras,
+   rätta sedan en adress i `AddressBanner` och bekräfta att "Sortera om
+   filerna till den nya adressmappen"-bannern visas och att den faktiskt
+   döper om mapparna på disk (och att nästa körning av "Skriv metadata"
+   skriver den nya adressen till filerna).
+6. **Filter/sortering i gallringen**: testa alla kombinationer av
+   Visa-läge × Sorteringsordning, särskilt att ←/→ och nästa-bild-efter-
+   beslut hoppar förbi dolda bilder på ett förnuftigt sätt.
+7. **Lightroom-pluginet, riktig körning** (kunde inte testas i den här
+   GUI-lösa, autonoma körningen): installera/uppdatera pluginet i
+   Lightrooms Plug-in Manager, kör en riktig pipeline med bracket-grupper,
+   tryck "Skicka till Lightroom" och bekräfta att HDR-sammanslagningen
+   startar automatiskt inom ~5 sekunder UTAN att man behöver köra menyalternativet
+   manuellt. Kontrollera `~/Library/Application Support/PhotoFlow/
+   lr_trigger.json` försvinner och `lr_done.json` dyker upp, samt att
+   `lrc_console.log` visar `[trace]`-rader från `PhotoFlowHDR`-loggern.
+
+### Kvarstående / inte gjort i Fas 4
+
+- Ingen egen Plug-in Manager-inställningsdialog för väntetiderna i
+  Lightroom-pluginet (se avsnitt 5 ovan) — värdena är `LrPrefs`-baserade och
+  justerbara, men bara genom att redigera defaultvärdena i
+  `HDRMergeCore.lua` eller sätta dem via Lua-konsolen, inte via ett UI i
+  Lightroom självt.
+- Lightroom-pluginets faktiska beteende i en RIKTIG Lightroom-instans (den
+  automatiska pollningen, GUI-scriptningens tajming mot en verklig
+  HDR-sammanslagningsdialog, `require 'HDRMergeCore'` i Lightrooms egen
+  Lua-runtime) kunde inte köras — bara verifierat så långt möjligt med en
+  fristående `lua`-interpreter och mockade `LrXxx`-moduler (se
+  sessionsintroduktionen ovan). Punkt 7 i "Manuell testning" täcker vad som
+  bör kontrolleras med riktig Lightroom.
+- "Föreslå gallring" (Fas 3b/3c) och dess kalibrering är oförändrad —
+  filter/sortering (denna fas) och ångra-stacken (denna fas) bygger ovanpå
+  den utan att ändra själva förslagslogiken.
+- Ingen ny inställning för hur många ångra-poster som sparas (hårdkodat 50)
+  — bedömdes inte behöva vara justerbart av användaren.
