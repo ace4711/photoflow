@@ -2742,3 +2742,204 @@ HDR-motorn separat mot riktig data — bara den FULLA kedjan i ett enda
   smoke_test.json`) är avstängd/borttagen igen efter denna fas — normala
   `xcodebuild test`/Cmd+U-körningar påverkas inte och tar bara några
   sekunder som förut.
+
+## Fas 5 – Prestanda och UI-finish
+
+Utfört autonomt på branchen `forbattringar` medan användaren var vaken men
+utan att invänta svar, ett steg i taget med bygge + tester gröna före varje
+commit. Se `git log --oneline` för commit-för-commit-historik. 166 tester
+totalt efter denna fas, alla gröna.
+
+### 1. Bildcache och förhämtning i gallringen
+
+`LocalImageView`/`LocalThumbnailView`/`ProgressiveImageView`
+(`PhotoFlow/Sources/Views/LocalImageView.swift`) avkodade tidigare om samma
+fil från disk varje gång vyn dök upp igen (`onAppear`/`onChange`) — filmremsan
+i `PreviewCullView`/`BracketReviewView` kunde alltså avkoda samma
+förhandsbilds-JPEG dussintals gånger under en session.
+
+- **Ny `Services/ImageCache.swift`**: `@MainActor`-klass med två
+  `NSCache<NSURL, NSImage>`-nivåer — miniatyr (128 MB/4000 poster, filmremsan)
+  och fullstorlek (512 MB/200 poster, huvudvyn/RAW-rendering). Kostnad per
+  bild räknas som bredd × höjd × 4 (grov men tillräckligt korrekt
+  bytestorlek för `NSCache`s relativa bokföring). `NSCache` sköter själv
+  eviction vid minnespress utöver dessa gränser.
+- **Avbrytbar laddning**: alla tre vyerna använder nu `Task` (avbryts i
+  `onDisappear`/när `url` byts) i stället för en odetekterbar
+  `DispatchQueue.global`-anrop direkt i vyn. Den faktiska avkodningen sker
+  fortfarande i bakgrunden — `ImageLoader.downsampledImageAsync(at:maxDimension:)`
+  är en ny async-wrapper runt den redan befintliga, rena `downsampledImage`
+  (samma mönster som `renderRAW` sedan tidigare), så `Task` i vyn ersätter
+  bara vyens EGEN `DispatchQueue.global`-anrop, inte den faktiska
+  bakgrundskörningen.
+- **Förhämtning**: `PreviewCullView` förhämtar (miniatyr + fullstorlek) de
+  ±3 grannbilderna i den filtrerade/sorterade filmremsordningen när
+  `currentCullIndex` ändras; `BracketReviewView` förhämtar hela den aktuella
+  bracket-/singelgruppen (typiskt 1–5 bilder) när `selectedGroupIndex`
+  ändras. Verifierat i SDK:n (`grep` mot
+  `SwiftUI.swiftinterface`/`SwiftUICore.swiftinterface`) att det INTE finns
+  något dedikerat lazy-förhämtnings-API för `ScrollView`/`LazyHStack` i den
+  här macOS 27-SDK:n — bara `onScrollTargetVisibilityChange`/`scrollPosition`
+  finns, inget UIKit/AppKit-liknande cell-prefetching — så förhämtningen är
+  egen, indexbaserad logik (`ImageCache.prefetch(url:tier:maxDimension:)`,
+  spårar pågående förhämtningar i ett `Set<URL>` så samma bild inte startas
+  om flera gånger).
+- "RAW"-badgen i `ProgressiveImageView` bytt från en solid
+  `Capsule().fill(Color.accentColor.opacity(0.85))` till
+  `.glassEffect(.regular.tint(...), in: Capsule())` — samma stil som Fas 3g:s
+  övriga flytande badges (den låg utanför Fas 3g:s scope, se dess
+  "Kvarstående").
+- **Nya tester** (`ImageCacheTests.swift`): store/lookup per nivå (nivåerna
+  delar inte cache), `clear()`, `prefetch` mot en riktig genererad
+  test-JPEG (pollar tills cachen fylls i, eftersom förhämtningen körs i en
+  detached bakgrundsuppgift), samt `prefetch` mot en obefintlig fil/`nil`-URL
+  (kraschar inte, lämnar cachen tom).
+
+**Mätning** (`scratchpad/cache_bench.swift`, samma avkodningskod som
+`ImageLoader.downsampledImage` — CGImageSource-thumbnailing, inte en
+förenklad approximation): 21 riktiga förhandsbilds-JPEG (från Fas 2a:s
+ImageIO-jämförelse, samma sorts filer appen faktiskt hanterar,
+5152×3432–8256×5504 källupplösning) i en simulerad 30-stegs
+gallringssession (framåt genom alla 21, sedan tillbaka genom de sista 12 —
+9 av 30 steg är alltså återbesök, en realistisk andel för att jämföra
+bilder man redan sett):
+
+| Nivå | Utan cache | Med cache | Speedup |
+|---|---|---|---|
+| Miniatyr (200px) | 1.170 s (39.0 ms/bild) | 0.740 s (24.7 ms/bild) | **1.58x** |
+| Fullstorlek (2400px) | 1.727 s (57.6 ms/bild) | 1.326 s (44.2 ms/bild) | **1.30x** |
+
+Speedupen är måttlig här eftersom bara 9/30 steg är återbesök (unika bilder
+måste ändå avkodas en gång) — i en riktig session med mer fram-och-tillbaka-
+bläddring (vanligt när man jämför brackets/dubbletter) blir vinsten större,
+och förhämtningen (som detta benchmark inte mäter, bara själva cachen) gör
+att de FÖRSTA besöken av grannbilder ofta redan är klara i bakgrunden innan
+användaren hinner navigera dit. Inga NEF/RAW-filer fanns tillgängliga i den
+här autonoma körningen för att mäta RAW-renderingscachen (`renderRAW`,
+4800px) på samma sätt, men samma cache-mekanism gäller den oförändrat —
+den är den absolut dyraste operationen i `ProgressiveImageView` (Fas 3a:
+CIRAWFilter-rendering, sekunder per bild), så cachningen av den bör ge
+proportionellt större vinst vid återbesök.
+
+### 2. Resten av UI:t till Fas 3g-stilen
+
+Fas 3g dokumenterade `StepCardView`, `SettingsView`, `DictationPanelView`
+och `LocalImageView`s "RAW"-badge som medvetet kvarstående ("strukturella
+paneler ... utanför den fasens scope"). Bytt till `.regularMaterial`-kort/
+paneler, samma tidsenliga stil som DashboardView/PreviewCullView/
+BracketReviewView redan fick i Fas 3g:
+
+- `StepCardView`: stegkortens bakgrund (`RoundedRectangle.fill`) och
+  `StepDetailSheet`s headerbakgrund.
+- `SettingsView`: den nedre "Klar"-footern, `SystemCheckTab`s statusfooter,
+  och `DependencyRow`-korten. `Form`/`.formStyle(.grouped)` användes redan
+  konsekvent i alla flikar sedan tidigare faser (Fas 3e/3f/4) — det var bara
+  de kringliggande handbyggda panelerna som fortfarande hade
+  `controlBackgroundColor`.
+- `DictationPanelView`: panelens bakgrund.
+- "RAW"-badgen: se punkt 1 ovan (gjordes i samma commit som resten av
+  bildcache-arbetet, eftersom den ligger i samma fil som cache-ändringarna).
+
+Ingen funktionalitet, layout-logik eller text ändrad — bara bakgrundsstil.
+
+**Visuell verifiering — delvis blockerad**: skärmen var upplåst
+(`IOConsoleLocked: false` via `ioreg`), till skillnad från Fas 3g. `open -n`
++ `screencapture -x -o scratchpad/fas5_dashboard.png` kördes, men en
+systemdialog ("Allow "PhotoFlow" to access your calendar?", macOS
+EventKit-behörighetsprompt) låg över hela skärmen och gick inte att komma
+förbi: `osascript -e 'tell application "PhotoFlow" to activate'` ändrade
+ingenting, och dialogen **kvarstod även efter `pkill -x PhotoFlow`** — ett
+bevis på att den inte tillhörde den här körningens process, utan redan låg
+kvar på skärmen sedan tidigare (troligen från en tidigare autonom körning
+samma natt). Att stänga den (Tillåt/Tillåt inte) hade varit en riktig,
+kvarstående ändring av kalenderbehörighet på användarens faktiska Mac —
+och gick uttryckligen inte att göra genom att "klicka i GUI:t"
+(agent-reglerna tillåter inte det) — så dialogen lämnades helt orörd.
+Skärmbilderna (`scratchpad/fas5_dashboard.png`, `fas5_dashboard2.png`,
+`fas5_afterkill.png` — inte committade, ligger bara i scratchpad) visar
+därför bara den blockerande dialogen och andra fönster på skärmen, inte
+PhotoFlow-fönstret. Verifierat i stället genom kodgranskning: samma
+`.regularMaterial`/`.glassEffect`-mönster som redan är visuellt bekräftat
+fungera i appen sedan Fas 3g (som DEN gången kunde skärmbildsverifieras,
+se dess punkt 5) — bara applicerat på fler ställen. **Användaren bör göra
+en snabb egen visuell koll** av Inställningar (alla fem flikar),
+dikteringspanelen (gallringsvyn, tryck `d`) och stegkortens
+detaljvy (klicka info-ikonen på ett kort med logg) i både ljust och mörkt
+läge.
+
+### 3. `PipelineRunner.pipelineLog`/`logDecision`: statiska formatters
+
+Samma kosmetiska städning som Fas 1a flaggade som kvarstående (den fasen
+fokuserade bara på den globala Desktop-loggen, inte per-körnings-loggen):
+`pipelineLog`/`logDecision` skapade en ny `DateFormatter`/
+`ISO8601DateFormatter` per loggrad — anropas hundratals gånger per körning.
+Bytt till statiska `Self.pipelineLogTimeFormatter`/
+`Self.decisionLogTimestampFormatter`, samma mönster som
+`PipelineState.LogLine.timeFormatter` sedan Fas 1a. Ingen beteendeändring.
+
+### 4. Menyradens status speglar pipelinen live
+
+Fas 3e dokumenterade som kvarstående att `MenuBarExtra`-menyns text bara
+speglade `WatchService.newFilesFound`, aldrig en pågående körning eller att
+gallringen väntade på granskning. Kopplad till `PipelineState`
+(`PhotoFlowApp.swift`):
+
+- `MenuBarExtraContent.statusText` prioritetsordning: **"Väntar på
+  granskning · N bilder"** (när `stepStatuses[.manualReview].phase ==
+  .needsAttention`, satt av `PipelineRunner` när gallringssteget nås) >
+  **"\<steg\> · bearbetade/totalt"** under en pågående körning (även
+  "Pausad · \<steg\>" via `pipeline.isPaused`, med `currentStep.title` +
+  `currentFileIndex`/`totalFiles`) > **"Bevakar · N nya"**/"Bevakning
+  avstängd" som tidigare (bevakningsläget, oförändrat).
+- `MenuBarExtraLabel`s ikon byts till en utropstecken-cirkel
+  (`exclamationmark.circle.fill`) när något väntar på granskning, i stället
+  för att bara växla kamera/öga för bevakningsläget — den "notisprick/
+  ikonbyte"-signal uppgiften efterfrågade.
+- Delad `MenuBarStatus.needsAttention(_:)`-logik mellan ikon och text så de
+  aldrig kan gå isär.
+
+Ingen ny inställning behövdes — det här är en ren informationsvisning av
+redan existerande tillstånd (`PipelineState`), inte ett nytt beteende som
+kör något automatiskt.
+
+### Manuell testning användaren bör göra
+
+1. **Gallringens prestanda på en riktig, stor session** (300+ bilder): bläddra
+   fram och tillbaka i filmremsan/huvudvyn och jämför upplevd snabbhet mot
+   tidigare — särskilt vid återbesök av samma bilder (jämföra brackets,
+   ångra ett beslut och gå tillbaka).
+2. **Minnesanvändning under en lång session**: håll ett öga på PhotoFlows
+   minnesanvändning i Aktivitetsövervakaren under en session med många
+   bilder — `ImageCache`s gränser (128/512 MB) ska hålla den i schack även
+   efter att ha bläddrat igenom hela sessionen flera gånger.
+3. **Visuell koll av punkt 2** (se ovan) i både ljust och mörkt läge —
+   kunde inte skärmbildsverifieras den här körningen.
+4. **Menyradsstatus under en riktig körning**: starta pipelinen, kolla
+   menyradsikonen/texten medan olika steg kör, och igen när gallringen är
+   redo att granskas (ikonen ska bli en utropstecken-cirkel, texten "Väntar
+   på granskning · N bilder").
+5. **Den stale kalenderdialogen** som blockerade skärmen den här körningen
+   (se punkt 2 ovan) — om den fortfarande finns kvar öppen bör den
+   tillåtas/nekas eller stängas manuellt av användaren; den är inte skapad
+   eller orsakad av den här fasens ändringar.
+
+### Kvarstående / inte gjort i Fas 5
+
+- RAW-renderingscachen (punkt 1) kunde inte mätas mot riktiga NEF/DNG-filer
+  i den här autonoma körningen (inga fanns tillgängliga i scratchpad denna
+  gång) — bara resonerat om att samma cache-mekanism gäller den och att
+  vinsten sannolikt är större där (dyrare operation).
+- Fullständig visuell skärmbildsverifiering av punkt 2 (UI-stilen) kunde
+  inte göras (se punkt 2 ovan) — kodgranskning mot ett redan visuellt
+  bekräftat mönster (Fas 3g) användes i stället.
+- Ingen ny inställning för att justera `ImageCache`s storleksgränser
+  (128/512 MB) — bedömdes vara en implementationsdetalj, inte något en
+  användare behöver justera; om en riktigt stor session (1000+ bilder) visar
+  sig behöva mer är gränserna en enkel kodändring i `Services/ImageCache.swift`.
+- Ingen `onScrollTargetVisibilityChange`-baserad förhämtning — verifierat
+  att den finns i SDK:n men den löser ett annat problem (vilka rader är
+  synliga i en `ScrollView`, för lazy-laddning av innehåll som annars inte
+  skulle laddas alls), inte "ladda grannar innan de blir synliga" — den
+  egna indexbaserade förhämtningen (±3 runt `currentCullIndex`) täcker
+  redan appens faktiska navigeringsmönster (sekventiell bläddring med
+  ←/→, inte fri skrollning) bättre.
