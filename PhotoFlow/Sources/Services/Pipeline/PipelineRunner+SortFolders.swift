@@ -5,9 +5,62 @@ extension PipelineRunner {
     func exportToAddressFolders() async {
         guard let outputDir = state.outputDirectory else { return }
 
+        // Fas 8: manifest-fingerprint av bildlistan + de saker som avgör
+        // VILKEN mapp/koordinat en bild hamnar i utan att ändra
+        // `state.allPhotos.count` (kalenderadresser/manuella GPS-rättningar,
+        // HDR-mergens av/på-läge). Den gamla ren-antals-jämförelsen nedanför
+        // (fallback) missade t.ex. en adressrättning (`correctAddress`) på en
+        // redan sorterad session — samma antal bilder, men rätt session
+        // borde sorteras om till den rättade adressmappen.
+        let addressSignature = calendarMappings
+            .map { "\($0.address)|\($0.eventTitle)" }
+            .sorted()
+            .joined(separator: ";")
+        let correctionSignature = state.correctedCoordinates
+            .map { "\($0.key)=\($0.value.latitude),\($0.value.longitude)" }
+            .sorted()
+            .joined(separator: ";")
+        let sortFingerprint = SessionManifestStore.fingerprint(
+            fileURLs: state.allPhotos.map(\.nefURL),
+            settings: [
+                "hdrMergeEnabled": "\(AppSettings.shared.hdrMergeEnabled)",
+                "addresses": addressSignature,
+                "corrections": correctionSignature
+            ]
+        )
+        state.setPendingFingerprint(sortFingerprint, for: .moveToFolders)
+
         // Check if sorting has already been done
         let sortMarkerFile = outputDir.appendingPathComponent("files_sorted.json")
-        if FileManager.default.fileExists(atPath: sortMarkerFile.path),
+        let manifestFingerprintMatches = state.sessionManifest?.steps[DashboardStep.moveToFolders.manifestKey]?.inputFingerprint == sortFingerprint
+        if manifestFingerprintMatches,
+           FileManager.default.fileExists(atPath: sortMarkerFile.path),
+           let data = try? Data(contentsOf: sortMarkerFile),
+           let saved = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let savedCount = saved["photos_sorted"] as? Int,
+           savedCount == state.allPhotos.count {
+            logDecision(step: "move_to_folders", decision: "skipped", details: [
+                "reason": "manifest_fingerprint_match",
+                "photosSorted": "\(savedCount)",
+                "fingerprint": sortFingerprint
+            ])
+            state.appendStepLog(.moveToFolders, "Filer redan sorterade (\(savedCount) bilder) — hoppar över", type: .info)
+            state.appendLog("Filsortering redan klar — hoppar över.", type: .info)
+            return
+        }
+
+        // Fallback ENDAST för sessioner som aldrig fått ett manifest-
+        // steg-record för moveToFolders (t.ex. körda före Fas 6/8) — samma
+        // rena antals-jämförelse som fanns innan denna fas. Om ett
+        // manifest-record REDAN finns men inte matchar fingerprintet ovan
+        // (adress rättad, HDR-läge ändrat, etc.) ska vi INTE falla tillbaka
+        // hit och tyst hoppa över ändå — det var precis den bristen (bara
+        // antal, ingen inställnings-/adresskänslighet) Fas 6 flaggade som
+        // medveten avgränsning i "Kvarstående"-avsnittet och Fas 8 uttryckligen
+        // skulle täppa till.
+        let hasManifestRecord = state.sessionManifest?.steps[DashboardStep.moveToFolders.manifestKey] != nil
+        if !hasManifestRecord,
+           FileManager.default.fileExists(atPath: sortMarkerFile.path),
            let data = try? Data(contentsOf: sortMarkerFile),
            let saved = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let savedCount = saved["photos_sorted"] as? Int,

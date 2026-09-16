@@ -118,22 +118,57 @@ extension PipelineRunner {
         let calendar = CalendarService.shared
         let fm = FileManager.default
 
+        // Fas 8: manifest-fingerprint av bildlistan + AI-taggar/beskrivning
+        // per bild + adress-/rättningssignaturen (samma som moveToFolders) +
+        // om AI-taggning är av/på. Fångar t.ex. en omkörd AI-taggning eller
+        // adressrättning som inte ändrar antalet adressmappar/filer, vilket
+        // den gamla ren-antals-markörfilen (nedan, kvar som fallback för
+        // sessioner utan manifest-record) missade.
+        let aiTagsSignature = state.allPhotos
+            .filter { !$0.aiTags.isEmpty || !$0.aiDescription.isEmpty }
+            .map { "\($0.filename):\($0.aiTags.joined(separator: ",")):\($0.aiDescription)" }
+            .sorted()
+            .joined(separator: ";")
+        let addressSignature = calendarMappings
+            .map { "\($0.address)|\($0.eventTitle)" }
+            .sorted()
+            .joined(separator: ";")
+        let correctionSignature = state.correctedCoordinates
+            .map { "\($0.key)=\($0.value.latitude),\($0.value.longitude)" }
+            .sorted()
+            .joined(separator: ";")
+        let metadataFingerprint = SessionManifestStore.fingerprint(
+            fileURLs: state.allPhotos.map(\.nefURL),
+            settings: [
+                "aiTaggingEnabled": "\(AppSettings.shared.aiTaggingEnabled)",
+                "aiTags": aiTagsSignature,
+                "addresses": addressSignature,
+                "corrections": correctionSignature
+            ]
+        )
+        state.setPendingFingerprint(metadataFingerprint, for: .writeIPTCTags)
+
         // Check if metadata has already been written (skip if so).
         // Markers without "version": Self.metadataMarkerVersion are from before the
         // DNG-folder-suffix fix / NEF-sidecar fix and must NOT be trusted — otherwise
         // existing sessions would never get corrected metadata on next run.
         let metadataMarkerFile = outputDir.appendingPathComponent("metadata_written.json")
+        let metadataManifestRecord = state.sessionManifest?.steps[DashboardStep.writeIPTCTags.manifestKey]
         if fm.fileExists(atPath: metadataMarkerFile.path),
            let data = try? Data(contentsOf: metadataMarkerFile),
            let saved = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let savedVersion = saved["version"] as? Int, savedVersion == Self.metadataMarkerVersion,
            let savedFolderCount = saved["folders_written"] as? Int,
            let savedFileCount = saved["files_written"] as? Int,
-           savedFolderCount == calendarMappings.count {
+           savedFolderCount == calendarMappings.count,
+           // Manifestet matchar, eller (bakåtkompatibilitet) sessionen har
+           // inget fingerprint-record för det här steget än.
+           (metadataManifestRecord == nil || metadataManifestRecord?.inputFingerprint == metadataFingerprint) {
             logDecision(step: "write_iptc", decision: "skipped", details: [
-                "reason": "marker_exists",
+                "reason": metadataManifestRecord == nil ? "marker_exists_no_manifest_record" : "manifest_fingerprint_match",
                 "filesWritten": "\(savedFileCount)",
-                "foldersWritten": "\(savedFolderCount)"
+                "foldersWritten": "\(savedFolderCount)",
+                "fingerprint": metadataFingerprint
             ])
             state.appendStepLog(.writeIPTCTags, "Metadata redan skriven (\(savedFileCount) filer, \(savedFolderCount) adresser) — hoppar över", type: .info)
             state.appendLog("Metadata redan skriven — hoppar över.", type: .info)

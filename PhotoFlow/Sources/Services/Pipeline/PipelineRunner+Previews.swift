@@ -12,6 +12,18 @@ extension PipelineRunner {
 
         let nefFiles = findNEFFiles(in: inputDir)
 
+        // Fas 8: manifest-fingerprint satt HÄR (innan något skip-beslut), av
+        // samma skäl som bracket-analysen/AI-taggningen i Fas 6 — så
+        // manifestet alltid får rätt värde när steget markeras klart nedanför
+        // i PipelineRunner.swift, oavsett vilken gren nedan tar. Preview-
+        // extraktion har inga egna inställningar som påverkar resultatet
+        // (samma exiftool-kommando oavsett), så fingerprintet är bara
+        // filnamn+storlek — den faktiska skip-kontrollen är fortfarande den
+        // per-fil-baserade jämförelsen nedanför (starkare än ett fingerprint
+        // ensamt: den upptäcker exakt VILKA NEF-filer som saknar en preview).
+        let fingerprint = SessionManifestStore.fingerprint(fileURLs: nefFiles)
+        state.setPendingFingerprint(fingerprint, for: .generatePreviews)
+
         // Check if all previews already exist — compare basenames, not counts.
         // A raw count comparison ("existingPreviews >= nefFiles.count") can pass
         // even when the previews on disk don't actually match the current NEF set
@@ -25,7 +37,8 @@ extension PipelineRunner {
             logDecision(step: "preview_generation", decision: "skipped", details: [
                 "reason": "all_exist",
                 "existingCount": "\(existingPreviewNames.count)",
-                "nefCount": "\(nefFiles.count)"
+                "nefCount": "\(nefFiles.count)",
+                "fingerprint": fingerprint
             ])
             state.appendLog("Alla \(nefFiles.count) previews finns redan — hoppar over.", type: .info)
             state.appendStepLog(.generatePreviews, "Alla \(nefFiles.count) previews finns redan — hoppar over", type: .info)

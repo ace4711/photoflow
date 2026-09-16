@@ -7,9 +7,35 @@ extension PipelineRunner {
     func matchCalendarBookings() async {
         guard let outputDir = state.outputDirectory else { return }
 
-        // Check if calendar_matches.json already exists
+        // Fas 8: manifest-fingerprint av bracket_groups.json (representerar
+        // fotodatumen matchningen läser) + vilken kalender som söks — satt
+        // HÄR (innan något skip-beslut) av samma skäl som övriga
+        // fingerprint-grindade steg. Byte av `calendarName` i Inställningar
+        // ändrar inte fotoantalet, men SKA trigga en ny matchning i stället
+        // för att tyst återanvända en gammal `calendar_matches.json` mot fel
+        // kalender — det var precis den sortens bugg (`maxTimeGap`) Fas 6:s
+        // fingerprint-mönster fanns till för att stänga.
+        let groupsJSONForFingerprint = outputDir.appendingPathComponent("bracket_groups.json")
+        let calendarFingerprint = SessionManifestStore.fingerprint(
+            fileURLs: [groupsJSONForFingerprint],
+            settings: ["calendarName": AppSettings.shared.calendarName]
+        )
+        state.setPendingFingerprint(calendarFingerprint, for: .findCalendarInfo)
+
+        // Check if calendar_matches.json already exists AND the manifest
+        // fingerprint still matches (samma bracket_groups.json + samma
+        // vald kalender). Annars matchas om nedanför, precis som ett
+        // vanligt förstagångskörning.
         let matchesFile = outputDir.appendingPathComponent("calendar_matches.json")
-        if let savedData = try? Data(contentsOf: matchesFile),
+        let manifestRecord = state.sessionManifest?.steps[DashboardStep.findCalendarInfo.manifestKey]
+        // Manifestet matchar, ELLER (bakåtkompatibilitet) sessionen kördes
+        // före Fas 8 och har inget fingerprint-record alls för det här
+        // steget än — då är den gamla "filen finns och är inte tom"-
+        // kontrollen fortfarande rimlig (annars skulle varje uppgraderad,
+        // redan klar session i onödan göra om kalenderåtkomst+geokodning).
+        let canUseCache = manifestRecord == nil || manifestRecord?.inputFingerprint == calendarFingerprint
+        if canUseCache,
+           let savedData = try? Data(contentsOf: matchesFile),
            let savedJSON = try? JSONSerialization.jsonObject(with: savedData) as? [[String: Any]],
            !savedJSON.isEmpty {
             // Load from disk
@@ -43,8 +69,9 @@ extension PipelineRunner {
             state.matchedAddress = state.allMatchedAddresses.first?.address
             state.matchedEventTitle = state.allMatchedAddresses.first?.eventTitle
             logDecision(step: "calendar_match", decision: "skipped", details: [
-                "reason": "json_exists",
-                "matchCount": "\(calendarMappings.count)"
+                "reason": manifestRecord == nil ? "json_exists_no_manifest_record" : "manifest_fingerprint_match",
+                "matchCount": "\(calendarMappings.count)",
+                "fingerprint": calendarFingerprint
             ])
             state.appendStepLog(.findCalendarInfo, "Kalendermatchningar redan sparade (\(calendarMappings.count) st) — hoppar over", type: .info)
             state.appendLog("Kalendermatchning redan klar — laddar fran calendar_matches.json.", type: .info)
