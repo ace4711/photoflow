@@ -16,14 +16,26 @@ struct PreviewCullView: View {
     /// förstöra data.
     @State private var showDeleteConfirmation: Bool = false
 
-    // MARK: - "Föreslå gallring" (Fas 3b)
+    // MARK: - Ångra (Fas 4: generell ångra-stack, tidigare bara "Föreslå gallring")
 
-    /// Single-level undo buffer for the last "Föreslå gallring" batch — stores
-    /// each affected photo's decision *before* the suggestion was applied, so
-    /// `z` can restore exactly that (and only that) batch. A manual accept/
-    /// reject on any photo doesn't touch this buffer; `z` always undoes the
-    /// most recent `s` press, not general undo.
-    @State private var lastSuggestionUndo: [(id: String, wasAccepted: Bool, wasRejected: Bool)]?
+    /// One undoable action: the decisions its affected photo(s) had
+    /// *immediately before* the action ran. A manual accept/reject creates a
+    /// one-entry action; "Föreslå gallring" (`s`) creates one action covering
+    /// every photo it changed, so a single `z`/⌘Z undoes the whole batch at
+    /// once — matching the old single-level "Föreslå gallring" undo's
+    /// behavior, just generalized to every kind of decision.
+    private struct UndoAction {
+        let entries: [(id: String, wasAccepted: Bool, wasRejected: Bool)]
+    }
+
+    /// Stack of the up to 50 latest undoable actions (oldest dropped first).
+    /// `z`/⌘Z pops and restores the most recent one. 50 is a generous bound
+    /// for a manual review session (a real session rarely exceeds a few
+    /// hundred photos total) while keeping memory bounded — each entry is
+    /// just an id + two bools.
+    @State private var undoStack: [UndoAction] = []
+    private static let maxUndoStackSize = 50
+
     @State private var suggestionMessage: String?
     @State private var suggestionMessageTask: Task<Void, Never>?
 
@@ -78,7 +90,11 @@ struct PreviewCullView: View {
             return .handled
         }
         .onKeyPress(characters: CharacterSet(charactersIn: "z")) { _ in
-            undoLastSuggestion()
+            // Handles both "z" and "⌘Z" — AppKit reports the same character
+            // ("z") for the key regardless of whether Command is held, so one
+            // handler covers both (verified: the existing single-key handlers
+            // for x/f/d/s below already rely on the same behavior).
+            performUndo()
             return .handled
         }
         .onAppear {
@@ -245,8 +261,8 @@ struct PreviewCullView: View {
                 Spacer()
                 fsSymbol(icon: "wand.and.stars", label: "S", color: .white, action: suggestCulling)
                 Spacer()
-                if lastSuggestionUndo != nil {
-                    fsSymbol(icon: "arrow.uturn.backward.circle", label: "Z", color: .white, action: undoLastSuggestion)
+                if !undoStack.isEmpty {
+                    fsSymbol(icon: "arrow.uturn.backward.circle", label: "Z", color: .white, action: performUndo)
                     Spacer()
                 }
                 fsSymbol(icon: "arrow.down.right.and.arrow.up.left", label: "F", color: .white, action: { withAnimation { isFullscreen = false } })
@@ -370,8 +386,8 @@ struct PreviewCullView: View {
                 symbolButton(icon: "wand.and.stars", label: "S", color: .secondary, action: suggestCulling)
                 Spacer()
 
-                if lastSuggestionUndo != nil {
-                    symbolButton(icon: "arrow.uturn.backward.circle", label: "Z", color: .secondary, action: undoLastSuggestion)
+                if !undoStack.isEmpty {
+                    symbolButton(icon: "arrow.uturn.backward.circle", label: "Z", color: .secondary, action: performUndo)
                     Spacer()
                 }
 
@@ -751,6 +767,8 @@ struct PreviewCullView: View {
 
     private func acceptPhoto() {
         guard pipeline.currentCullIndex < pipeline.allPhotos.count else { return }
+        let photo = pipeline.allPhotos[pipeline.currentCullIndex]
+        pushUndo(UndoAction(entries: [(photo.id, photo.accepted, photo.rejected)]))
         pipeline.allPhotos[pipeline.currentCullIndex].accepted = true
         pipeline.allPhotos[pipeline.currentCullIndex].rejected = false
         audio.playAccept()
@@ -760,6 +778,8 @@ struct PreviewCullView: View {
 
     private func rejectPhoto() {
         guard pipeline.currentCullIndex < pipeline.allPhotos.count else { return }
+        let photo = pipeline.allPhotos[pipeline.currentCullIndex]
+        pushUndo(UndoAction(entries: [(photo.id, photo.accepted, photo.rejected)]))
         pipeline.allPhotos[pipeline.currentCullIndex].accepted = false
         pipeline.allPhotos[pipeline.currentCullIndex].rejected = true
         audio.playReject()
@@ -836,31 +856,47 @@ struct PreviewCullView: View {
         }
 
         let suggestedIDs = suggestion.all
-        var undoBuffer: [(id: String, wasAccepted: Bool, wasRejected: Bool)] = []
+        var undoEntries: [(id: String, wasAccepted: Bool, wasRejected: Bool)] = []
         for photo in pipeline.allPhotos where suggestedIDs.contains(photo.id) {
-            undoBuffer.append((photo.id, photo.accepted, photo.rejected))
+            undoEntries.append((photo.id, photo.accepted, photo.rejected))
             pipeline.setDecision(photoID: photo.id, accepted: false, rejected: true)
         }
-        lastSuggestionUndo = undoBuffer
+        pushUndo(UndoAction(entries: undoEntries))
         pipeline.saveCullDecisions()
         audio.playReject()
 
         var parts: [String] = []
         if !suggestion.duplicates.isEmpty { parts.append("\(suggestion.duplicates.count) dubbletter") }
         if !suggestion.utility.isEmpty { parts.append("\(suggestion.utility.count) nyttobilder") }
-        showSuggestionMessage("Föreslog \(undoBuffer.count) bilder för gallring (\(parts.joined(separator: ", "))). Tryck z för att ångra.")
+        showSuggestionMessage("Föreslog \(undoEntries.count) bilder för gallring (\(parts.joined(separator: ", "))). Tryck z (eller ⌘Z) för att ångra.")
     }
 
-    /// Undoes the most recent `suggestCulling()` batch only — restores exactly
-    /// the decisions those photos had immediately before the suggestion.
-    private func undoLastSuggestion() {
-        guard let undoBuffer = lastSuggestionUndo else { return }
-        for entry in undoBuffer {
+    // MARK: - Generell ångra-stack (Fas 4)
+
+    /// Pushes a new undo action, capping the stack at `maxUndoStackSize` by
+    /// dropping the oldest action(s) — never dropping in the middle of a
+    /// batch, since each `UndoAction` must be undone as a whole.
+    private func pushUndo(_ action: UndoAction) {
+        undoStack.append(action)
+        while undoStack.count > Self.maxUndoStackSize {
+            undoStack.removeFirst()
+        }
+    }
+
+    /// Pops and restores the most recent undoable action — a single manual
+    /// accept/reject, or a whole "Föreslå gallring" batch. Bound to both `z`
+    /// and `⌘Z` (see the `onKeyPress` handler in `body`).
+    private func performUndo() {
+        guard let action = undoStack.popLast() else {
+            showSuggestionMessage("Inget att ångra.")
+            return
+        }
+        for entry in action.entries {
             pipeline.setDecision(photoID: entry.id, accepted: entry.wasAccepted, rejected: entry.wasRejected)
         }
         pipeline.saveCullDecisions()
-        lastSuggestionUndo = nil
-        showSuggestionMessage("Ångrade \(undoBuffer.count) förslag.")
+        let word = action.entries.count == 1 ? "beslut" : "beslut (\(action.entries.count) bilder)"
+        showSuggestionMessage("Ångrade \(word).")
     }
 
     private func showSuggestionMessage(_ text: String) {
