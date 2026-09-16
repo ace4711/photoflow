@@ -3200,3 +3200,235 @@ via historikregistret.
   Bedömdes inte behöva en egen avstängningsbar inställning eftersom
   beteendet strikt är "samma eller bättre" (uppdragets krav), inte ett nytt
   automatiskt beteende i pipelinen som skulle behöva kunna stängas av.
+
+## Fas 7 – iPhone-app för fältanteckningar ("PhotoFlow Fält")
+
+Utfört autonomt på branchen `forbattringar` medan användaren sov, ett steg i
+taget med bygge + tester gröna före varje commit. Se `git log --oneline` för
+commit-för-commit-historik. 208 tester totalt efter denna fas, alla gröna
+(macOS-målet `PhotoFlow`). Det nya iOS-målet `PhotoFlowField` har inga egna
+`xcodebuild test`-tester (ingen egen testbundle skapades — all delad/testbar
+logik ligger i `Sources/Shared` och testas via `PhotoFlowTests`, se nedan)
+men verifierades gå grönt att bygga och köra.
+
+**Viktig begränsning** (given i uppdraget): det finns inget riktigt
+signeringsteam för det här projektet, så `PhotoFlowField` kan bara byggas
+och köras i Simulator — inga iCloud/CloudKit-entitlements används någonstans.
+Synk mellan telefon och Mac sker uteslutande via en exporterad
+`.photoflownotes`-fil (delningsark/Filer/AirDrop), som Mac-appen sedan
+importerar. iCloud/CloudKit är dokumenterat nedan som ett framtida steg.
+
+### 1. Sources/Shared — delad kod mellan de två apparna
+
+`PhotoNote.swift` flyttades från `Sources/Models/` till en ny
+`Sources/Shared/`-mapp (macOS-målets `sources: [Sources]` täckte den
+oförändrat, ingen `project.yml`-ändring behövdes för själva flytten). Ny
+delad kod i samma mapp:
+
+- **`FieldNote`**: `id` (UUID), `recordedAt` (Date), `text`,
+  `transcriptLanguage` (återanvänder `PhotoNote.NoteLanguage`), valfri
+  `FieldCoordinate` (lat/lon + `horizontalAccuracy`, en ren
+  Foundation-struct utan CoreLocation-beroende så den är trivialt
+  `Codable`/testbar), valfri `roomLabel`/`photoHintCount`.
+- **`FieldNoteBundle`**: Codable-container (`schemaVersion`, `exportedAt`,
+  `deviceName`, `notes`). UTType `com.photoflow.fieldnotes` (filändelse
+  `.photoflownotes`) registreras dynamiskt via
+  `UTType(exportedAs:conformingTo:)`/`UTType(importedAs:conformingTo:)`
+  (signaturer verifierade mot SDK:n) OCH deklareras statiskt i båda
+  targetens Info.plist (se punkt 3) — PhotoFlowField (iOS) exporterar/äger
+  typen, PhotoFlow (macOS) importerar/konsumerar den.
+- **`FieldNoteMatcher`**: matchar varje anteckning mot sessionens
+  tidsmässigt närmaste bild via ett litet `TimestampedPhoto`-protokoll
+  (bara `photoID`/`capturedAt`) i stället för att dra in macOS-appens
+  `PhotoItem` i den delade koden. Standardfönster ±90s, konfigurerbart, plus
+  en klockdrift-`clockOffset` som läggs till varje anteckning innan
+  matchning. Ingen bild inom fönstret → anteckningen blir en
+  "sessionsanteckning" (`photoID == nil`). Flera anteckningar kan matcha
+  samma bild (var och en matchas oberoende).
+- **`DictationTextAccumulator`**: den rena text-/stoppords-logiken ur
+  macOS-appens `DictationService` (Fas 3c) bröts ut hit så
+  `PhotoFlowField`s egen `FieldDictationService` (iOS) kan återanvända
+  exakt samma `finalizedText`/`volatileText`-ackumulering och
+  stoppordsdetektering i stället för att duplicera den.
+  `DictationService.accumulate`/`stripTrailingStopWord`/`stopWords` finns
+  kvar som tunna vidarebefordrare — inga befintliga anropsställen eller
+  tester behövde ändras.
+
+`PipelineRunnerFieldNotesTests`/`FieldNoteMatcherTests` (se nedan) täcker
+matchningen: exakta träffar, gränsfall exakt på fönstrets kant (±90s
+matchar, ±90.001s gör inte, testat från båda hållen), flera anteckningar
+till samma bild, och klockdrift-offset i båda riktningarna.
+
+### 2. `PhotoFlowField` — iOS-målet
+
+Nytt XcodeGen-mål (`project.yml`): `platform: iOS`, `deploymentTarget:
+"26.0"`, bundle id `com.photoflow.field`, `sources: [Sources/Shared,
+SourcesField]`. Samma ad hoc-kodsignering som macOS-målet
+(`CODE_SIGN_IDENTITY: "-"`, `CODE_SIGNING_REQUIRED: NO`, plus
+`CODE_SIGNING_ALLOWED: NO`) så `xcodebuild ... -destination 'generic/
+platform=iOS Simulator' build` går igenom utan ett Apple-utvecklarkonto.
+Info.plist för BÅDA targets (macOS och iOS) migrerades från
+`GENERATE_INFOPLIST_FILE`/`INFOPLIST_KEY_*` till en explicit genererad
+Info.plist (`info.path`/`info.properties` i `project.yml`) — verifierat i
+ett fristående scratchpad-XcodeGen-projekt innan användning här att detta
+fungerar och genererar rätt plist — eftersom `UTExportedTypeDeclarations`/
+`UTImportedTypeDeclarations`/`CFBundleDocumentTypes` är arrayer av
+dictionaries som `INFOPLIST_KEY_*`-mekanismen inte kan uttrycka.
+
+`Sources/SourcesField/`:
+
+- **`FieldContentView`**: stor, tumvänlig design (tänkt att gå att använda
+  med handskar på — fastighetsfotografering i februari, som planen
+  efterfrågade): en 104pt cirkulär inspelningsknapp
+  (`RecordButtonView`, röd under inspelning, tydlig kontrast) längst ner
+  över en lista med dagens anteckningar (tid, textutdrag, rumsetikett,
+  GPS-status-ikon), "Exportera" i verktygsfältet. `.ultraThinMaterial`-
+  bakgrund på inspelningsområdet för samma Liquid Glass-känsla som
+  macOS-appens Fas 3g-omdesign.
+- **`FieldDictationService`**: samma `SpeechAnalyzer`/
+  `DictationTranscriber`-mönster som macOS-appens `DictationService`
+  (svensk `DictationTranscriber`, inte `SpeechTranscriber` — se den filens
+  utförliga SDK-research-kommentar för varför), men med iOS-specifika
+  skillnader: `AVAudioSession`-kategori/aktivering innan
+  `AVAudioEngine` får mikrofonåtkomst (finns inte på macOS), och
+  `installAudioTap`/`installTap`-valet gated på `#available(iOS 27.0, *)`
+  (verifierat i iOS-SDK:n: `installAudioTap` kräver iOS 27, precis som
+  macOS 27 på Mac-sidan — appens deploymentTarget är iOS 26, så båda
+  grenarna behövs).
+- **`FieldLocationService`**: `CLLocationManager`-baserad engångsposition
+  (`requestLocation()`, When-In-Use-behörighet). Ingen position (behörighet
+  nekad, timeout, eller Simulator utan simulerad plats inställd) →
+  anteckningen sparas ändå UTAN koordinat, aldrig ett fel som blockerar
+  sparandet. Delegate-callbacks är `nonisolated` och hoppar till
+  `@MainActor` för allt tillstånd — samma mönster som `WatchService`s
+  NSWorkspace-callback (Fas 2b).
+- **`FieldNoteStore`**: lokal JSON-persistens i appens Documents-mapp
+  (`field_notes.json` — INTE exportformatet). `writeExportFile(deviceName:)`
+  bygger en `FieldNoteBundle` av alla sparade anteckningar och skriver den
+  som `.photoflownotes` till en tempfil, som `ExportSummaryView` sedan
+  delar via `ShareLink`.
+- **`FieldNoteEditView`**: redigera text, sätta rumsetikett (snabbval Kök/
+  Badrum/Sovrum/Vardagsrum/Hall/Fasad/Trädgård + eget fritextfält), radera.
+
+**Verifiering**: `xcodebuild -project PhotoFlow/PhotoFlow.xcodeproj -scheme
+PhotoFlowField -destination 'generic/platform=iOS Simulator' build` grön,
+inga varningar från egen kod. Byggdes och kördes dessutom på en riktig
+booted "iPhone 17"-simulator (iOS 27) via `xcrun simctl install`/`launch` —
+appen startade och taligenkänningsbehörighetens systemdialog visade rätt
+svensk beskrivningstext.
+
+### 3. Import i Mac-appen
+
+`PipelineRunner+FieldNotes.swift`: `importFieldNotes(_:)` matchar en
+importerad `FieldNoteBundle` mot `state.allPhotos` via `FieldNoteMatcher`
+(fönster/klockdrift läses från två nya inställningar,
+`AppSettings.fieldNotesMatchWindowSeconds`/`fieldNotesClockOffsetSeconds`,
+med en ny "Fältanteckningar (iPhone-appen)"-sektion i `SettingsView` —
+standardvärden 90s/0s), och skriver matchade/sessionsanteckningar direkt in
+i `photo_notes.json` (exakt samma fil/format `NotesManager` redan läser, så
+de dyker upp i dikteringspanelen vid rätt bild nästa gång en granskningsvy
+öppnas/laddar om — ingen ändring av `NotesManager` själv behövdes).
+
+- Flera fältanteckningar som matchar samma bild slås ihop (textrader läggs
+  till) i stället för att en skriver över en annan eller en redan
+  existerande, dikterad-direkt-i-appen-anteckning för samma bild.
+- Sessionsanteckningar får ett syntetiskt `field_session_<uuid>`-id och en
+  tydlig `photoFilename`-markör ("(sessionsanteckning – ingen bild inom
+  Ns)") — de räknas i sammanfattningen och dyker upp i
+  `NotesManager.emailBody`/anteckningsräkningen, men är inte knutna till
+  någon specifik bild i granskningsvyerna.
+- **GPS → rättad koordinat**: om en matchad anteckning har en GPS-position
+  slås det upp vilken adress bildens tagningstid hör till (via
+  `PipelineRunner.calendarMappings`s datumintervall — samma källa
+  kalenderstegets adressmatchning redan bygger), och medelkoordinaten för
+  alla sådana anteckningar föreslås som "rättad koordinat" för adressen —
+  **samma mekanism** som en manuell rättning i `AddressBanner`
+  (`PipelineState.correctAddress`), så metadataskrivningen använder den
+  riktiga GPS-positionen från platsen i stället för en geokodad adress.
+  `importFieldNotes` applicerar INTE rättningen själv (bara returnerar
+  förslaget i `FieldNotesImportSummary.correctedAddresses`) — UI:t
+  (`DashboardView`) slår upp rätt index i `state.allMatchedAddresses` och
+  anropar `correctAddress` explicit, så det syns/loggas tydligt vilken
+  adress som ändras (`PipelineState.correctAddress` loggar redan
+  koordinaten den sätter).
+
+**UI**: ny verktygsfältsknapp "Importera fältanteckningar…" i
+`DashboardView` (NSOpenPanel filtrerat på `UTType.photoFlowFieldNotes`),
+plus `PhotoFlowApp.onOpenURL` → `PipelineState.pendingFieldNotesImportURL`
+så dubbelklick på en `.photoflownotes`-fil i Finder ("Öppna med" →
+PhotoFlow, `CFBundleDocumentTypes` från punkt 2) triggar samma importväg.
+Efter import visas en sammanfattningsalert ("N anteckningar, N matchade
+bilder, N sessionsanteckningar" + vilka adresser som fick rättad GPS).
+
+### Manuell testning användaren bör göra
+
+1. **Bygg och kör `PhotoFlowField` i Simulator** (Xcode: välj schemat
+   `PhotoFlowField` + en iPhone-simulator, Cmd+R — eller
+   `xcodebuild -project PhotoFlow/PhotoFlow.xcodeproj -scheme
+   PhotoFlowField -destination 'platform=iOS Simulator,name=iPhone 17'
+   build`). Godkänn mikrofon/taligenkänning/plats när dialogerna dyker upp.
+2. **Ställ in en simulerad plats** (Simulator-appen: Features → Location →
+   Custom Location, eller `xcrun simctl location <device> set <lat,lon>`)
+   INNAN du dikterar en anteckning, annars sparas anteckningen utan GPS
+   (appen ska fortfarande fungera, bara utan position — kontrollera att
+   raden i listan visar `location.slash`-ikonen då).
+3. **Diktera en anteckning**: tryck mikrofonknappen, säg t.ex. "kök, fixa
+   reflexen i fönstret", tryck igen för att stoppa. Kontrollera att den
+   dyker upp i listan med rätt tid, och (om plats var inställd) en grön
+   `location.fill`-ikon.
+4. **Sätt en rumsetikett** genom att trycka på raden, välja ett snabbval
+   (eller skriva eget), spara.
+5. **Exportera**: tryck "Exportera", kontrollera att delningsarket dyker
+   upp med en `.photoflownotes`-fil, och att AirDrop/Spara till Filer
+   fungerar (Simulator↔Mac AirDrop kräver att båda är inloggade på samma
+   Apple-ID — annars "Spara till Filer" och hämta filen manuellt från
+   Simulatorns delade mapp).
+6. **Importera i Mac-appen**: kör en riktig pipeline-session (eller ladda
+   en befintlig), tryck "Importera fältanteckningar…" i verktygsfältet,
+   välj den exporterade filen. Kontrollera sammanfattningsalerten stämmer
+   (antal anteckningar/matchade bilder/sessionsanteckningar), och att
+   anteckningarna syns i dikteringspanelen vid rätt bild i
+   bracket-granskningen/gallringen.
+7. **Öppna filen via Finder** (dubbelklick på `.photoflownotes`-filen, eller
+   högerklick → "Öppna med" → PhotoFlow) medan Mac-appen redan kör en
+   session — samma importflöde ska triggas via `onOpenURL`.
+8. **GPS-rättning**: importera fältanteckningar med GPS för en adress som
+   redan blivit (fel-)geokodad av kalenderintegrationen. Kontrollera i
+   loggen att en rad om "föreslår rättad koordinat" dyker upp, att
+   adressbanderollen uppdateras, och att den slutgiltiga metadatan
+   (`exiftool -GPS* <fil>`) använder den GPS-positionen, inte den
+   ursprungliga geokodningen.
+9. **Klockdrift-inställningen**: ändra
+   "Klockdrift-korrigering" i Inställningar → Pipeline om telefonens och
+   kamerans klockor går isär, och verifiera att fler/färre anteckningar
+   matchas mot bilder som förväntat.
+
+### Kvarstående / framtida steg (inte gjort i Fas 7)
+
+- **iCloud/CloudKit-synk**: uttryckligen uteslutet enligt uppdraget (inget
+  signeringsteam, appen körs bara i Simulator). En framtida version med ett
+  riktigt utvecklarkonto skulle kunna ersätta/komplettera
+  export-fil-flödet med en `NSPersistentCloudKitContainer`- eller ren
+  CloudKit-synk mellan `PhotoFlowField` och `PhotoFlow`, vilket skulle göra
+  "Exportera"-steget onödigt (anteckningar skulle synas i Mac-appen
+  automatiskt). Kräver: ett Apple Developer-program-medlemskap, riktiga
+  App ID:n med CloudKit-entitlement, och sannolikt ett gemensamt
+  App Group/CloudKit-container mellan de två bundle-id:na.
+  Körning på en RIKTIG iPhone (inte bara Simulator) kräver samma sak
+  (ett signeringsteam/utvecklarprofil) oavsett synkmetod.
+- Ingen egen `PhotoFlowFieldTests`-testbundle skapades — all logik som går
+  att enhetstesta utan UI/Speech/CoreLocation (matchningen,
+  bundle-formatet, text-ackumuleringen) ligger redan i `Sources/Shared` och
+  testas av `PhotoFlowTests` (som körs mot macOS-målet). `FieldDictationService`/
+  `FieldLocationService`/vyerna i `SourcesField` har ingen automatisk
+  testtäckning (samma avvägning som macOS-appens `DictationService` gjorde
+  i Fas 3c — kräver riktig mikrofon/Speech-ramverk/CoreLocation för att
+  köra på riktigt).
+- Delningsarkets faktiska AirDrop/Filer-överföring till Mac:en är inte
+  testad end-to-end av den här agenten (kräver GUI-interaktion/en riktig
+  Apple-ID-inloggning i Simulatorn) — bara verifierat att `ShareLink`
+  presenteras med en giltig `.photoflownotes`-fil.
+- `FieldNoteStore`s lokala `field_notes.json` rensas aldrig automatiskt
+  (gamla dagars anteckningar staplas tills de raderas manuellt i appen) —
+  bedömdes rimligt för en enkel fältanteckningsapp, men en framtida
+  "arkivera/rensa gamla anteckningar"-funktion vore en naturlig utökning.
