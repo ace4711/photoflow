@@ -29,17 +29,35 @@ class PipelineRunner: ObservableObject {
     /// `loadBracketGroups` to fill in `PhotoItem`'s quality fields.
     var photoQualityResults: [String: PhotoQualityService.Result] = [:]
 
-    // internal: called from other PipelineRunner extension files.
-    func pipelineLog(_ message: String) {
+    /// Fas 5: en `DateFormatter` per loggrad var en billig men helt
+    /// onödig allokering (`pipelineLog` anropas hundratals gånger per
+    /// körning) — samma statiska-formatter-mönster som `PipelineState`
+    /// redan använder (`LogLine.timeFormatter`, sedan Fas 1a). Bara
+    /// `PipelineRunner` (en `@MainActor`-klass) läser/skriver den, så ingen
+    /// samtidig mutation är möjlig.
+    private static let pipelineLogTimeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss.SSS"
-        let line = "[\(formatter.string(from: Date()))] \(message)\n"
+        return formatter
+    }()
+
+    // internal: called from other PipelineRunner extension files.
+    func pipelineLog(_ message: String) {
+        let line = "[\(Self.pipelineLogTimeFormatter.string(from: Date()))] \(message)\n"
         pipelineLogHandle?.write(line.data(using: .utf8)!)
         pipelineLogHandle?.synchronizeFile()
         state.appendLog(message)
     }
 
     // MARK: - Decision Log (structured JSONL for debugging across runs)
+
+    /// Se `pipelineLogTimeFormatter` ovan — samma motivering, en ny
+    /// `ISO8601DateFormatter` per beslutsrad var onödigt.
+    private static let decisionLogTimestampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
 
     /// Logs a key pipeline decision to `decision_log.jsonl` in the output directory.
     /// Each line is a JSON object with timestamp, step, decision, and context details.
@@ -49,11 +67,8 @@ class PipelineRunner: ObservableObject {
         guard let outputDir = state.outputDirectory else { return }
         let logFile = outputDir.appendingPathComponent("decision_log.jsonl")
 
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
         var entry: [String: Any] = [
-            "timestamp": formatter.string(from: Date()),
+            "timestamp": Self.decisionLogTimestampFormatter.string(from: Date()),
             "step": step,
             "decision": decision
         ]
