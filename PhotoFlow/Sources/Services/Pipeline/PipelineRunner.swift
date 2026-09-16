@@ -266,6 +266,7 @@ class PipelineRunner: ObservableObject {
             state.statusMessage = "Filer sorterade i adressmappar — granska vid behov"
             state.isRunning = false
             audio.playNeedsAttention()
+            NotificationService.shared.notifyReviewReady()
 
         } catch is CancellationError {
             state.statusMessage = "Avbrutet"
@@ -278,6 +279,7 @@ class PipelineRunner: ObservableObject {
             state.isRunning = false
             state.appendLog(error.localizedDescription, type: .error)
             audio.playError()
+            NotificationService.shared.notifyError(error.localizedDescription)
         }
     }
 

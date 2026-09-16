@@ -14,6 +14,14 @@ class PipelineState: ObservableObject {
     @Published var isRunning: Bool = false
     @Published var isPaused: Bool = false
 
+    /// Fas 3e: satt av `NotificationService.onReviewNowRequested` (knappen
+    /// "Granska nu" på en systemnotis) — `DashboardView` observerar den för
+    /// att öppna granskningsvyn, och nollställer den direkt igen. En bool +
+    /// `onChange` i stället för en direkt referens till dashboardens lokala
+    /// `@State`, eftersom `PipelineState` (till skillnad från vyn) redan är
+    /// nåbar från både `PhotoFlowApp`/`NotificationService` och vyerna.
+    @Published var reviewRequestedFromNotification: Bool = false
+
     @Published var inputDirectory: URL?
     @Published var outputDirectory: URL?
 

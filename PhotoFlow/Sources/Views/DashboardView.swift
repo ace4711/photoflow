@@ -30,6 +30,11 @@ struct DashboardView: View {
                 showReview = false
             }
         }
+        .onChange(of: pipeline.reviewRequestedFromNotification) { _, requested in
+            guard requested else { return }
+            showReview = true
+            pipeline.reviewRequestedFromNotification = false
+        }
         .onChange(of: settings.inputDirectoryPath) { _, _ in refreshFileCount() }
         .onChange(of: settings.outputDirectoryPath) { _, _ in refreshFileCount() }
         .onChange(of: showSettings) { _, showing in

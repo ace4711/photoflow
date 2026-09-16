@@ -53,5 +53,12 @@ struct PhotoFlowApp: App {
             let _ = await CalendarService.shared.requestAccess()
         }
         DictationService.requestAuthorizationOnce()
+
+        // Notisbehörighet begärs INTE här — se `NotificationService`s
+        // klasskommentar: den begärs lat, första gången en notis faktiskt
+        // ska skickas (i praktiken: första gången pipeline-läget används).
+        NotificationService.shared.onReviewNowRequested = { [weak pipeline] in
+            pipeline?.reviewRequestedFromNotification = true
+        }
     }
 }

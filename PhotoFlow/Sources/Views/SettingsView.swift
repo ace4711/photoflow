@@ -20,7 +20,7 @@ struct SettingsView: View {
                     .tag(2)
 
                 AudioTab(settings: settings)
-                    .tabItem { Label("Ljud", systemImage: "speaker.wave.2") }
+                    .tabItem { Label("Ljud & notiser", systemImage: "speaker.wave.2") }
                     .tag(3)
 
                 SystemCheckTab()
@@ -314,12 +314,23 @@ struct AudioTab: View {
                 Toggle("Talsyntes (röstmeddelanden)", isOn: $settings.speechEnabled)
             }
 
+            Section("Notiser") {
+                Toggle("Systemnotiser (Notification Center)", isOn: $settings.notificationsEnabled)
+                Text("Visas när nya filer hittas och bearbetning startar, när resultatet är klart för granskning, vid fel i ett steg, och när HDR-sammanslagningen är klar — även om huvudfönstret är stängt (menyradsläge). Behörighet begärs första gången bearbetning startas.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             Section("Testa") {
                 HStack(spacing: 12) {
                     Button("Steg klart") { AudioService.shared.playStepComplete() }
                     Button("Behöver hjälp") { AudioService.shared.playNeedsAttention() }
                     Button("Fel") { AudioService.shared.playError() }
                     Button("Allt klart") { AudioService.shared.playAllDone() }
+                }
+                HStack(spacing: 12) {
+                    Button("Testnotis: Granskning") { NotificationService.shared.notifyReviewReady() }
+                    Button("Testnotis: Fel") { NotificationService.shared.notifyError("Detta är en testnotis.") }
                 }
             }
         }

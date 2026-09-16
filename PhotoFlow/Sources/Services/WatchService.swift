@@ -394,6 +394,7 @@ class WatchService: ObservableObject {
         // Trigger callback - use nefSourceDir (the folder containing the actual NEF files)
         if settings.autoStartPipeline {
             log("Startar automatisk bearbetning av \(nefSourceDir.lastPathComponent)...")
+            NotificationService.shared.notifyPipelineStarting(fileCount: stableNEFs.count, folder: nefSourceDir)
             onNewFilesDetected?(nefSourceDir, stableNEFs)
         } else {
             log("Automatisk bearbetning avstaengd - starta manuellt")

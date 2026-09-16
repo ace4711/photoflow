@@ -29,6 +29,7 @@
 		2C5BBA7F4AD7146E61BDC6A6 /* PipelineRunner+LoadSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 641FF12CDBCFCA494956CF3A /* PipelineRunner+LoadSession.swift */; };
 		2E6B87610B4551C5B2B978B1 /* AudioService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97F73B1E75EF61D038F41B3C /* AudioService.swift */; };
 		2EE8C2B22453A62D257341F4 /* PipelineRunner+Brackets.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0CB9F8F402094288E8307CB /* PipelineRunner+Brackets.swift */; };
+		356136488F9E61973450A2FB /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 130D67322F34D53E2FC1D475 /* NotificationService.swift */; };
 		36B6A70D89662E7E7205B5E2 /* PhotoQualityServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B29E5A74E1F9161B2C47E8DE /* PhotoQualityServiceTests.swift */; };
 		38A042D3F5195C20B210C8A3 /* DashboardStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC6DB1ED9A17258B186DA24A /* DashboardStep.swift */; };
 		429A79924D4794EF23FC9379 /* WatchService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD8B3E2EDBB94C385E77AC28 /* WatchService.swift */; };
@@ -110,6 +111,7 @@
 		0AB4187FD228E28ADF0414F2 /* PipelineStateCullDecisionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineStateCullDecisionsTests.swift; sourceTree = "<group>"; };
 		0ED1FEAB2805AD66CD0BCFEE /* PreviewCullView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewCullView.swift; sourceTree = "<group>"; };
 		1232E269C2AE3EC7F7B9017B /* RAWRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RAWRendererTests.swift; sourceTree = "<group>"; };
+		130D67322F34D53E2FC1D475 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		153B93145B4921E4F181418C /* HDRWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRWriter.swift; sourceTree = "<group>"; };
 		18FEAA9B84EC62BC44C9AEB6 /* PipelineRunner+Metadata.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+Metadata.swift"; sourceTree = "<group>"; };
 		1AC7B76587B31A598A9D24BE /* TranslationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationServiceTests.swift; sourceTree = "<group>"; };
@@ -358,6 +360,7 @@
 				DEC3191F1157C25BEECE9449 /* DictationService.swift */,
 				6FA0704B9EE5AE323F93639B /* ExifReader.swift */,
 				A744F8E9CC36AC9DFDE19C79 /* NotesManager.swift */,
+				130D67322F34D53E2FC1D475 /* NotificationService.swift */,
 				29BD20E600D143019797F30D /* PhotoDescriptionService.swift */,
 				E7D6EBC16408E26632B79421 /* PhotoQualityService.swift */,
 				B05548288B2EBB830BA02C5E /* ToolLocator.swift */,
@@ -523,6 +526,7 @@
 				A41A216481CE30D8D17FDAFE /* HDRWriter.swift in Sources */,
 				9AEB695371EDAEC78EFAD571 /* LocalImageView.swift in Sources */,
 				0A920AE3F7F2BF2E2C1A141A /* NotesManager.swift in Sources */,
+				356136488F9E61973450A2FB /* NotificationService.swift in Sources */,
 				F8F289B627B89178C2F705E2 /* PhotoDescriptionService.swift in Sources */,
 				D4E8B25EF56984E792860C17 /* PhotoFlowApp.swift in Sources */,
 				0F6B2A6A185C80AEDD89611B /* PhotoItem.swift in Sources */,

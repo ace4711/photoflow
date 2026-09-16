@@ -190,6 +190,7 @@ extension PipelineRunner {
             state.appendLog("HDR-sammanslagning: \(successCount) lyckades, \(failCount) misslyckades.", type: .warning)
         }
         audio.playStepComplete()
+        NotificationService.shared.notifyHDRComplete(successCount: successCount, failCount: failCount)
     }
 
     /// Re-merge a single bracket group after user changes selection.

@@ -17,6 +17,11 @@ class AppSettings: ObservableObject {
     @AppStorage("autoStartPipeline") var autoStartPipeline: Bool = true
     @AppStorage("soundEnabled") var soundEnabled: Bool = true
     @AppStorage("speechEnabled") var speechEnabled: Bool = true
+    /// Fas 3e: systemnotiser (Notification Center) — komplement till ljud/tal,
+    /// syns även när huvudfönstret är stängt (menyradsläge). Default på;
+    /// själva OS-behörigheten begärs separat, första gången pipeline-läget
+    /// används (se `NotificationService.requestAuthorizationIfNeeded`).
+    @AppStorage("notificationsEnabled") var notificationsEnabled: Bool = true
     @AppStorage("previewQuality") var previewQuality: Int = 85
     @AppStorage("previewMaxDimension") var previewMaxDimension: Int = 2400
     @AppStorage("maxTimeGap") var maxTimeGap: Int = 15
