@@ -7,6 +7,8 @@ struct DashboardView: View {
     @State private var showLog: Bool = true
     @State private var showReview: Bool = false
     @State private var showSettings: Bool = false
+    // Fas 6: "Historik" i verktygsfältet — se SessionHistoryView.
+    @State private var showHistory: Bool = false
     @State private var nefCount: Int = 0
     @State private var hasProcessedOutput: Bool = false
 
@@ -30,6 +32,9 @@ struct DashboardView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView()
                 .frame(width: 700, height: 620)
+        }
+        .sheet(isPresented: $showHistory) {
+            SessionHistoryView(runner: runner, onOpened: { showReview = true })
         }
         .onAppear { refreshFileCount() }
         .onChange(of: pipeline.currentStep) { _, newStep in
@@ -182,6 +187,11 @@ struct DashboardView: View {
             }
             .tint(showLog ? .accentColor : nil)
             .help("Visa/dölj logg")
+
+            Button(action: { showHistory = true }) {
+                Image(systemName: "clock.arrow.circlepath")
+            }
+            .help("Historik — tidigare sessioner")
 
             Button(action: { showSettings = true }) {
                 Image(systemName: "gearshape")

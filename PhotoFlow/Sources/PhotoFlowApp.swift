@@ -75,6 +75,11 @@ struct PhotoFlowApp: App {
         // att AppServices ar registrerad innan fonstret ens hunnit visas.
         AppServices.shared.register(pipeline: pipeline, runner: runner)
 
+        // Fas 6: rensa (tyst, ingen dialog) sessionshistorikposter vars
+        // outputmapp inte längre finns på disk — se
+        // `SessionHistoryStore.pruneMissingOutputDirectories`s dokkommentar.
+        SessionHistoryStore.pruneMissingOutputDirectories()
+
         // Run dependency check
         deps.runChecks()
 
