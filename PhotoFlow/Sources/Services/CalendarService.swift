@@ -382,6 +382,21 @@ class CalendarService {
     /// `addressFolder(for:mappings:)` above, hence the shared implementation.
     static func sanitizeFolderName(_ name: String) -> String {
         let illegal = CharacterSet(charactersIn: ":/\\?*\"<>|")
-        return name.components(separatedBy: illegal).joined(separator: "_").trimmingCharacters(in: .whitespaces)
+        let cleaned = name.components(separatedBy: illegal).joined(separator: "_").trimmingCharacters(in: .whitespaces)
+        // Slutgranskning: a result of "", "." or ".." is not just an odd folder
+        // name — `outputDir.appendingPathComponent(cleaned)` builds this as the
+        // literal *unsuffixed* DNG folder name (AddressFolderLayout.dngDirName),
+        // and the OS resolves a trailing "/.." or "/." path component against the
+        // parent/same directory when the path is actually used (mkdir/rename/
+        // readdir), regardless of what Foundation's URL does with it lexically.
+        // A pathological calendar-event title that happens to extract down to
+        // exactly one of these three values would otherwise turn every
+        // address-folder operation (symlink creation, metadata writing, cull
+        // delete/move) into one that targets outputDir's parent or outputDir
+        // itself instead of a real address subfolder. Never let that happen.
+        if cleaned.isEmpty || cleaned == "." || cleaned == ".." {
+            return "Okänd adress"
+        }
+        return cleaned
     }
 }

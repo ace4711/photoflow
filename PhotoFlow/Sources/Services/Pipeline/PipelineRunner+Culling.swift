@@ -5,6 +5,31 @@ import Foundation
 /// "flytta"). Tidigare fanns bara `deleteRejectedFiles` (permanent radering);
 /// nu är den bara ETT av tre lägen, se `finishCullingAction`.
 extension PipelineRunner {
+    /// Files directly inside `dir` whose basename (extension stripped) exactly
+    /// equals `photoBase` AND that `FileSafety.isCullManaged` — used by
+    /// `deleteRejectedFiles`/`moveRejectedToFolder` so a rejected photo's
+    /// delete/move only ever touches symlinks the app created (NEF/DNG/preview)
+    /// or its own XMP sidecar, never a same-named real file a user placed in an
+    /// address folder by hand, and never anything outside `outputDir`.
+    ///
+    /// Basename comparison is exact string equality on
+    /// `deletingPathExtension().lastPathComponent`, never a prefix/contains
+    /// check — "DSC_0001" (photoBase) never matches "DSC_00011.NEF" (basename
+    /// "DSC_00011"). Testable in isolation: `PipelineRunnerCullSafetyTests`.
+    static func cullCandidates(in dir: URL, photoBase: String, outputDir: URL) -> [URL] {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: dir.path),
+              (try? FileSafety.assertInsideOutput(dir, outputDir: outputDir)) != nil,
+              let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isSymbolicLinkKey]) else {
+            return []
+        }
+        return files.filter { file in
+            file.deletingPathExtension().lastPathComponent == photoBase
+                && FileSafety.isCullManaged(file)
+                && ((try? FileSafety.assertInsideOutput(file, outputDir: outputDir)) != nil)
+        }
+    }
+
     /// Dispatcher som `PreviewCullView.finishCulling` anropar i stället för
     /// att gå direkt på `deleteRejectedFiles` — väljer beteende efter
     /// `AppSettings.cullAction`.
@@ -94,12 +119,17 @@ extension PipelineRunner {
 
             for dir in AddressFolderLayout.allDirs(in: outputDir, folderName: folderName) {
                 guard fm.fileExists(atPath: dir.path),
-                      let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { continue }
+                      let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isSymbolicLinkKey]) else { continue }
 
                 for file in files where getBaseName(file) == photoBase {
                     // XMP sidecars are written as a side effect of tagging their NEF,
                     // never re-tagged directly (same reasoning as writeIPTCMetadata).
                     if file.pathExtension.lowercased() == "xmp" { continue }
+                    // Only ever retag files the app created (symlinks to NEF/DNG/
+                    // preview) — a real, non-symlink file with a matching basename
+                    // that the user placed in an address folder by hand is left
+                    // untouched even though the basename matches.
+                    guard FileSafety.isSymlink(file) else { continue }
                     argfileLines.append(contentsOf: Self.cullExiftoolArguments(for: file, accepted: photo.accepted))
                     let symbol = photo.accepted ? "★" : "✗"
                     fileDescriptions.append("\(symbol) \(file.lastPathComponent) ← Rating=\(photo.accepted ? 3 : -1)")
@@ -155,14 +185,13 @@ extension PipelineRunner {
             let photoBase = getBaseName(photo.nefURL)
 
             for dir in AddressFolderLayout.allDirs(in: outputDir, folderName: folderName) {
-                guard fm.fileExists(atPath: dir.path),
-                      let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { continue }
-
                 let culledDir = dir.appendingPathComponent("Gallrade")
-                for file in files where getBaseName(file) == photoBase {
-                    try? fm.createDirectory(at: culledDir, withIntermediateDirectories: true)
-                    let dest = culledDir.appendingPathComponent(file.lastPathComponent)
+                for file in Self.cullCandidates(in: dir, photoBase: photoBase, outputDir: outputDir) {
                     do {
+                        try FileSafety.assertInsideOutput(culledDir, outputDir: outputDir)
+                        try fm.createDirectory(at: culledDir, withIntermediateDirectories: true)
+                        let dest = culledDir.appendingPathComponent(file.lastPathComponent)
+                        try FileSafety.assertInsideOutput(dest, outputDir: outputDir)
                         if fm.fileExists(atPath: dest.path) {
                             try fm.removeItem(at: dest)
                         }

@@ -74,6 +74,16 @@ extension PipelineRunner {
         for (oldSub, newSub) in renamePairs {
             let oldURL = outputDir.appendingPathComponent(oldSub)
             let newURL = outputDir.appendingPathComponent(newSub)
+            // Both are always built from AddressFolderLayout's fixed dir-name
+            // helpers directly under outputDir, so this should never throw —
+            // it's defense-in-depth against a future bug in an address string
+            // ever escaping outputDir via rename, matching FileSafety's use in
+            // the culling delete/move paths.
+            guard (try? FileSafety.assertInsideOutput(oldURL, outputDir: outputDir)) != nil,
+                  (try? FileSafety.assertInsideOutput(newURL, outputDir: outputDir)) != nil else {
+                pipelineLog("Säkerhetsspärr: vägrade döpa om \(oldSub) → \(newSub) (utanför outputDir)")
+                continue
+            }
             guard fm.fileExists(atPath: oldURL.path) else { continue }
 
             if fm.fileExists(atPath: newURL.path) {
@@ -83,7 +93,7 @@ extension PipelineRunner {
                 if let files = try? fm.contentsOfDirectory(at: oldURL, includingPropertiesForKeys: nil) {
                     for file in files {
                         let dest = newURL.appendingPathComponent(file.lastPathComponent)
-                        if !fm.fileExists(atPath: dest.path) {
+                        if !fm.fileExists(atPath: dest.path), (try? FileSafety.assertInsideOutput(dest, outputDir: outputDir)) != nil {
                             try? fm.moveItem(at: file, to: dest)
                         }
                     }

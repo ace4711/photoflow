@@ -239,10 +239,12 @@ extension PipelineRunner {
             let searchDirs = AddressFolderLayout.allDirs(in: outputDir, folderName: folderName)
 
             for dir in searchDirs {
-                guard fm.fileExists(atPath: dir.path),
-                      let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { continue }
-
-                for file in files where getBaseName(file) == photoBase {
+                // Self.cullCandidates only returns files that (a) exactly match
+                // photoBase (never a "DSC_0001" vs "DSC_00011" false match), (b)
+                // are a symlink the app created or its own .xmp sidecar — never a
+                // real file the user placed in the folder by hand — and (c) still
+                // resolve inside outputDir.
+                for file in Self.cullCandidates(in: dir, photoBase: photoBase, outputDir: outputDir) {
                     do {
                         try fm.removeItem(at: file)
                         deletedCount += 1
