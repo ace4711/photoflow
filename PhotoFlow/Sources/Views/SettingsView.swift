@@ -1,5 +1,6 @@
 import SwiftUI
 import ServiceManagement
+import EventKit
 
 struct SettingsView: View {
     @ObservedObject var settings = AppSettings.shared
@@ -253,6 +254,8 @@ struct PipelineTab: View {
                     Text("Bilderna matchas mot iCal-bokningar baserat på fotograferingstid. Accepterade bilder organiseras i mappar namngivna efter bokningens adress.")
                         .font(.caption)
                         .foregroundColor(.secondary)
+
+                    CalendarPickerRow(settings: settings)
                 } else {
                     Text("Ingen adressorganisering — alla bilder hamnar i samma outputmapp.")
                         .font(.caption)
@@ -290,6 +293,77 @@ struct PipelineTab: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// Fas 4: låter användaren välja en kalender ur en riktig `Picker` (listar
+/// EventKit-kalendrarna via `CalendarService`) i stället för att bara skriva
+/// namnet i fritext. Fritextfältet finns kvar som fallback för de fall
+/// åtkomst ännu inte beviljats (eller nekats) — precis vad `CalendarService.
+/// resolveCalendar` redan stödjer (exakt/skiftlägesokänslig/delvis matchning
+/// mot fritexten).
+struct CalendarPickerRow: View {
+    @ObservedObject var settings: AppSettings
+    @State private var availableCalendars: [String] = []
+    @State private var accessStatus: EKAuthorizationStatus = CalendarService.authorizationStatus
+    @State private var isRequesting = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            switch accessStatus {
+            case .fullAccess:
+                Picker("Kalender", selection: $settings.calendarName) {
+                    Text("Alla kalendrar").tag("")
+                    ForEach(availableCalendars, id: \.self) { name in
+                        Text(name).tag(name)
+                    }
+                    // Sparat namn som inte längre finns bland de riktiga
+                    // kalendrarna (borttagen kalender sedan sist, eller ett
+                    // gammalt fritextvärde) — visa det ändå som ett eget
+                    // alternativ i stället för att valet tyst hoppar till
+                    // "Alla kalendrar" bara för att listan uppdaterades.
+                    if !settings.calendarName.isEmpty && !availableCalendars.contains(settings.calendarName) {
+                        Text("\(settings.calendarName) (hittas inte just nu)").tag(settings.calendarName)
+                    }
+                }
+                .pickerStyle(.menu)
+            case .notDetermined:
+                HStack {
+                    Text("Kalenderåtkomst har inte begärts än.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button(isRequesting ? "Begär..." : "Begär åtkomst") { requestAccess() }
+                        .disabled(isRequesting)
+                }
+                fallbackTextField
+            default: // .denied, .restricted, .writeOnly (kan inte lista kalendrar)
+                Text("Ingen kalenderåtkomst — ange kalendernamnet manuellt nedan, eller aktivera åtkomst i Systeminställningar → Sekretess och säkerhet → Kalendrar.")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                fallbackTextField
+            }
+        }
+        .onAppear { refresh() }
+    }
+
+    private var fallbackTextField: some View {
+        TextField("Kalendernamn (exakt, eller tomt = alla kalendrar)", text: $settings.calendarName)
+            .textFieldStyle(.roundedBorder)
+    }
+
+    private func refresh() {
+        accessStatus = CalendarService.authorizationStatus
+        availableCalendars = CalendarService.shared.availableCalendarNames()
+    }
+
+    private func requestAccess() {
+        isRequesting = true
+        Task {
+            _ = await CalendarService.shared.requestAccess()
+            isRequesting = false
+            refresh()
+        }
     }
 }
 

@@ -55,6 +55,24 @@ class CalendarService {
         return nil
     }
 
+    /// EventKit's current authorization status for calendar (event) access,
+    /// read directly from the system rather than the instance-only
+    /// `accessGranted` flag (which only reflects whether *this session*
+    /// already called `requestAccess`). Fas 4: lets `SettingsView`'s calendar
+    /// picker show the right UI (picker / "Begär åtkomst" / denied notice)
+    /// even before the pipeline has run once this launch.
+    nonisolated static var authorizationStatus: EKAuthorizationStatus {
+        EKEventStore.authorizationStatus(for: .event)
+    }
+
+    /// Sorted display names of all calendars available to the app (Fas 4,
+    /// `SettingsView`'s calendar picker). Empty when access hasn't been
+    /// granted — callers should check `authorizationStatus` first.
+    func availableCalendarNames() -> [String] {
+        guard Self.authorizationStatus == .fullAccess else { return [] }
+        return store.calendars(for: .event).map(\.title).sorted()
+    }
+
     /// Request calendar access. Returns true if granted.
     func requestAccess() async -> Bool {
         if accessGranted { return true }
