@@ -4,10 +4,17 @@ import CoreLocation
 
 struct AddressBanner: View {
     @EnvironmentObject var pipeline: PipelineState
+    @EnvironmentObject var runner: RunnerWrapper
 
     private var settings: AppSettings { AppSettings.shared }
 
     @State private var correctionTarget: CorrectionTarget?
+
+    /// Fas 4 (kvarstående från Fas 1b): satt efter en adressrättning om filer
+    /// redan hunnit sorteras under den GAMLA adressen — visar en fråga/knapp
+    /// för att döpa om de befintliga mapparna i stället för att tyst lämna
+    /// dem kvar under fel namn.
+    @State private var pendingResort: PendingResort?
 
     /// Stockholm center for distance calculation
     private static let stockholmCenter = CLLocation(latitude: 59.3293, longitude: 18.0686)
@@ -19,6 +26,9 @@ struct AddressBanner: View {
                     ForEach(Array(pipeline.allMatchedAddresses.enumerated()), id: \.offset) { index, match in
                         addressRow(match: match, index: index)
                     }
+                    if let pendingResort {
+                        resortBanner(pendingResort)
+                    }
                 }
                 .sheet(item: $correctionTarget) { target in
                     AddressCorrectionView(
@@ -26,7 +36,17 @@ struct AddressBanner: View {
                         eventTitle: target.eventTitle,
                         index: target.index,
                         onSave: { correctedAddress, coordinate in
+                            let oldAddress = target.address
                             pipeline.correctAddress(at: target.index, newAddress: correctedAddress, coordinate: coordinate)
+                            // Fix the folder-naming source of truth immediately — without
+                            // this, calendarMappings kept pointing at the old address until
+                            // the calendar step was fully re-run (see
+                            // PipelineRunner+AddressCorrection.swift).
+                            runner.runner?.updateCalendarMappingAddress(from: oldAddress, to: correctedAddress)
+                            if oldAddress != correctedAddress,
+                               runner.runner?.addressFolderAlreadySorted(oldAddress) == true {
+                                pendingResort = PendingResort(oldAddress: oldAddress, newAddress: correctedAddress)
+                            }
                             correctionTarget = nil
                         }
                     )
@@ -171,6 +191,54 @@ private struct CorrectionTarget: Identifiable {
     let index: Int
     let address: String
     let eventTitle: String
+}
+
+// MARK: - Resort-after-correction banner (Fas 4)
+
+private struct PendingResort {
+    let oldAddress: String
+    let newAddress: String
+}
+
+extension AddressBanner {
+    /// "Sortera om filerna till den nya adressmappen"-frågan som visas efter
+    /// en adressrättning när filer redan hann sorteras under det gamla
+    /// namnet — döper om de tre adressmapparna (`AddressFolderLayout`) i
+    /// `PipelineRunner.resortAddressFolder`. Rör aldrig filsystemet förrän
+    /// användaren uttryckligen trycker knappen.
+    fileprivate func resortBanner(_ resort: PendingResort) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "folder.badge.questionmark")
+                .foregroundColor(.white)
+            Text("Filer är redan sorterade under \"\(resort.oldAddress)\".")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white)
+            Spacer()
+            Button {
+                _ = runner.runner?.resortAddressFolder(from: resort.oldAddress, to: resort.newAddress)
+                pendingResort = nil
+            } label: {
+                Text("Sortera om filerna till den nya adressmappen")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Color(red: 0.1, green: 0.3, blue: 0.55))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.9)))
+            }
+            .buttonStyle(.plain)
+            Button {
+                pendingResort = nil
+            } label: {
+                Image(systemName: "xmark")
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .help("Låt filerna ligga kvar under det gamla mappnamnet")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.blue.opacity(0.85)))
+    }
 }
 
 // MARK: - Identifiable Map Item wrapper
