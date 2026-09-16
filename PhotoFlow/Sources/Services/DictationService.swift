@@ -228,8 +228,43 @@ class DictationService: ObservableObject {
             return
         }
 
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-            self?.enqueue(buffer: buffer)
+        // `installTap(onBus:bufferSize:format:block:)` deprecerad i macOS 27
+        // till förmån för `installAudioTap(onBus:bufferSize:format:tapProvider:)`
+        // — verifierat i SDK:n (`.swiftinterface` för `AVFAudio`, se
+        // `AVAudioNode`-utökningen) eftersom `AVAudioNode.h` bara exponerar den
+        // nya varianten via `NS_REFINED_FOR_SWIFT` (den råa ObjC-signaturen med
+        // en `NSError**`-parameter syns inte direkt i Swift). Den nya varianten
+        // kastar fel och ger buffertar som en read-only, `Sendable`
+        // `AVReadOnlyAudioPCMBuffer` i stället för den gamla klassen
+        // `AVAudioPCMBuffer` — konverteras direkt tillbaka med den nya
+        // `AVAudioPCMBuffer(copying:)`-initieraren så att resten av flödet
+        // (`enqueue`/`makeAnalyzerInput`) inte behövde skrivas om. Projektets
+        // deployment target är macOS 26, så den nya varianten (macOS 27+) väljs
+        // bara via `#available` — då kallas den deprecerade varianten aldrig på
+        // en körning där den faktiskt ÄR deprecerad, så ingen varning uppstår
+        // (verifierat: `swiftc -typecheck` mot mål macOS 26 ger ingen varning
+        // för den gamla varianten, bara mot mål macOS 27). Tapproviderns
+        // stängning är `@Sendable` i den nya API:t (till skillnad från den
+        // gamla), så anropet till den MainActor-isolerade `enqueue` görs via
+        // `Task { @MainActor in … }` i stället för direkt.
+        if #available(macOS 27.0, *) {
+            do {
+                try inputNode.installAudioTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
+                    guard let self else { return }
+                    let copy = AVAudioPCMBuffer(copying: buffer)
+                    Task { @MainActor in
+                        self.enqueue(buffer: copy)
+                    }
+                }
+            } catch {
+                self.error = "Kunde inte lyssna på mikrofonen: \(error.localizedDescription)"
+                stopRecording()
+                return
+            }
+        } else {
+            inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
+                self?.enqueue(buffer: buffer)
+            }
         }
 
         do {
