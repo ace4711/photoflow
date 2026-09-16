@@ -68,6 +68,18 @@ class AppSettings: ObservableObject {
     /// för högt för att lita på automatiskt, se FORBATTRINGAR.md Fas 3c.
     @AppStorage("cullSuggestUtility") var cullSuggestUtility: Bool = false
 
+    /// Fas 4: vad som händer med avvisade bilder när gallringen avslutas
+    /// (`PreviewCullView.finishCulling`/`PipelineRunner.finishCullingAction`).
+    /// - "markera" (default, NY): rör inga filer. Skriver `XMP:Rating` (3 för
+    ///   accepterade, -1 = Lightroom Classics "Rejected"-flagga för avvisade)
+    ///   + `XMP-photoshop:Urgency` på avvisade, så gallringen syns direkt i
+    ///   Lightroom (filtrera på stjärnor/flagga) utan att något raderas —
+    ///   säkrast, och gör hela steget ångringsbart efteråt via Lightroom.
+    /// - "radera": det gamla beteendet, tar bort avvisade filer permanent.
+    /// - "flytta": flyttar avvisade filer till en "Gallrade"-undermapp under
+    ///   respektive adressmapp, i stället för att röra dem alls.
+    @AppStorage("cullAction") var cullAction: String = "markera"
+
     var inputDirectory: URL? {
         get {
             guard !inputDirectoryPath.isEmpty else { return nil }

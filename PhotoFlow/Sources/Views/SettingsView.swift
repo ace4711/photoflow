@@ -222,6 +222,30 @@ struct PipelineTab: View {
                     .foregroundColor(.secondary)
             }
 
+            Section("Gallring") {
+                Picker("Vid \"Avsluta gallring\"", selection: $settings.cullAction) {
+                    Text("Markera med betyg (rekommenderas)").tag("markera")
+                    Text("Flytta till \"Gallrade\"-mapp").tag("flytta")
+                    Text("Radera permanent").tag("radera")
+                }
+                .pickerStyle(.menu)
+
+                switch settings.cullAction {
+                case "radera":
+                    Text("Avvisade bilders filer raderas permanent från adressmapparna. Går inte att ångra — en bekräftelsedialog visas innan radering.")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                case "flytta":
+                    Text("Avvisade bilders filer flyttas till en \"Gallrade\"-undermapp under respektive adressmapp i stället för att raderas eller taggas — enkelt att återställa manuellt om du ångrar dig.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                default:
+                    Text("Inga filer rörs. Accepterade bilder får betyg 3 stjärnor, avvisade får Lightroom Classics \"Rejected\"-flagga (XMP:Rating -1) — synligt direkt när adressmappen öppnas i Lightroom, och helt ångringsbart där.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
             Section("Kalenderintegration") {
                 Toggle("Matcha bilder mot kalenderbokningar", isOn: $settings.calendarMatchEnabled)
 

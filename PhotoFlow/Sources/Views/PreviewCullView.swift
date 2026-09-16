@@ -10,6 +10,12 @@ struct PreviewCullView: View {
     @State private var showNotes: Bool = false
     @State private var dictPulse: Bool = false
 
+    /// Fas 4: `finishCulling` visar den här innan den faktiskt kör
+    /// `AppSettings.cullAction == "radera"` — permanent radering behöver ett
+    /// extra klick, till skillnad från "markera"/"flytta" som inte kan
+    /// förstöra data.
+    @State private var showDeleteConfirmation: Bool = false
+
     // MARK: - "Föreslå gallring" (Fas 3b)
 
     /// Single-level undo buffer for the last "Föreslå gallring" batch — stores
@@ -101,6 +107,16 @@ struct PreviewCullView: View {
         .overlay(alignment: .top) {
             suggestionBanner
                 .padding(.top, 12)
+        }
+        .confirmationDialog(
+            "Radera \(rejectedCount) gallrade bilder permanent?",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Radera permanent", role: .destructive) { performFinishCulling() }
+            Button("Avbryt", role: .cancel) {}
+        } message: {
+            Text("Filerna går inte att återställa efteråt. Välj \"Markera med betyg\" eller \"Flytta till Gallrade\" i Inställningar → Pipeline → Gallring om du vill kunna ångra i efterhand.")
         }
     }
 
@@ -751,17 +767,37 @@ struct PreviewCullView: View {
         navigate(1)
     }
 
+    /// Fas 4: beteendet styrs av `AppSettings.cullAction`. "radera" (den gamla,
+    /// enda vägen tidigare) kräver nu en bekräftelse eftersom den är den enda
+    /// av de tre som inte går att ångra i efterhand — se `showDeleteConfirmation`.
     private func finishCulling() {
+        if AppSettings.shared.cullAction == "radera" {
+            showDeleteConfirmation = true
+        } else {
+            performFinishCulling()
+        }
+    }
+
+    private func performFinishCulling() {
         let accepted = pipeline.allPhotos.filter { $0.accepted }.count
         let rejected = pipeline.allPhotos.filter { $0.rejected }.count
-        pipeline.statusMessage = "Tar bort \(rejected) gallrade filer..."
+
+        pipeline.statusMessage = switch AppSettings.shared.cullAction {
+        case "radera": "Tar bort \(rejected) gallrade filer..."
+        case "flytta": "Flyttar \(rejected) gallrade filer till Gallrade..."
+        default: "Skriver gallringsbeslut som XMP-betyg (Lightroom)..."
+        }
 
         Task {
-            await runner.runner?.deleteRejectedFiles()
+            await runner.runner?.finishCullingAction()
             pipeline.updateStep(.manualReview, phase: .complete)
             pipeline.completeStep(.manualReview, count: accepted)
             pipeline.currentStep = .done
-            pipeline.statusMessage = "Gallring klar! \(accepted) bilder accepterade, \(rejected) borttagna."
+            pipeline.statusMessage = switch AppSettings.shared.cullAction {
+            case "radera": "Gallring klar! \(accepted) bilder accepterade, \(rejected) borttagna."
+            case "flytta": "Gallring klar! \(accepted) bilder accepterade, \(rejected) flyttade till Gallrade."
+            default: "Gallring klar! \(accepted) bilder accepterade, \(rejected) markerade som avvisade (XMP-betyg, inget raderat)."
+            }
             audio.playAllDone()
         }
     }

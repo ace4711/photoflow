@@ -289,7 +289,7 @@ class CalendarService {
         for mapping in mappings {
             let slackRange = mapping.photoDateRange.lowerBound.addingTimeInterval(-5 * 60)...mapping.photoDateRange.upperBound.addingTimeInterval(5 * 60)
             if slackRange.contains(photoDate) {
-                return sanitizeFolderName(mapping.address)
+                return Self.sanitizeFolderName(mapping.address)
             }
         }
         return nil
@@ -357,8 +357,12 @@ class CalendarService {
         return info.isEmpty ? nil : info
     }
 
-    /// Clean address string for use as folder name
-    private func sanitizeFolderName(_ name: String) -> String {
+    /// Clean address string for use as folder name. `static`/non-private
+    /// (Fas 4) so `AddressBanner`/`PipelineRunner` can compute the same
+    /// on-disk folder name for an address when resorting folders after a
+    /// manual address correction — must stay in perfect sync with
+    /// `addressFolder(for:mappings:)` above, hence the shared implementation.
+    static func sanitizeFolderName(_ name: String) -> String {
         let illegal = CharacterSet(charactersIn: ":/\\?*\"<>|")
         return name.components(separatedBy: illegal).joined(separator: "_").trimmingCharacters(in: .whitespaces)
     }
