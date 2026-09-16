@@ -64,6 +64,7 @@
 		76AD25703B7CD22D2AF084E4 /* CalendarServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 230AF67C14F78CC9A5F63D1F /* CalendarServiceTests.swift */; };
 		7989A2940BFFD47970671D95 /* AppServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6FD32CA129606476C3DAB16 /* AppServices.swift */; };
 		7CE65CE8AF5D4E4EA3C7C70B /* ExposureFusion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80F00E018557CCC542713B03 /* ExposureFusion.swift */; };
+		7FAF8CDAD6EC48E21A14EB68 /* PipelineSmokeTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01FA4249807EF12677F9555D /* PipelineSmokeTest.swift */; };
 		89BC4F5B43DCA138E6ABB560 /* PhotoFlowShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9C613A5C0AB46074022ED10 /* PhotoFlowShortcuts.swift */; };
 		8ADAF496A047B2BDDCB9026B /* singles.expected.json in Resources */ = {isa = PBXBuildFile; fileRef = 64A78E994BBEEF2B356195DB /* singles.expected.json */; };
 		8C8CF30C2B6DCF305DDAF09B /* two_brackets_and_gap.csv in Resources */ = {isa = PBXBuildFile; fileRef = AF069198E88FC10A80486CAD /* two_brackets_and_gap.csv */; };
@@ -79,6 +80,7 @@
 		A48970BF8D8D5C5ED96CF0AD /* StartPipelineIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7ABC0D81EE55A09C59EA739 /* StartPipelineIntent.swift */; };
 		AA1852DBA57FA0051A3FF9EC /* WatchServiceFileIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC9242645046144625EF653B /* WatchServiceFileIdentityTests.swift */; };
 		B188A57475FF936519295B32 /* ExifReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FA0704B9EE5AE323F93639B /* ExifReader.swift */; };
+		B84578962BD67E124F5E67C5 /* PipelineRunnerHDROrphanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 929500107C2E4E161853B304 /* PipelineRunnerHDROrphanTests.swift */; };
 		B8A0310BEABA3558EA84DDA4 /* BookingTitleParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6543E7D969597D72306DB85B /* BookingTitleParserTests.swift */; };
 		BAFC8EE66AAFCD940587B052 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57074BFC0A2871C3D4A731BF /* SettingsView.swift */; };
 		BC519EC3070BFAA701BF2E3B /* bracket3_subsec.csv in Resources */ = {isa = PBXBuildFile; fileRef = A8E8B9ECAF0A7DB7D21504F5 /* bracket3_subsec.csv */; };
@@ -123,6 +125,7 @@
 
 /* Begin PBXFileReference section */
 		01B8DD6E89E2EB246C06AA2F /* AppSettingsSDCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsSDCardTests.swift; sourceTree = "<group>"; };
+		01FA4249807EF12677F9555D /* PipelineSmokeTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineSmokeTest.swift; sourceTree = "<group>"; };
 		0264E2771F1F365950FADCDE /* AppIntents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppIntents.framework; path = System/Library/Frameworks/AppIntents.framework; sourceTree = SDKROOT; };
 		04F7EB11531DBB10EA697354 /* PipelineRunner+Lightroom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+Lightroom.swift"; sourceTree = "<group>"; };
 		07F438E24E4E1E4884E9C260 /* PipelineRunner+HDR.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+HDR.swift"; sourceTree = "<group>"; };
@@ -176,6 +179,7 @@
 		8A170910AAC2BAD6773C4FBB /* LocalImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalImageView.swift; sourceTree = "<group>"; };
 		8C306A8E7A0E0E6FE3F26EA3 /* DictationPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationPanelView.swift; sourceTree = "<group>"; };
 		8F5619320F3617DDF430B6C8 /* ProcessCancellationBoxTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessCancellationBoxTests.swift; sourceTree = "<group>"; };
+		929500107C2E4E161853B304 /* PipelineRunnerHDROrphanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineRunnerHDROrphanTests.swift; sourceTree = "<group>"; };
 		93E76E73EA4ED4FEA06A9AEB /* PhotoFlowApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoFlowApp.swift; sourceTree = "<group>"; };
 		946B3F14AAFC5C10D4CF5C86 /* FileSafetyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileSafetyTests.swift; sourceTree = "<group>"; };
 		946EF029FC6B8E82370D3CED /* TranslationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationService.swift; sourceTree = "<group>"; };
@@ -343,8 +347,10 @@
 				B7CBAC052E63A0845336EE11 /* PipelineRunnerAddressCorrectionTests.swift */,
 				10CADBF5273CA5D7E2221343 /* PipelineRunnerCullingTests.swift */,
 				C6654743264C7D9CD239497D /* PipelineRunnerCullSafetyTests.swift */,
+				929500107C2E4E161853B304 /* PipelineRunnerHDROrphanTests.swift */,
 				106C92FF5EFA871572809B65 /* PipelineRunnerLightroomTests.swift */,
 				9DEE083780895ED14CBEB130 /* PipelineRunnerMetadataTests.swift */,
+				01FA4249807EF12677F9555D /* PipelineSmokeTest.swift */,
 				D7DE505DE352E780722B1B10 /* PipelineStateAddressCorrectionTests.swift */,
 				0AB4187FD228E28ADF0414F2 /* PipelineStateCullDecisionsTests.swift */,
 				59790CA706990AC3AC474EB2 /* PipelineStateLoggingTests.swift */,
@@ -572,8 +578,10 @@
 				EA06314597C317B4BD9069BB /* PipelineRunnerAddressCorrectionTests.swift in Sources */,
 				57D2A984CB59C9E5C3C6BA2E /* PipelineRunnerCullSafetyTests.swift in Sources */,
 				F4FF2B039B629C11D41C99EB /* PipelineRunnerCullingTests.swift in Sources */,
+				B84578962BD67E124F5E67C5 /* PipelineRunnerHDROrphanTests.swift in Sources */,
 				68699E34360BE0D07D58EB95 /* PipelineRunnerLightroomTests.swift in Sources */,
 				03A356792358F22F5CF85514 /* PipelineRunnerMetadataTests.swift in Sources */,
+				7FAF8CDAD6EC48E21A14EB68 /* PipelineSmokeTest.swift in Sources */,
 				E9F8D54758C9BB977709079A /* PipelineStateAddressCorrectionTests.swift in Sources */,
 				CA69A9936A1575D09D4FE8CF /* PipelineStateCullDecisionsTests.swift in Sources */,
 				58966C64E8FB2BC7A9681D24 /* PipelineStateLoggingTests.swift in Sources */,

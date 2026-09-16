@@ -2502,3 +2502,243 @@ kör pipelinen, och ingendera nås bara av att appen startar):
   `cull_decisions.json`-filer i en tillfällig mapp (tom outputmapp, en
   adress med bilder både inom och utanför datumintervallet, flera adresser,
   och en trasig post utan `range_start`/`range_end`).
+
+## Slutgranskning
+
+Utförd autonomt på branchen `forbattringar` medan användaren sov, efter ~67
+tidigare commits (`git diff --stat e3be8d0 HEAD`: 105 filer, +15k/-4.7k).
+Mål: säkerställa att inget i pipelinen kan förstöra eller läcka användarens
+originalbilder, och rök-testa hela pipelinen mot riktig NEF-data i en kopia.
+161 tester totalt efter denna fas, alla gröna.
+
+### Del 1 — Granskning av alla destruktiva filsystemanrop
+
+Gick igenom varje `removeItem`/`moveItem`/`createSymbolicLink`/
+`overwrite_original`-anrop i `PhotoFlow/Sources` (grep-baserad, se
+commit `40c3d71` för den fullständiga listan). Sammanfattning:
+
+**Redan säkert (verifierat, ingen ändring):**
+- NEF-original skrivs ALDRIG direkt — `exiftoolArguments`/
+  `cullExiftoolArguments` (Metadata/Culling) skriver alltid en XMP-sidecar
+  bredvid NEF-symlänken i stället, exakt som Fas 1a etablerade.
+- Basnamnsmatchning i gallringsfunktionerna är exakt strängjämförelse på
+  `deletingPathExtension().lastPathComponent`, aldrig ett prefix/contains-
+  test — `"DSC_0001"` matchar aldrig `"DSC_00011.NEF"` (basnamn
+  `"DSC_00011"`). Detta var redan korrekt innan denna fas.
+- `PipelineRunner.rerunStep`/HDR-/Lightroom-hjälparnas `removeItem`-anrop
+  rör bara fasta, appdefinierade filnamn direkt under `outputDir`
+  (`bracket_groups.json`, `hdr/`, `metadata_written.json`, m.fl.) —
+  aldrig något härlett från adress- eller filnamnssträngar.
+- `PipelineRunner+AddressCorrection.swift`s mappomdöpning byggde redan
+  bara på `AddressFolderLayout`s tre fasta undermappnamn direkt under
+  `outputDir`.
+
+**Två faktiska brister hittade och fixade (minsta möjliga ändring):**
+
+1. **Path-traversal-risk i `CalendarService.sanitizeFolderName`**
+   (`PhotoFlow/Sources/Services/CalendarService.swift`). Adressmappnamnet
+   för DNG-mappen används OSKYDDAT (inget suffix, se
+   `AddressFolderLayout.dngDirName`). Om en kalenderhändelses titel någon
+   gång extraherades/trimmades ner till exakt `".."`, `"."` eller `""` —
+   inte troligt men inte omöjligt med udda formulerade händelsetitlar —
+   skulle `outputDir.appendingPathComponent(adress)` bli en sökväg som
+   OS:et (mkdir/rename/readdir, inte bara Foundations `URL`-typ lexikalt)
+   löser upp som outputDirs FÖRÄLDER eller outputDir självt. Alla
+   filoperationer för den "adressen" (symlänkar, metadataskrivning,
+   gallring) hade då kunnat träffa fel mapp. Samma sanering används även
+   för användarens EGEN manuellt inskrivna adressrättning
+   (`resortAddressFolder`), så detta gällde både kalenderdata och
+   användarinmatning. Fix: saneringen faller nu tillbaka på
+   `"Okänd adress"` för dessa tre farliga resultat.
+2. **Gallring kunde träffa en främmande fil med samma basnamn**
+   (`deleteRejectedFiles`/`moveRejectedToFolder`/`writeCullRatings` i
+   `PipelineRunner+SortFolders.swift`/`+Culling.swift`). Matchningen var
+   redan exakt på basnamn, men brydde sig inte om filen faktiskt var en
+   symlänk/sidecar appen skapat — en användare som av misstag lade en egen
+   fil (t.ex. en redigerad `.psd`) med samma basnamn som en gallrad bild i
+   `"<adress> ÖVRIGA"` hade fått den filen raderad/flyttad/omtaggad. Fix:
+   alla tre funktionerna kräver nu att filen antingen är en symlänk appen
+   skapat eller en `.xmp`-sidecar appen skrivit.
+3. **(Hittades under förberedelserna för Del 2, samma andetag)** HDR-resultat
+   (`hdr_group_N.tiff`/`.jpg`) föll INTE tillbaka på `"Osorterade"` som
+   alla andra filtyper i `exportToAddressFolders`, utan `continue`:ade
+   (hoppade över) gruppen helt om det inte fanns en kalendermatchning. En
+   session utan kalendermatchning (ingen kalenderåtkomst, eller inget
+   event som täcker fototillfället) tappade därmed sina HDR-resultat
+   PERMANENT i `outputDir/hdr/` — de flyttades aldrig till någon adressmapp
+   och syntes aldrig i Lightroom/Finder. Detta är inte en säkerhetsbrist
+   (rör inget utanför outputDir) men är ett verkligt dataförlust-artat
+   beteendefel, så det fixades i samma anda: samma `?? "Osorterade"`-
+   fallback som redan fanns för NEF/DNG/preview.
+
+**Ny central skyddsfunktion** `PhotoFlow/Sources/Services/FileSafety.swift`:
+- `assertInsideOutput(_:outputDir:)` — kastar (loggas, sväljs inte tyst) om
+  en sökväg, efter lexikal normalisering av `.`/`..`, inte ligger inuti
+  `outputDir`. Används av `resortAddressFolder` och det nya
+  `PipelineRunner.cullCandidates` (delad av `deleteRejectedFiles`/
+  `moveRejectedToFolder`) som defense-in-depth ovanpå
+  `sanitizeFolderName`-fixen.
+- `isCullManaged(_:)`/`isSymlink(_:)` — "är den här filen vår att
+  radera/flytta/ratingmärka" (symlänk ELLER `.xmp`-sidecar).
+
+**Nya tester** (se `PhotoFlow/Tests/`): `FileSafetyTests` (`..`-eskapering,
+en syskonmapp med gemensamt strängprefix som INTE ska räknas som "inuti",
+`isSymlink`/`isCullManaged`), `PipelineRunnerCullSafetyTests` (en riktig
+temp-katalog med exakt uppgiftens fällor: `DSC_00011.NEF` vs `DSC_0001`, en
+främmande `.psd` med samma basnamn, en mapp utanför `outputDir`),
+`PipelineRunnerHDROrphanTests` (HDR-fallbacken), samt fyra nya
+`sanitizeFolderName`-edge-case-tester i `CalendarServiceTests`. Se commit
+`40c3d71` och `e6f5b0c`-liknande efterföljande commits för exakta diffar.
+
+### Del 2 — Rök-test av hela pipelinen på riktig data
+
+**Data:** 35 riktiga NEF (Nikon, 7 exponeringsbrackets om 5 bilder vardera,
+verifierat med `exiftool` att exponeringstiderna faktiskt varierar per
+bracket, t.ex. 1/6s–1.6s) kopierade — ALDRIG flyttade — från
+`~/Desktop/ptohotagraphy-test/Exempelgatan 7/` (samma riktiga testmapp Fas 2a
+redan använde) till scratchpad `SMOKE/input/`. Källfilerna i
+`~/Desktop/ptohotagraphy-test/` rördes aldrig (bara `cp -p`).
+
+**Testet:** `PhotoFlow/Tests/PipelineSmokeTest.swift`, opt-in (av som
+standard — se dok-kommentaren i filen). Miljövariabler når INTE alltid
+testprocessen via `xcodebuild test` (verifierat: en `export`ad variabel i
+det anropande skalet syns inte i `ProcessInfo.processInfo.environment`
+inuti testvärden), så testet styrs i stället av en styrfil,
+`~/Library/Application Support/PhotoFlow/smoke_test.json`
+(`{"enabled": true, "inputPath": "...", "keepOutput": true}`), med
+miljövariabler (`PHOTOFLOW_SMOKE`/`_INPUT`/`_KEEP_OUTPUT`) som fallback om
+de mot förmodan når fram. Kör den RIKTIGA `PipelineRunner`-koden (ingen
+mock): kalendermatchning AV (ingen EventKit-åtkomst behövs), AI-taggning
+och HDR (Core Image-motorn) PÅ. Snapshottar/återställer varje
+`AppSettings`-inställning den rör, eftersom testvärden delar riktig
+`UserDefaults` med appen (`TEST_HOST`).
+
+**Resultat: testet kunde INTE köras klart — se "Känd bugg" nedan.** Det som
+gick att verifiera innan avbrottet:
+
+- **Källfilerna är bit-identiska**: `md5` av alla 35 NEF i `SMOKE/input`
+  före körningen jämfört med efter (efter att den hängda körningen
+  avbröts) — **exakt identiska, 0 skillnader** (`diff` mellan de två
+  md5-listorna är tom). Detta är den viktigaste kontrollen i hela
+  röktestet och den klarades.
+- **DNG-konvertering**: alla 35 DNG-filer skapades korrekt av Adobe DNG
+  Converter (`8280×5520`, 42–51 MB, giltiga enligt `exiftool`) i
+  `outputDir/dng/` innan pipelinen fastnade i nästa steg.
+- Inget annat pipeline-steg (bracket-analys, previews, HDR, metadata,
+  filsortering) hann köras — se känd bugg.
+
+**Känd bugg: DNG-konverteringssteget hänger i `Process.waitUntilExit()`
+när pipelinen körs via `xcodebuild test`.**
+
+Reproduktion: `PipelineRunner.runDNGConversion` anropar Adobe DNG Converter
+via `ProcessRunner.runProcess` (temp-filer för stdout/stderr, inga pipes —
+redan skyddat mot det klassiska pipe-buffer-dödläget). `pipeline.log` visar
+att steget startade, och alla 35 `.dng`-filer skrevs korrekt till disk inom
+någon sekund — men `process.waitUntilExit()` returnerade aldrig,
+pipelinen satt fast i **3,5+ minuter** tills körningen avbröts manuellt
+(`kill` på `xcodebuild`-processen).
+
+Isolerad felsökning (i scratchpad, inte i appen):
+- Samma Adobe DNG Converter-anrop direkt från ett Python-`subprocess`
+  (kommandoradsprocess, INTE testvärdad): **0,35 s**, exit-kod 0.
+- Samma anrop via ren `Foundation.Process` i ett fristående Swift-skript
+  (`xcrun swift script.swift`, INTE testvärdat av Xcode): alla 35 filer på
+  **5,4 s**, `waitUntilExit()` returnerade normalt, exit-kod 0.
+- Samma anrop, samma kod, samma binär — men INUTI `PhotoFlow.app` när det
+  körs som testvärd under `xcodebuild test`: hänger.
+
+Slutsats: detta är inte en bugg i `ProcessRunner`/`PipelineRunner` (samma
+`Process`-anrop fungerar perfekt utanför en Xcode-testvärd-kontext), utan
+troligen en interaktion mellan Xcodes testrunner/debugger och hur en
+testvärdad apps barnprocesser (särskilt en tung GUI-app som Adobe DNG
+Converter) reapas. Inte verifierat om det förekommer i den RIKTIGA,
+normalt startade appen (dubbelklickad, inte körd under `xcodebuild test`)
+— tidigare fasers manuella testanteckningar antar att DNG-konvertering
+fungerar där, och inget i denna fas motsäger det. Dokumenterat i
+`PipelineSmokeTest.swift`s dok-kommentar så nästa person som kör testet
+känner igen symtomet direkt i stället för att tro att pipelinen är trasig.
+Ingen kodändring gjord i `ProcessRunner`/`PipelineRunner` för detta — att
+lägga till en timeout/watchdog utan att kunna reproducera roten riskerade
+att maskera en riktig framtida hängning i stället för att fixa en, så det
+lämnas som dokumenterad begränsning snarare än en gissad fix.
+
+**Ej verifierat på grund av avbrottet** (kräver att någon kör om testet,
+gärna via Xcodes Test Navigator i stället för `xcodebuild test` på
+kommandoraden, se ovan): previews, `bracket_groups.json`, symlänkar i
+adressmappar, HDR-TIFF 16-bitars, IPTC/XMP-metadataskrivning, XMP-sidecar
+för NEF. Koden för samtliga dessa steg oförändrad av denna fas (förutom
+HDR-Osorterade-fixen i Del 1), och tidigare fasers egna verifieringar
+(Fas 2a/3a i detta dokument) har redan testat bracket-analys respektive
+HDR-motorn separat mot riktig data — bara den FULLA kedjan i ett enda
+`xcodebuild test`-kört svep kunde inte verifieras här.
+
+### Del 3 — Att testa manuellt i appen (prioriterat, viktigast först)
+
+1. **Kör hela pipelinen på en riktig SD-kortsmapp i den RIKTIGA appen**
+   (inte via testet) och kontrollera att den går igenom alla steg utan att
+   hänga — särskilt DNG-konverteringssteget (se känd bugg ovan). Om den
+   RIKTIGA appen också hänger där är det allvarligt och inte bara ett
+   testartefakt — rapportera i så fall vad som visas i förloppsindikatorn
+   och `~/Library/Logs/PhotoFlow/photoflow.log`.
+2. **HDR utan kalenderåtkomst/kalendermatchning**: kör en session med
+   `AppSettings.calendarMatchEnabled = false` (eller neka
+   kalenderbehörighet) och HDR påslaget, med minst en bracket-serie.
+   Kontrollera att `hdr_group_*.tiff/.jpg` hamnar i
+   `"Osorterade ÖVRIGA"`/`"Osorterade TITTBILDER"` — INTE kvar i
+   `outputDir/hdr/` (Del 1, punkt 3-fixen).
+3. **Adressrättning med en udda kalenderhändelsetitel**: testa att rätta
+   en adress till något kort/konstigt (t.ex. bara mellanslag, eller en
+   enda punkt) i adressbanderollen och kontrollera att det INTE skapar
+   eller flyttar något utanför outputmappen — `sanitizeFolderName` ska ge
+   `"Okänd adress"` i stället för att krascha eller göra något oväntat.
+4. **Gallring ("radera"/"flytta"-läget) med en extra fil i adressmappen**:
+   lägg manuellt en egen fil (t.ex. en `.psd`) med SAMMA basnamn som en
+   NEF i en `"<adress> ÖVRIGA"`-mapp, avvisa den bilden, och kör
+   gallringen. Kontrollera att din egna fil FINNS KVAR (inte raderad/
+   flyttad) — bara symlänken och ev. `.xmp`-sidecar ska rensas.
+5. **Symlänkar intakta efter en full körning**:
+   `find <outputmapp> -name "*.NEF" ! -type l` ska ge tom output (inga
+   NEF ska någonsin bli vanliga kopior).
+6. **XMP-sidecar + IPTC/GPS på en riktig session** med kalendermatchning
+   PÅ: kontrollera med `exiftool -G1 -a <fil>.xmp` att adress/GPS ser
+   rimliga ut, och att DNG/preview-filer har samma adress i IPTC-fälten.
+7. **HDR-TIFF är 16-bitars**: `exiftool -BitsPerSample <hdr-fil>.tiff` på
+   en riktig HDR-sammanslagning.
+8. **Avbryt mitt i DNG-konvertering** i den riktiga appen (inte testet) —
+   kontrollera att "Avbryt" faktiskt dödar Adobe DNG Converter-processen
+   (`ps aux | grep -i "dng converter"`) och inte bara fryser UI:t.
+9. **Kör om en befintlig session** som redan har `metadata_written.json`/
+   `files_sorted.json` från FÖRE denna fas — kontrollera att inget i Del 1s
+   fixar (särskilt `sanitizeFolderName`) ändrar mappnamn för adresser som
+   redan sorterats (samma adress ska sanera till samma mappnamn som förut,
+   om den inte var en av de tre farliga specialfallen).
+10. **Bevakningsläge (WatchService) + hela pipelinen** end-to-end med ett
+    riktigt SD-kort, för att se om DNG-hänget (känd bugg) är specifikt för
+    `xcodebuild test`-kontexten eller om det på något vis även kan uppstå
+    i normal, dubbelklickad appdrift.
+
+### Kända begränsningar / nästa steg
+
+- **DNG-konverteringshänget under `xcodebuild test`** (se Del 2) är den
+  viktigaste kvarstående frågan från den här fasen — oklart om det bara är
+  ett testverktygsartefakt eller pekar på något som kan drabba riktiga
+  användare under vissa omständigheter (t.ex. om appen någon gång körs
+  under en debugger, eller i en annan ovanlig processkontext). Ingen
+  reproduktion hittades i normal, fristående processkörning.
+- Rök-testet kunde inte verifiera preview-generering, bracket-gruppering,
+  HDR-sammanslagning, metadataskrivning eller XMP-sidecars end-to-end i ETT
+  svep på grund av avbrottet ovan — dessa är däremot redan verifierade
+  styckvis mot riktig data i tidigare faser (Fas 2a: bracket-analys mot
+  142/2117-bilderssessioner; Fas 3a: HDR-motorn mot riktiga RAW-brackets).
+- `FileSafety`/`sanitizeFolderName`-fixarna i Del 1 är defense-in-depth för
+  ett scenario (en kalenderhändelsetitel som saneras till exakt `".."`)
+  som INTE kunnat reproduceras med riktiga kalenderdata under denna eller
+  tidigare faser — bara konstruerade i enhetstester. Om användaren någon
+  gång ser en mapp bokstavligen döpt `"Okänd adress"` dyka upp där en
+  riktig adress förväntades är det ett tecken på att detta fall triggades
+  på riktigt, värt att undersöka vilken kalenderhändelsetitel som orsakade
+  det.
+- Styrfilen för röktestet (`~/Library/Application Support/PhotoFlow/
+  smoke_test.json`) är avstängd/borttagen igen efter denna fas — normala
+  `xcodebuild test`/Cmd+U-körningar påverkas inte och tar bara några
+  sekunder som förut.

@@ -164,8 +164,15 @@ extension PipelineRunner {
         let hdrEnabled = AppSettings.shared.hdrMergeEnabled
         let hdrDir = outputDir.appendingPathComponent("hdr")
         for group in state.bracketGroups where group.isBracket && hdrEnabled {
-            guard let firstPhoto = state.photos(in: group).first,
-                  let folderName = calendar.addressFolder(for: firstPhoto.dateTime, mappings: calendarMappings) else { continue }
+            guard let firstPhoto = state.photos(in: group).first else { continue }
+            // Slutgranskning: this used to `continue` (skip the group entirely)
+            // when there was no calendar match, unlike every other file type
+            // above which falls back to "Osorterade" — a session with no
+            // calendar match (e.g. no calendar access, or no event covering the
+            // shoot) silently orphaned its merged HDR TIFF/JPEG in outputDir/hdr/
+            // forever, with no address folder ever pointing at them. Same
+            // fallback as the per-photo loop above.
+            let folderName = calendar.addressFolder(for: firstPhoto.dateTime, mappings: calendarMappings) ?? "Osorterade"
             let previewDir = AddressFolderLayout.previewDir(in: outputDir, folderName: folderName)
             let extrasDir = AddressFolderLayout.extrasDir(in: outputDir, folderName: folderName)
             try? fm.createDirectory(at: previewDir, withIntermediateDirectories: true)
