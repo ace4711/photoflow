@@ -188,8 +188,31 @@ final class FieldDictationService: ObservableObject {
                 return
             }
         } else {
-            inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-                self?.enqueue(buffer: buffer)
+            // Fas 8: samma krasch-mönster som `checkAuthorization` ovan (se
+            // FORBATTRINGAR, commit 4cb01db) — den gamla `installTap`s
+            // blocktyp är inte `@Sendable`-märkt i SDK:n, så utan explicit
+            // `@Sendable` här skulle blocket bli MainActor-isolerat av
+            // SWIFT_DEFAULT_ACTOR_ISOLATION, och AVAudioEngine anropar det
+            // från sin egen realtids-ljudtråd — kraschar direkt i Swift 6:s
+            // isoleringskontroll. Bara ett teoretiskt riskläge på den här
+            // Simulatorn (iOS 27 tar alltid `installAudioTap`-grenen ovan),
+            // men skulle krascha vid varje dikteringsstart på en riktig
+            // iOS 26-enhet.
+            //
+            // `buffer` är en vanlig, muterbar `AVAudioPCMBuffer` (inte
+            // `Sendable`). `AVAudioPCMBuffer.init(copying:)` kräver iOS 27
+            // (verifierat i SDK:n — precis som macOS-sidan), så den finns
+            // inte på den här grenen (iOS < 27); `Self.copyPCMBuffer` gör
+            // samma djupa kopia manuellt och paketerar resultatet i en
+            // `SendableAudioBuffer` (se dess klasskommentar i
+            // `Sources/Shared`) — annars klagar regionbaserad
+            // isoleringskontroll ("sending risks causing data races") trots
+            // att kopian faktiskt är helt oaliaserad.
+            inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { @Sendable [weak self] buffer, _ in
+                guard let copy = Self.copyPCMBuffer(buffer) else { return }
+                Task { @MainActor in
+                    self?.enqueue(buffer: copy.buffer)
+                }
             }
         }
 
@@ -201,6 +224,26 @@ final class FieldDictationService: ObservableObject {
             self.error = "Kunde inte starta mikrofon: \(error.localizedDescription)"
             stopRecording()
         }
+    }
+
+    /// Fas 8: manuell djup kopia av en `AVAudioPCMBuffer`, för `installTap`-
+    /// grenen ovan (iOS < 27) där `AVAudioPCMBuffer.init(copying:)` inte
+    /// finns än (se kommentaren där). Samma implementation/motivering som
+    /// macOS-sidans `DictationService.copyPCMBuffer` — se dess klass-
+    /// kommentar för varför resultatet paketeras i en `SendableAudioBuffer`.
+    /// `nonisolated`: anropas direkt från den `@Sendable` tapp-closuren
+    /// ovan, INTE från MainActor.
+    nonisolated private static func copyPCMBuffer(_ buffer: AVAudioPCMBuffer) -> SendableAudioBuffer? {
+        guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameCapacity) else { return nil }
+        copy.frameLength = buffer.frameLength
+        let srcList = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: buffer.audioBufferList))
+        let dstList = UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList)
+        for i in 0..<srcList.count {
+            guard let srcData = srcList[i].mData, let dstData = dstList[i].mData else { continue }
+            dstData.copyMemory(from: srcData, byteCount: Int(srcList[i].mDataByteSize))
+            dstList[i].mDataByteSize = srcList[i].mDataByteSize
+        }
+        return SendableAudioBuffer(buffer: copy)
     }
 
     private func enqueue(buffer: AVAudioPCMBuffer) {

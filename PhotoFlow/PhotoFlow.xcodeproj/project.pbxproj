@@ -83,8 +83,10 @@
 		7CE65CE8AF5D4E4EA3C7C70B /* ExposureFusion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80F00E018557CCC542713B03 /* ExposureFusion.swift */; };
 		7FAF8CDAD6EC48E21A14EB68 /* PipelineSmokeTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01FA4249807EF12677F9555D /* PipelineSmokeTest.swift */; };
 		8002ADC378FEA97C1DEA25F4 /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7061DF17C62A4997B166004 /* ImageCache.swift */; };
+		8998BCF97C56B038DA8BDFE3 /* SendableAudioBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC8847514CC4525E567967E4 /* SendableAudioBuffer.swift */; };
 		89BC4F5B43DCA138E6ABB560 /* PhotoFlowShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9C613A5C0AB46074022ED10 /* PhotoFlowShortcuts.swift */; };
 		8ADAF496A047B2BDDCB9026B /* singles.expected.json in Resources */ = {isa = PBXBuildFile; fileRef = 64A78E994BBEEF2B356195DB /* singles.expected.json */; };
+		8B3D05261E6FF57ED247EE14 /* SendableAudioBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC8847514CC4525E567967E4 /* SendableAudioBuffer.swift */; };
 		8C8CF30C2B6DCF305DDAF09B /* two_brackets_and_gap.csv in Resources */ = {isa = PBXBuildFile; fileRef = AF069198E88FC10A80486CAD /* two_brackets_and_gap.csv */; };
 		8EE3FB4300156EADCD930BA6 /* FieldDictationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D5B5E91F1D94BB20B297DC4 /* FieldDictationService.swift */; };
 		93B3F8D25B79A3196492BFFA /* ImageCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE92644971AE2162D199B866 /* ImageCacheTests.swift */; };
@@ -260,6 +262,7 @@
 		C7F2A71D70B1ACBB0728340C /* SessionHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionHistoryView.swift; sourceTree = "<group>"; };
 		C8C117DD311BF15484E64F9F /* DictationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationServiceTests.swift; sourceTree = "<group>"; };
 		C9C613A5C0AB46074022ED10 /* PhotoFlowShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoFlowShortcuts.swift; sourceTree = "<group>"; };
+		CC8847514CC4525E567967E4 /* SendableAudioBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SendableAudioBuffer.swift; sourceTree = "<group>"; };
 		CC9242645046144625EF653B /* WatchServiceFileIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchServiceFileIdentityTests.swift; sourceTree = "<group>"; };
 		D180E348EDC56158B0BF798D /* StepCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StepCardView.swift; sourceTree = "<group>"; };
 		D2FF546BEC5023F23323CDC0 /* SessionStatusIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStatusIntent.swift; sourceTree = "<group>"; };
@@ -379,6 +382,7 @@
 				6C9C601A9BD9772BFB405246 /* FieldNoteBundle.swift */,
 				881FEA0DBA1629EB3BC2AA74 /* FieldNoteMatcher.swift */,
 				BDF1F493959BE53E660FB778 /* PhotoNote.swift */,
+				CC8847514CC4525E567967E4 /* SendableAudioBuffer.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -815,6 +819,7 @@
 				65BF33C26FC4038D88720266 /* PreviewCullView.swift in Sources */,
 				141C35E348C121F5A5419E43 /* ProcessRunner.swift in Sources */,
 				27554CDFAA48F1DB3AD0F72F /* RAWRenderer.swift in Sources */,
+				8B3D05261E6FF57ED247EE14 /* SendableAudioBuffer.swift in Sources */,
 				77932461C99C00B057428947 /* SessionHistoryStore.swift in Sources */,
 				E07356499310A60CA6E21D60 /* SessionHistoryView.swift in Sources */,
 				3446EBB677DA1309A8C68BD6 /* SessionManifest.swift in Sources */,
@@ -851,6 +856,7 @@
 				6929F60C15C14E43E138F4AA /* PhotoFlowFieldApp.swift in Sources */,
 				C3AF0B9EB5F4E9EC3E1407FA /* PhotoNote.swift in Sources */,
 				BF6EF07966EAFC3A22A0E058 /* RecordButtonView.swift in Sources */,
+				8998BCF97C56B038DA8BDFE3 /* SendableAudioBuffer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
