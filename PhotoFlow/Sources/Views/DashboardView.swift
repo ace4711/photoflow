@@ -162,6 +162,7 @@ struct DashboardView: View {
                     systemImage: "bolt.circle.fill"
                 )
             }
+            .buttonStyle(.borderedProminent)
             .tint(.accentColor)
             .disabled(pipeline.isRunning || settings.inputDirectory == nil)
             .help("Kör hela pipelinen automatiskt")
