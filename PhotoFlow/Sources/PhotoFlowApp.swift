@@ -59,9 +59,9 @@ struct PhotoFlowApp: App {
         }
 
         MenuBarExtra(isInserted: $showMenuBarExtra) {
-            MenuBarExtraContent(runner: runner, mainWindowID: Self.mainWindowID)
+            MenuBarExtraContent(pipeline: pipeline, runner: runner, mainWindowID: Self.mainWindowID)
         } label: {
-            MenuBarExtraLabel(watcher: runner.watcher)
+            MenuBarExtraLabel(watcher: runner.watcher, pipeline: pipeline)
         }
     }
 
@@ -103,22 +103,40 @@ struct PhotoFlowApp: App {
     }
 }
 
-/// Ikonen i menyraden — kamera i vila, öga när bevakningen är aktiv.
-/// En egen liten `View` (i stället för att bygga `Image` direkt inline i
-/// `MenuBarExtra`s `label`-closure) så `@ObservedObject var watcher`
-/// faktiskt ger en prenumeration SwiftUI kan diffa mot; annars läses
-/// `watcher.isWatching` bara en gång och ikonen skulle aldrig uppdateras.
+/// Ikonen i menyraden — kamera i vila, öga när bevakningen är aktiv, en
+/// utropstecken-cirkel när pipelinen väntar på att användaren ska granska
+/// (Fas 5: tidigare visade ikonen bara bevaknings-läget, aldrig att
+/// resultatet stod och väntade — man fick öppna huvudfönstret för att se
+/// det). En egen liten `View` (i stället för att bygga `Image` direkt inline
+/// i `MenuBarExtra`s `label`-closure) så `@ObservedObject`-egenskaperna
+/// faktiskt ger en prenumeration SwiftUI kan diffa mot; annars läses värdena
+/// bara en gång och ikonen skulle aldrig uppdateras.
 private struct MenuBarExtraLabel: View {
     @ObservedObject var watcher: WatchService
+    @ObservedObject var pipeline: PipelineState
 
     var body: some View {
-        Image(systemName: watcher.isWatching ? "eye.fill" : "camera")
+        if MenuBarStatus.needsAttention(pipeline) {
+            Image(systemName: "exclamationmark.circle.fill")
+        } else {
+            Image(systemName: watcher.isWatching ? "eye.fill" : "camera")
+        }
+    }
+}
+
+/// Delad statuslogik mellan menyradens ikon och dess textrad (Fas 5) — en
+/// enda källa till "väntar det något på användaren?" så de två aldrig kan gå
+/// isär.
+private enum MenuBarStatus {
+    static func needsAttention(_ pipeline: PipelineState) -> Bool {
+        pipeline.stepStatuses[.manualReview]?.phase == .needsAttention
     }
 }
 
 /// Menyinnehållet: status, starta/stoppa bevakning, öppna appen/outputmappen,
 /// avsluta.
 private struct MenuBarExtraContent: View {
+    @ObservedObject var pipeline: PipelineState
     @ObservedObject var runner: RunnerWrapper
     let mainWindowID: String
 
@@ -158,7 +176,30 @@ private struct MenuBarExtraContent: View {
         .keyboardShortcut("q")
     }
 
+    /// Fas 5: speglar nu det faktiska pipeline-läget (steg + antal) i stället
+    /// för att bara visa bevaknings-status — tidigare uppdaterades texten
+    /// inte alls medan en körning pågick (dokumenterat som kvarstående i
+    /// Fas 3e). Prioritetsordning: väntar på granskning (viktigast — kräver
+    /// användaren) > körning pågår > bevakningsstatus.
     private var statusText: String {
+        if MenuBarStatus.needsAttention(pipeline) {
+            let unreviewed = pipeline.allPhotos.filter { !$0.accepted && !$0.rejected }.count
+            return unreviewed > 0
+                ? "Väntar på granskning · \(unreviewed) bilder"
+                : "Väntar på granskning"
+        }
+
+        if pipeline.isRunning {
+            let step = pipeline.currentStep.title
+            if pipeline.isPaused {
+                return "Pausad · \(step)"
+            }
+            if pipeline.totalFiles > 0 {
+                return "\(step) · \(pipeline.currentFileIndex)/\(pipeline.totalFiles)"
+            }
+            return step
+        }
+
         guard watcher.isWatching else { return "Bevakning avstängd" }
         return watcher.newFilesFound > 0
             ? "Bevakar · \(watcher.newFilesFound) nya"
