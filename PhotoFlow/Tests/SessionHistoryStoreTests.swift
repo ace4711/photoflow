@@ -123,6 +123,41 @@ struct SessionHistoryStoreTests {
         #expect(kept.count == 1)
     }
 
+    @Test("remove tar bort en post ur registret utan att röra filer på disk")
+    func remove_removesOnlyMatchingEntry() {
+        let registryURL = tempRegistryURL()
+        let dirA = FileManager.default.temporaryDirectory.appendingPathComponent("SessionHistoryStoreTests-remove-A-\(UUID().uuidString)")
+        let dirB = FileManager.default.temporaryDirectory.appendingPathComponent("SessionHistoryStoreTests-remove-B-\(UUID().uuidString)")
+        try! FileManager.default.createDirectory(at: dirA, withIntermediateDirectories: true)
+        try! FileManager.default.createDirectory(at: dirB, withIntermediateDirectories: true)
+        let manifestA = makeManifest(outputDir: dirA)
+        let manifestB = makeManifest(outputDir: dirB)
+        SessionHistoryStore.record(manifestA, registryURL: registryURL)
+        SessionHistoryStore.record(manifestB, registryURL: registryURL)
+        #expect(SessionHistoryStore.load(from: registryURL).count == 2)
+
+        SessionHistoryStore.remove(sessionID: manifestA.sessionID, registryURL: registryURL)
+
+        let remaining = SessionHistoryStore.load(from: registryURL)
+        #expect(remaining.count == 1)
+        #expect(remaining.first?.sessionID == manifestB.sessionID)
+        // Outputmapparna (för BÅDA sessionerna) ska ligga kvar orörda — remove
+        // rör aldrig filer på disk, bara registerposten.
+        #expect(FileManager.default.fileExists(atPath: dirA.path))
+        #expect(FileManager.default.fileExists(atPath: dirB.path))
+    }
+
+    @Test("remove med ett okänt sessionID är en no-op")
+    func remove_unknownSessionID_isNoOp() {
+        let registryURL = tempRegistryURL()
+        let outputDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        SessionHistoryStore.record(makeManifest(outputDir: outputDir), registryURL: registryURL)
+
+        SessionHistoryStore.remove(sessionID: UUID(), registryURL: registryURL)
+
+        #expect(SessionHistoryStore.load(from: registryURL).count == 1)
+    }
+
     @Test("Flera adresser i manifestet sparas alla i historikposten")
     func record_multipleAddresses_allPersisted() {
         let registryURL = tempRegistryURL()

@@ -140,6 +140,17 @@ enum SessionHistoryStore {
         save(entries, to: registryURL)
     }
 
+    /// Fas 8: tar bort EN post ur registret på användarens uttryckliga begäran
+    /// (se `SessionHistoryView`s "Ta bort ur historik"-knapp) — rör ALDRIG
+    /// några filer på disk, bara raden i `sessions.json`. Skiljer sig därmed
+    /// medvetet från `pruneMissingOutputDirectories` nedan, som tar bort
+    /// automatiskt utan att fråga men bara för mappar som redan är borta.
+    static func remove(sessionID: UUID, registryURL: URL = defaultRegistryURL) {
+        var entries = load(from: registryURL)
+        entries.removeAll { $0.sessionID == sessionID }
+        save(entries, to: registryURL)
+    }
+
     /// Tar bort poster vars outputmapp inte längre finns på disk (t.ex.
     /// flyttad/raderad manuellt av användaren). Loggas via `os.Logger`, men
     /// frågar aldrig — det här är bara bokföring om var riktiga filer bodde,

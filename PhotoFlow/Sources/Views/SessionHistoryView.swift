@@ -15,6 +15,9 @@ struct SessionHistoryView: View {
 
     @State private var entries: [SessionHistoryStore.Entry] = []
     @State private var searchText: String = ""
+    /// Fas 8: posten som väntar på bekräftelse i borttagningsdialogen —
+    /// `nil` när ingen dialog visas.
+    @State private var entryPendingDeletion: SessionHistoryStore.Entry?
 
     private var filteredEntries: [SessionHistoryStore.Entry] {
         let sorted = entries.sorted { $0.updatedAt > $1.updatedAt }
@@ -41,8 +44,14 @@ struct SessionHistoryView: View {
                         SessionHistoryRow(
                             entry: entry,
                             onOpen: { open(entry) },
-                            onRevealInFinder: { reveal(entry) }
+                            onRevealInFinder: { reveal(entry) },
+                            onDelete: { entryPendingDeletion = entry }
                         )
+                        .swipeActions(edge: .trailing) {
+                            Button("Ta bort ur historik", role: .destructive) {
+                                entryPendingDeletion = entry
+                            }
+                        }
                     }
                 }
             }
@@ -61,6 +70,29 @@ struct SessionHistoryView: View {
             // så listan inte samlar på sig döda pekare över tid.
             SessionHistoryStore.pruneMissingOutputDirectories()
             reload()
+        }
+        // Fas 8: till skillnad från `pruneMissingOutputDirectories` (som
+        // rensar tyst) är det här en explicit, användarinitierad borttagning
+        // — därför en bekräftelsedialog som är tydlig med att bara REGISTER-
+        // posten försvinner, aldrig filerna i output-/inputmappen.
+        .confirmationDialog(
+            "Ta bort session ur historiken?",
+            isPresented: Binding(
+                get: { entryPendingDeletion != nil },
+                set: { if !$0 { entryPendingDeletion = nil } }
+            ),
+            presenting: entryPendingDeletion
+        ) { entry in
+            Button("Ta bort ur historik", role: .destructive) {
+                SessionHistoryStore.remove(sessionID: entry.sessionID)
+                reload()
+                entryPendingDeletion = nil
+            }
+            Button("Avbryt", role: .cancel) {
+                entryPendingDeletion = nil
+            }
+        } message: { entry in
+            Text("Bara posten i historiklistan tas bort. Inga filer raderas — mappen \"\(entry.outputDirectory)\" och dess innehåll ligger kvar orörda på disk.")
         }
     }
 
@@ -91,6 +123,7 @@ private struct SessionHistoryRow: View {
     let entry: SessionHistoryStore.Entry
     let onOpen: () -> Void
     let onRevealInFinder: () -> Void
+    let onDelete: () -> Void
 
     private static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -134,6 +167,9 @@ private struct SessionHistoryRow: View {
                 Button("Visa i Finder", action: onRevealInFinder)
                     .buttonStyle(.bordered)
                     .disabled(!outputDirectoryExists)
+                Button("Ta bort ur historik", role: .destructive, action: onDelete)
+                    .buttonStyle(.borderless)
+                    .font(.caption)
             }
         }
         .padding(.vertical, 4)
