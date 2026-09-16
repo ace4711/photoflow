@@ -66,6 +66,15 @@ struct PhotoFlowApp: App {
     }
 
     private func startupChecks() async {
+        // Fas 3f: registrera denna app-instans state hos `AppServices` sa App
+        // Intents (StartPipelineIntent m.fl., se Sources/Intents/) kan na
+        // samma `runner`/`pipeline` som resten av appen. Kors har (i stallet
+        // for direkt i `body`) eftersom ett void-statement i `body` inte kan
+        // stå i `WindowGroup`s @SceneBuilder-context ("type '()' cannot
+        // conform to 'Scene'") — `.task` racker gott, intents kraver aldrig
+        // att AppServices ar registrerad innan fonstret ens hunnit visas.
+        AppServices.shared.register(pipeline: pipeline, runner: runner)
+
         // Run dependency check
         deps.runChecks()
 

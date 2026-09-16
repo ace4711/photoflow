@@ -46,6 +46,13 @@ targets:
         INFOPLIST_KEY_NSCalendarsUsageDescription: "PhotoFlow läser din kalender för att matcha fotograferingar med bokningsadresser och organisera filerna i adressmappar."
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "PhotoFlow använder mikrofonen för att spela in röstanteckningar till bilder."
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "PhotoFlow använder taligenkänning för att transkribera röstanteckningar till text."
+    # Fas 3f: utan en explicit länkad AppIntents.framework-dependency hoppar
+    # Xcodes build-system över App Intents-metadataextraktionen ("Metadata
+    # extraction skipped, no AppIntents.framework dependency found") även om
+    # koden importerar och använder `AppIntents` — extraktionen letar efter
+    # en riktig länknings-dependency, inte bara ett `import`.
+    dependencies:
+      - sdk: AppIntents.framework
     entitlements:
       path: PhotoFlow.entitlements
       properties:
