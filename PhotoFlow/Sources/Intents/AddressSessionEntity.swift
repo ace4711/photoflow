@@ -2,9 +2,10 @@ import AppIntents
 import CoreSpotlight
 import Foundation
 
-/// Fas 3f: en adress-"session" — en kalendermatchad bokning i den aktuella
-/// outputmappen (se `AddressSessionLoader`s klasskommentar for begransningen
-/// att bara SENASTE korningen i den konfigurerade outputmappen syns har).
+/// En adress-"session" — en kalendermatchad bokning i en outputmapp. Fas 6:
+/// `AddressSessionLoader` aggregerar nu over ALLA kanda outputmappar
+/// (`SessionHistoryStore`s register), inte bara den senaste/aktuella
+/// korningen (Fas 3f:s ursprungliga begransning) — se dess klasskommentar.
 ///
 /// `IndexedEntity` (macOS 15+, verifierat i SDK:n) later `AddressSessionQuery`
 /// aven indexera dessa i Spotlights semantiska index via
@@ -59,12 +60,13 @@ struct AddressSessionQuery: EnumerableEntityQuery {
     }
 }
 
-/// Fas 3f: "Hitta sessioner i PhotoFlow" — listar (valfritt filtrerat pa
-/// adress/bokningstitel) adress-sessionerna i den aktuella outputmappen.
+/// "Hitta sessioner i PhotoFlow" — listar (valfritt filtrerat pa
+/// adress/bokningstitel) adress-sessionerna over ALLA kanda korningar
+/// (Fas 6: `SessionHistoryStore`), inte bara den senaste.
 struct FindSessionsIntent: AppIntent {
     static let title: LocalizedStringResource = "Hitta sessioner i PhotoFlow"
     static let description = IntentDescription(
-        "Listar adresser fran den senaste PhotoFlow-sessionen, med antal bilder och hur manga som ar godkanda."
+        "Listar adresser fran alla kanda PhotoFlow-sessioner, med antal bilder och hur manga som ar godkanda."
     )
 
     @Parameter(title: "Sokterm", description: "Filtrera pa adress eller bokningstitel. Lamna tom for alla.")

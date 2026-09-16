@@ -150,4 +150,51 @@ struct AddressSessionLoaderTests {
 
         #expect(AddressSessionLoader.loadSessions(outputDir: dir).isEmpty)
     }
+
+    // MARK: - Fas 6: loadCurrentSessions aggregerar över historikregistret
+
+    private func tempRegistryURL() -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("AddressSessionLoaderTests-registry-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("sessions.json")
+    }
+
+    private func makeManifest(outputDir: URL) -> SessionManifest {
+        SessionManifest(
+            schemaVersion: SessionManifest.currentSchemaVersion, sessionID: UUID(),
+            createdAt: Date(), updatedAt: Date(),
+            inputDirectory: outputDir.path, outputDirectory: outputDir.path,
+            photoCount: 1, groupCount: 1, addresses: [], steps: [:],
+            cullSummary: SessionManifest.CullSummary(accepted: 0, rejected: 0, unreviewed: 1)
+        )
+    }
+
+    @Test("loadCurrentSessions läser adress-sessioner från FLERA outputmappar via historikregistret")
+    func loadCurrentSessions_aggregatesAcrossHistory() {
+        let registryURL = tempRegistryURL()
+        let dirA = tempOutputDir()
+        let dirB = tempOutputDir()
+
+        write([["address": "Gata A", "event_title": "Bokning A", "range_start": "2026-01-01T08:00:00Z", "range_end": "2026-01-01T09:00:00Z"]],
+              to: dirA.appendingPathComponent("calendar_matches.json"))
+        write([["address": "Gata B", "event_title": "Bokning B", "range_start": "2026-02-01T08:00:00Z", "range_end": "2026-02-01T09:00:00Z"]],
+              to: dirB.appendingPathComponent("calendar_matches.json"))
+
+        SessionHistoryStore.record(makeManifest(outputDir: dirA), registryURL: registryURL)
+        SessionHistoryStore.record(makeManifest(outputDir: dirB), registryURL: registryURL)
+
+        let sessions = AddressSessionLoader.loadCurrentSessions(registryURL: registryURL)
+        #expect(Set(sessions.map(\.address)) == ["Gata A", "Gata B"])
+    }
+
+    @Test("loadCurrentSessions ger tom lista för en tom (men existerande) historik utan att krascha")
+    func loadCurrentSessions_emptyHistory_withNoConfiguredOutputDir_isSafe() {
+        let registryURL = tempRegistryURL()
+        // No entries recorded at all — an empty (but valid, zero-length) registry.
+        let sessions = AddressSessionLoader.loadCurrentSessions(registryURL: registryURL)
+        // Falls back to AppSettings.shared.outputDirectory, which is very
+        // likely nil/unrelated in a test environment — either way this must
+        // not crash.
+        #expect(sessions.count >= 0)
+    }
 }

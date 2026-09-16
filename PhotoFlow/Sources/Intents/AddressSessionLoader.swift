@@ -1,17 +1,19 @@
 import Foundation
 
-/// Fas 3f: laser ihop `calendar_matches.json` + `bracket_groups.json` +
-/// `cull_decisions.json` fran den AKTUELLA outputmappen
-/// (`AppSettings.shared.outputDirectory`) till en lista adress-"sessioner"
+/// Laser ihop `calendar_matches.json` + `bracket_groups.json` +
+/// `cull_decisions.json` fran EN outputmapp till en lista adress-"sessioner"
 /// for App Intents/Spotlight (`AddressSessionEntity`).
 ///
-/// PhotoFlow har idag inget begrepp om sessionshistorik — en outputmapp
-/// motsvarar en korning, och en ny korning i SAMMA mapp skriver over
-/// `calendar_matches.json`. Den har lasningen kan darfor bara aterspegla
-/// SENASTE sessionen i den mapp som just nu ar konfigurerad, inte flera
-/// veckors historik. En riktig sessionshistorik (t.ex. en lista over tidigare
-/// outputmappar) fanns inte i nagon tidigare fas och laggs inte till har —
-/// se FORBATTRINGAR.md, Fas 3f, "Kvarstaende".
+/// Fas 3f kunde bara se den SENASTE korningen i den just nu konfigurerade
+/// outputmappen (`AppSettings.shared.outputDirectory`) — PhotoFlow hade
+/// inget begrepp om sessionshistorik an. Fas 6 loste det med
+/// `SessionHistoryStore` (registret i
+/// `~/Library/Application Support/PhotoFlow/sessions.json`, uppdaterat
+/// varje gang en session kors eller oppnas igen): `loadCurrentSessions()`
+/// aggregerar nu adress-sessioner over ALLA kanda outputmappar i registret,
+/// inte bara den aktuella. `loadSessions(outputDir:)` (karnlogiken per mapp)
+/// ar ofodrandrad och fortfarande det testbara stallet — se
+/// `AddressSessionLoaderTests`.
 enum AddressSessionLoader {
     private struct CalendarMatchEntry {
         let address: String
@@ -28,9 +30,28 @@ enum AddressSessionLoader {
         let date: Date
     }
 
-    static func loadCurrentSessions() -> [AddressSessionEntity] {
-        guard let outputDir = AppSettings.shared.outputDirectory else { return [] }
-        return loadSessions(outputDir: outputDir)
+    /// Fas 6: en session per adress, over ALLA outputmappar
+    /// `SessionHistoryStore` kanner till (senast uppdaterade session forst) —
+    /// inte bara den just nu konfigurerade outputmappen. Mappar som saknas
+    /// pa disk (redan stadade av `SessionHistoryStore.pruneMissingOutputDirectories`
+    /// vid appstart/historikvyns `onAppear`, men kan tillfalligt finnas kvar
+    /// i registret daremellan) ger helt enkelt inga sessioner for den posten
+    /// istallet for att krascha — `loadSessions` lasningar misslyckas bara
+    /// tyst (`try?`) mot en obefintlig mapp.
+    static func loadCurrentSessions(registryURL: URL = SessionHistoryStore.defaultRegistryURL) -> [AddressSessionEntity] {
+        let historyEntries = SessionHistoryStore.load(from: registryURL)
+            .sorted { $0.updatedAt > $1.updatedAt }
+        guard !historyEntries.isEmpty else {
+            // Backat kompatibilitet for en session som kordes/lastes in
+            // FORE Fas 6 registrerade den i historikregistret (t.ex. om
+            // appen kraschade innan forsta `syncManifest()` hann spara) —
+            // fall tillbaka till den gamla, enkla-mapp-lasningen sa
+            // "Hitta sessioner" inte plotsligt blir tom for en befintlig
+            // anvandare.
+            guard let outputDir = AppSettings.shared.outputDirectory else { return [] }
+            return loadSessions(outputDir: outputDir)
+        }
+        return historyEntries.flatMap { loadSessions(outputDir: URL(fileURLWithPath: $0.outputDirectory)) }
     }
 
     /// Kärnlogiken, separerad från `AppSettings.shared` så den går att testa
