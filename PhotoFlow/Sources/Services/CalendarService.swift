@@ -74,8 +74,32 @@ class CalendarService {
     }
 
     /// Request calendar access. Returns true if granted.
+    ///
+    /// Frågar bara systemet när status är `.notDetermined`. Tidigare anropades
+    /// `requestFullAccessToEvents()` varje gång `accessGranted` (en ren
+    /// minnesflagga, alltid falsk vid appstart) var falsk, vilket gav en
+    /// onödig rundtur till TCC vid varje körning — och en ny dialog varje gång
+    /// systemet inte kände igen appen. Redan nekad åtkomst ger `false` direkt:
+    /// då måste användaren själv slå på den i Systeminställningar, och en ny
+    /// förfrågan visar ändå ingen dialog.
     func requestAccess() async -> Bool {
         if accessGranted { return true }
+
+        switch Self.authorizationStatus {
+        case .fullAccess:
+            accessGranted = true
+            _ = resolveCalendar()
+            return true
+        case .denied, .restricted:
+            print("[Calendar] Åtkomst nekad sedan tidigare — be användaren slå på den i Systeminställningar → Integritet → Kalendrar")
+            return false
+        case .writeOnly:
+            print("[Calendar] Endast skrivåtkomst beviljad — läsning av bokningar kräver full åtkomst")
+            return false
+        default:
+            break  // .notDetermined — fråga användaren nedan
+        }
+
         do {
             let granted = try await store.requestFullAccessToEvents()
             accessGranted = granted

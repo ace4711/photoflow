@@ -38,6 +38,25 @@ targets:
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "1"
         ENABLE_HARDENED_RUNTIME: NO
+        # Signera med riktig utvecklaridentitet i stället för ad hoc ("-").
+        # macOS kopplar TCC-behörigheter (kalender, mikrofon, taligenkänning)
+        # till appens kodsignatur: en ad hoc-signerad app får ny identitet vid
+        # VARJE ombygge, så systemet frågade om kalenderåtkomst på nytt varenda
+        # gång. Med en stabil identitet (samma team + bundle-id) minns systemet
+        # svaret mellan ombyggen.
+        # OBS: ad hoc-signering ("-") är orsaken till att systemet frågar om
+        # kalender-/mikrofonbehörighet på nytt efter varje ombygge — macOS
+        # kopplar TCC-behörigheter till kodsignaturen, och ad hoc ger appen en
+        # ny identitet varje gång binären ändras.
+        #
+        # Permanent fix: signera med en stabil identitet. Maskinens två
+        # "Apple Development"-certifikat gick ut i april/maj 2025. Förnya ett i
+        # Xcode (Inställningar → Accounts → Manage Certificates → + → Apple
+        # Development) och ersätt raderna nedan med:
+        #   CODE_SIGN_IDENTITY: "Apple Development"
+        #   CODE_SIGN_STYLE: Automatic
+        #   DEVELOPMENT_TEAM: <team-id, t.ex. C79MJBJHSF eller 64W55596GY>
+        # Kör sedan `xcodegen generate`. Då minns systemet svaret mellan byggen.
         CODE_SIGN_IDENTITY: "-"
         CODE_SIGNING_REQUIRED: NO
     # Fas 7: bytt från GENERATE_INFOPLIST_FILE + INFOPLIST_KEY_*-inställningar

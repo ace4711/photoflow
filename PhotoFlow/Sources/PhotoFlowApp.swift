@@ -100,11 +100,11 @@ struct PhotoFlowApp: App {
             showDependencyAlert = true
         }
 
-        // Request permissions
-        if AppSettings.shared.calendarMatchEnabled {
-            let _ = await CalendarService.shared.requestAccess()
-        }
-        DictationService.requestAuthorizationOnce()
+        // Behörigheter begärs INTE vid appstart. Kalenderåtkomst frågas när
+        // kalendersteget faktiskt körs (eller via knappen i Inställningar), och
+        // taligenkänning när dikteringspanelen öppnas första gången. Att fråga
+        // i förväg gav en dialog vid varje start, innan användaren ens valt en
+        // mapp — och dialogen säger mer när man ser vad den ska användas till.
 
         // Notisbehörighet begärs INTE här — se `NotificationService`s
         // klasskommentar: den begärs lat, första gången en notis faktiskt
