@@ -1383,3 +1383,267 @@ inte en metod) gav samma koordinat som `CLGeocoder` gjorde.
   `CLGeocoder.reverseGeocodeLocation`) undersöktes i SDK:n men används inte
   någonstans i appen idag (ingen kod reverse-geocodar) — inget att
   migrera, bara dokumenterat för fullständighetens skull.
+
+## Fas 3d – Foundation Models på enheten
+
+Utfört autonomt på branchen `forbattringar` medan användaren sov, ett steg i
+taget med bygge + tester gröna före varje commit. Se `git log --oneline` för
+commit-för-commit-historik. 119 tester totalt efter denna fas, alla gröna.
+
+Mål: använda Apples nya `FoundationModels`-ramverk (on-device LLM,
+`SystemLanguageModel`, macOS 26+) för två saker som tidigare löstes med ren
+strängheuristik respektive inte alls: tolkning av kalendertitlar och
+svenska bildbeskrivningar.
+
+**Maskinen som körde detta har Apple Intelligence/Foundation Models
+tillgängligt och redo** (`SystemLanguageModel.default.availability ==
+.available`, verifierat i ett scratchpad-experiment innan något
+produktionskod skrevs) — allt nedan är alltså verifierat skarpt mot den
+riktiga modellen, inte bara skrivet enligt SDK:ns kontrakt.
+
+### 0. Verifiering mot SDK:n innan produktionskod skrevs
+
+`FoundationModels.framework` finns i macOS 27-SDK:t
+(`$(xcrun --show-sdk-path)/System/Library/Frameworks/FoundationModels.framework`).
+Grep i `Modules/FoundationModels.swiftmodule/*.swiftinterface` bekräftade
+de exakta signaturerna innan de användes (inga gissade API-namn):
+
+- `SystemLanguageModel.default.availability` → `.available` /
+  `.unavailable(UnavailableReason)` (`deviceNotEligible`/
+  `appleIntelligenceNotEnabled`/`modelNotReady`) — tillgänglig från
+  macOS 26.0.
+- `LanguageModelSession(instructions:)` +
+  `respond(to:generating:)`/`respond(to:schema:...)` — macOS 26.0.
+- `@Generable`/`@Guide`/`GenerationGuide<[Element]>.count(_:)` — macros för
+  strukturerad utdata, macOS 26.0.
+- **Multimodal bildinmatning** (ny i WWDC26/macOS 27, fanns INTE i macOS
+  26-SDK:t): `Attachment<ImageAttachmentContent>(_ cgImage: CGImage,
+  orientation:)`, som är `PromptRepresentable` och kan blandas fritt med
+  text i en `Prompt { "text"; Attachment(cgImage) }`-builder. Det finns
+  också en parallell `Transcript.ImageAttachment`/`ImageReference`-väg för
+  redan pågående sessioner, men `Attachment` + `PromptBuilder` var enklast
+  för engångsanrop. Gated bakom `@available(macOS 27.0, *)` eftersom
+  projektets deployment target är macOS 26.0.
+- Felhantering: `LanguageModelSession.GenerationError` (deprecerad i
+  macOS 27 till förmån för `LanguageModelError`, men fortfarande giltig
+  vid target 26.0) och `SystemLanguageModel.Error.assetsUnavailable`. Båda
+  ny-koderna fångar dock bara generiskt `catch { }` — se "Robusthet" nedan
+  för resonemang.
+
+Ett litet `swift -O`-experiment i scratchpad körde en enkel textprompt
+(`"sax"` på ~2.4s) och en bild-genererande prompt mot
+`/System/Library/CoreServices/DefaultBackground.jpg` (RoomTags-liknande
+struct, ~2.4s) innan något av `BookingTitleParser`/`PhotoDescriptionService`
+skrevs, för att bekräfta att modellen faktiskt svarar med rimligt innehåll
+och rimlig latens på den här maskinen.
+
+### 1. `BookingTitleParser` — kalendertitlar tolkas av modellen
+
+Ersätter (som primär väg) den rena regex-/ordheuristiken i
+`CalendarService.extractAddress`/`extractStreetAndCity`/`extractCityName`/
+`extractBookingInfo` med en `@Generable BookingInfo`-struct
+(`street`/`city`/`propertyType`/`areaSquareMeters`/`contactName`/
+`contactPhone`) tolkad av `SystemLanguageModel`. Heuristiken finns kvar
+**oförändrad** i `CalendarService` och används som fallback när modellen
+inte är tillgänglig (`BookingTitleParser.heuristicParse`).
+
+- **Adressformatet är identiskt** oavsett källa:
+  `BookingTitleParser.addressString(from:)` bygger alltid
+  "Gata Nummer, Ort" — samma form som gamla `extractAddress` — så
+  adressmappnamn i pågående/tidigare sessioner inte ändras av den här
+  fasen.
+- **Cache**: resultat sparas per exakt titel-sträng i
+  `~/Library/Application Support/PhotoFlow/booking_titles.json`
+  (`JSONEncoder`/`JSONDecoder` på `[String: BookingInfo]`, `BookingInfo`
+  är `Codable` utöver `@Generable`). En redan tolkad titel kostar alltså
+  ett dictionary-lookup, inte ett nytt modellanrop, på efterföljande
+  körningar (och inom samma körning — `matchCalendarBookings` och
+  `writeIPTCMetadata`/`exportToAddressFolders` tolkar samma titlar utan
+  att anropa modellen två gånger).
+- **Uppmätt tid**: `BookingTitleParserTests.compareModelVsHeuristic_
+  syntheticTitles` körde 14 titlar mot den riktiga modellen på **16.1s
+  totalt ≈ 1.15s/titel** (`xcodebuild test`, se testloggen).
+- `CalendarService.matchPhotosToAddresses` är nu `async` (anropar parsern);
+  `extractBookingInfo`-anropen i `PipelineRunner+Metadata`/`+SortFolders`
+  byts mot `BookingTitleParser.shared.parse(title:)` +
+  `BookingTitleParser.bookingInfoText(from:)`.
+
+#### Jämförelsetest: modell vs heuristik (14 syntetiska titlar)
+
+EventKit-åtkomst till användarens **riktiga** kalender kräver ett
+användargodkännande som inte kan ges i den här GUI-lösa, autonoma
+körningen (ingen möjlighet att klicka "Tillåt" i en systemdialog), så
+jämförelsen kördes i stället mot 14 påhittade men realistiska svenska
+titlar (`BookingTitleParserTests.syntheticTitles` — testfixture, inga
+riktiga personuppgifter) som täcker: med/utan komma, med postnummer,
+våningssuffix ("bv"/"1 tr"/"nb"), bostadstyp+area, kontaktperson+telefon i
+olika format, och prefix-brus ("Fotografering "/"Foto - "/"Fototid: ").
+Resultat (utdrag, se testloggen för alla 14):
+
+| Titel (förkortad) | Heuristik: street / city | Modell: street / city | Kommentar |
+|---|---|---|---|
+| "Fotografering Lindvägen 12, Stockholm" | "Fotografering Lindvägen 12" / Stockholm | "Lindvägen 12" / Stockholm | Modellen strippar prefixet |
+| "Objektfoto: Ekvägen 3, bv, Lund" | "Objektfoto: Ekvägen 3" / **"bv"** | "Ekvägen 3, bv" / **Lund** | Heuristiken tolkar våningssuffixet som ort — fel. Modellen rätt |
+| "...radhus Almvägen 19, 2 tr, Sollentuna, ca 120 kvm, Maria Nilsson: ..." | "Fotografering radhus Almvägen 19" / **(ingen ort)** | "Almvägen 19, 2 tr" / **Sollentuna** | Heuristiken missar orten helt när för många kommadelar finns |
+| "Fototid Storgatan 12B lgh 1101, Malmö - Anna Karlsson 070-123 45 67" | kontakt: **(ingen)**, tel: **(ingen)** | kontakt: "Anna Karlsson", tel: "070-123 45 67" | Heuristikens namn-/telefonextraktion är svagare på den här formen |
+
+**Slutsats**: för själva adressen (street+city — det som styr
+mappnamnet) är modellen en tydlig förbättring, särskilt på att strippa
+brus-prefix och hitta orten i längre, kommaseparerade titlar där
+heuristiken förväxlar den med ett våningssuffix eller ger upp helt.
+Kontaktnamn/telefon (bara IPTC-extratext, påverkar inga mappnamn) är också
+klart bättre återgivna av modellen.
+
+**Viktig brasklapp — modellen hittar ibland på `propertyType`/
+`areaSquareMeters`** trots en explicit instruktion i prompten att
+"Extrahera ENDAST det som faktiskt står i titeln — gissa aldrig...":
+- "Ringvägen 14 611 32 Nyköping Peter Åberg 076-1112233" (ingen bostadstyp
+  alls i titeln) → modellen svarade `propertyType="villa"`,
+  `areaSquareMeters=0`.
+- "Åkervägen 2 nb, 195 60 Arlandastad, Karin Ek 08-59512345" → modellen
+  läste postnumret **195 60** som `areaSquareMeters=19560` och hittade
+  samtidigt på `propertyType="bostadsrätt"`.
+- "Trädgårdsgatan 5B, Visby - Sara Holm 070-2223344" → `propertyType=
+  "radhus"`, `areaSquareMeters=0` påhittat.
+
+Det här **påverkar inte adressmappnamnet** (bara `street`/`city` används
+där), men gör att `bookingInfoText`/IPTC-extratexten ibland kan innehålla
+en felaktig bostadstyp eller ett postnummer feltolkat som kvadratmeter.
+Användaren bör stickprovskontrollera IPTC-beskrivningarna på riktiga
+bokningar, särskilt titlar utan explicit bostadstyp/area, och överväga att
+skärpa prompten ytterligare (t.ex. `@Guide`-beskrivningar med explicit
+"null om inte angivet" på just de fälten) om detta visar sig vanligt i
+praktiken.
+
+### 2. `PhotoDescriptionService` — svenska bildbeskrivningar från pixlarna
+
+`VisionTaggingService` (Fas 3b) klassificerar snabbt men grovt via Vision;
+`PhotoDescriptionService` (ny) kompletterar med en riktig svensk
+bildbeskrivning genom att skicka själva preview-JPEG:en till modellen som
+multimodal bildinmatning (`Attachment<ImageAttachmentContent>`, macOS
+27+ — se punkt 0 ovan). `@Generable RoomTags`: `room`/`category`
+("Interiör"/"Exteriör")/`features` (0–4 särdrag)/`caption`
+(kort svensk bildtext).
+
+- **Körs bara på ett urval**: en representativ bild per bracket-/
+  singelgrupp (första filen i gruppen), inte alla previews — se
+  "Uppmätt tid" nedan för varför. Körs efter Vision-klassificeringen i
+  samma `.aiTagging`-steg (`PipelineRunner+AITagging.runAITagging`):
+  Vision ger snabb grovklassificering först, modellen ger text för
+  urvalet därefter.
+- **Uppmätt tid**: `PhotoDescriptionServiceTests` — en syntetisk 800×600-
+  bild (genererad med Core Graphics i testet, inte en riktig fastighets-
+  bild) tog **2.27–2.32s** per `describe()`-anrop, vilket är i linje med
+  bildexperimentet i scratchpad (~2.4s mot en riktig JPEG). Med t.ex. 15
+  bracket-/singelgrupper i en session ⇒ ~35s extra i AI-tagg-steget, vilket
+  bedömdes acceptabelt för ett bakgrundssteg — därav urvalet i stället för
+  alla bilder (skulle annars kunna bli flera minuter för en stor session).
+- **Persistens**: `AITagsStore` (ny, i `VisionTaggingService.swift`) gör
+  `ai_tags.json` versionerad (`version: 2`) med valfria `ml*`-fält
+  (`mlRoom`/`mlCategory`/`mlFeatures`/`mlCaption`) ovanpå Fas 3b:s
+  `tags`/`description`/`category`. **Läser äldre, oversionerade
+  `ai_tags.json`-filer transparent** (`AITagsStore.load` provar det nya
+  formatet först, faller tillbaka till den gamla platta formen) — inga
+  befintliga sessioner behöver räknas om.
+- **Sammanslagning**: Vision-taggarna + ML-särdragen slås ihop till en
+  taggmängd (rummet först, sedan Vision-taggar, sedan nya ML-särdrag,
+  dubbletter borttagna), och ML-bildtexten ersätter Vision's mallgenererade
+  beskrivning när den finns — allt direkt i `aiTagResults` (samma dict
+  `writeIPTCMetadata` redan läser via `photo.aiTags`/`photo.aiDescription`),
+  så **ingen ändring behövdes i IPTC/XMP-skrivningen själv**
+  (`PipelineRunner+Metadata.swift`) eller i `PipelineRunner+LoadSession`
+  förutom att läsa via `AITagsStore` i stället för rå `JSONSerialization`.
+- **Ny inställning** `AppSettings.aiDescriptionsEnabled` (standard `true`,
+  men styrs i praktiken av `PhotoDescriptionService.isAvailable` — kan
+  aldrig "tvinga på" bildbeskrivningar på en enhet utan stöd) + rad i
+  `SettingsView`s AI-taggning-sektion, med olika förklaringstext beroende
+  på om modellen faktiskt är tillgänglig på enheten som kör appen.
+
+#### En verklig bugg hittad under testning
+
+Första lydelsen av `@Guide`-beskrivningen för `features` var "... — tom
+lista om inget särskilt sticker ut". Det körda testet
+(`PhotoDescriptionServiceTests`) visade att modellen tolkade detta
+**bokstavligt** och returnerade `features: ["tom lista"]` (en enda sträng
+med det litterala innehållet "tom lista") i stället för en faktiskt tom
+array, för en syntetisk bild utan tydliga särdrag. Fixat genom att:
+
+1. Byta till `GenerationGuide<[Element]>.count(0...4)` för en riktig
+   storleksbegränsning i stället för att beskriva "tomhet" i fritext.
+2. Skriva om beskrivningen till "0 till 4 korta svenska särdrag ...
+   Hitta inte på särdrag som inte syns." — utan ordet "tom"/`[]`.
+
+Efter fixen gav samma syntetiska bild rimliga `features` (t.ex.
+`["ljus blå bakgrund", "brun yta"]`). Ett bra exempel på varför
+`@Guide`-texter bör verifieras mot riktiga modellanrop, inte bara läsas
+som dokumentation — se "Manuell testning" nedan för vad som bör
+stickprovskontrolleras på riktiga fastighetsbilder.
+
+### 3. Robusthet — inget stoppar pipelinen, ingen nätverkstrafik
+
+- `BookingTitleParser.runModel` och `PhotoDescriptionService.describe`
+  fångar båda modellanrop med ett generiskt `catch { }` (kontextgräns,
+  guardrail-avslag, otillgänglig modell, etc. — alla
+  `LanguageModelSession`/`SystemLanguageModel`-fel ärver `Error`), loggar
+  en svensk varning via `print(...)`, och returnerar `nil`/faller tillbaka
+  på heuristiken. Ingen av de två höjer vidare — anroparen
+  (`PipelineRunner+AITagging`/`CalendarService`) ser bara ett `nil`-
+  resultat och fortsätter med nästa bild/titel.
+- `runPhotoDescriptions` respekterar avbrytning
+  (`shouldAbort()`/`markActiveStepsCancelled()`) mellan varje bild, precis
+  som resten av AI-tagg-steget, och rapporterar förlopp via
+  `state.updateStepProgress(.aiTagging, ...)`.
+- **Ingen nätverkstrafik**: `SystemLanguageModel` kör helt on-device (Apple
+  Intelligence-modellen är redan nedladdad till enheten av OS:et — appen
+  gör inga egna nätverksanrop för vare sig text- eller bildinferens).
+
+### Manuell testning användaren bör göra
+
+1. **Riktiga kalendertitlar**: kör pipelinen mot en riktig session och
+   jämför de resulterande adressmapparna mot vad de skulle blivit i en
+   tidigare fas (samma mappnamn förväntas — bara källan till namnet har
+   bytts). Kontrollera särskilt en titel med våningssuffix ("bv"/"X tr")
+   följt av kommatecken och ort, där heuristiken visade sig kunna
+   förväxla suffixet med orten (se jämförelsetabellen ovan).
+2. **IPTC-extratext (`bookingInfoText`)** på ett gäng riktiga bokningar:
+   leta efter påhittad bostadstyp/area på titlar som inte nämner det
+   alls, och postnummer feltolkat som kvadratmeter (se brasklappen i
+   avsnitt 1) — justera prompten i `BookingTitleParser.runModel` om det
+   visar sig vanligt.
+3. **AI-bildbeskrivningar på riktiga fastighetsfoton**: kontrollera att
+   `caption`/`features` är sakligt korrekta (testat här bara mot en
+   syntetisk genererad bild, aldrig ett riktigt foto av ett kök/badrum/
+   fasad) och att de känns naturliga i en mäklarannons. Kontrollera också
+   att steget inte tar orimligt lång tid på en stor session (uppskatta
+   ~2.3s × antal bracket-/singelgrupper).
+4. **`booking_titles.json`/`ai_tags.json` efter en körning**: inspektera
+   `~/Library/Application Support/PhotoFlow/booking_titles.json` samt
+   sessionens `ai_tags.json` för att se att cachningen/versioneringen ser
+   rimlig ut. OBS: `BookingTitleParserTests`s jämförelsetest lägger även
+   in 14 syntetiska testtitlar i den riktiga `booking_titles.json`-cachen
+   varje gång testsviten körs (ofarligt — de matchar aldrig en riktig
+   kalendertitel — men värt att veta om filen inspekteras).
+5. **Inställningen `aiDescriptionsEnabled`**: slå av/på i `SettingsView`
+   och kontrollera att steget faktiskt hoppas över/körs, samt att texten
+   under togglen stämmer med om `PhotoDescriptionService.isAvailable` är
+   sant på just den maskinen.
+
+### Kvarstående / inte gjort i Fas 3d
+
+- Ingen riktig EventKit-åtkomst till användarens kalender kunde begäras i
+  den här autonoma, GUI-lösa körningen (kräver ett användargodkännande) —
+  jämförelsetestet kör därför mot en syntetisk fixture i stället för
+  riktiga bokningstitlar, se avsnitt 1.
+- Bildbeskrivningarna är bara verifierade mot en syntetiskt genererad
+  testbild (färgytor + en rektangel), aldrig ett riktigt fastighetsfoto —
+  se "Manuell testning", punkt 3.
+- Modellens tendens att hitta på `propertyType`/`areaSquareMeters` när de
+  inte står i titeln (avsnitt 1) är dokumenterad men inte åtgärdad med en
+  striktare prompt/efterhandsvalidering — bedömdes inte kritiskt eftersom
+  det inte påverkar adressmappnamnet, bara en extra IPTC-textrad.
+- Ingen UI-yta visar `BookingInfo`s nya fält (`propertyType`/
+  `areaSquareMeters`/`contactName`/`contactPhone`) separat — de går bara
+  in i samma fritextsträng (`bookingInfoText`) som tidigare. Skulle kunna
+  brytas ut till egna, redigerbara fält i UI:t i en framtida fas om
+  användaren vill kunna rätta enskilda felaktiga värden utan att skriva
+  om hela extratexten.
