@@ -146,7 +146,8 @@ extension PipelineRunner {
             for mapping in calendarMappings {
                 let address = calendar.addressFolder(for: mapping.photoDateRange.lowerBound, mappings: calendarMappings) ?? mapping.address
                 if meta[address] == nil {
-                    let bookingInfo = CalendarService.extractBookingInfo(from: mapping.eventTitle)
+                    let titleInfo = await BookingTitleParser.shared.parse(title: mapping.eventTitle)
+                    let bookingInfo = BookingTitleParser.bookingInfoText(from: titleInfo)
                     // Same reasoning as exportToAddressFolders: a manual correction
                     // must win over re-geocoding the (known-wrong) original address.
                     if let corrected = state.correctedCoordinates[mapping.address] {

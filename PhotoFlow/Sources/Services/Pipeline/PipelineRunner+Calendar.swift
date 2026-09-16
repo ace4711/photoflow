@@ -115,7 +115,7 @@ extension PipelineRunner {
             return
         }
 
-        calendarMappings = calendar.matchPhotosToAddresses(photoDates: photoDates)
+        calendarMappings = await calendar.matchPhotosToAddresses(photoDates: photoDates)
 
         if calendarMappings.isEmpty {
             state.appendLog("Inga matchande kalenderbokningar hittades.", type: .info)

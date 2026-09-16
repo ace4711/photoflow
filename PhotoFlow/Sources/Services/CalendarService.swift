@@ -215,7 +215,12 @@ class CalendarService {
 
     /// Given a set of photo dates, find and group them by calendar event address.
     /// Returns a dictionary mapping address -> date range of photos for that address.
-    func matchPhotosToAddresses(photoDates: [Date]) -> [(address: String, eventTitle: String, photoDateRange: ClosedRange<Date>)] {
+    ///
+    /// Adressen tas fram via `BookingTitleParser` (Fas 3d): Foundation Models
+    /// när den är tillgänglig på enheten, annars faller den tillbaka på
+    /// `extractAddress` nedan — i båda fallen samma "Gata Nummer, Ort"-format,
+    /// så adressmappnamn inte ändras jämfört med tidigare faser.
+    func matchPhotosToAddresses(photoDates: [Date]) async -> [(address: String, eventTitle: String, photoDateRange: ClosedRange<Date>)] {
         guard accessGranted, !photoDates.isEmpty else { return [] }
 
         let sorted = photoDates.sorted()
@@ -256,19 +261,22 @@ class CalendarService {
             print("[Calendar] ⚠ \(unmatchedCount) foton matchade INGEN händelse")
         }
 
-        let results = eventPhotos.compactMap { _, value -> (address: String, eventTitle: String, photoDateRange: ClosedRange<Date>)? in
+        var results: [(address: String, eventTitle: String, photoDateRange: ClosedRange<Date>)] = []
+        for (_, value) in eventPhotos {
             guard let title = value.event.title else {
                 print("[Calendar] ⚠ Händelse utan titel, hoppar över")
-                return nil
+                continue
             }
-            guard let address = CalendarService.extractAddress(from: title) else {
+            let info = await BookingTitleParser.shared.parse(title: title)
+            guard let address = BookingTitleParser.addressString(from: info) else {
                 print("[Calendar] ⚠ Kunde inte extrahera adress från: \"\(title)\"")
-                return nil
+                continue
             }
-            guard let first = value.dates.first, let last = value.dates.last else { return nil }
+            guard let first = value.dates.first, let last = value.dates.last else { continue }
             print("[Calendar] ✓ \(value.dates.count) foton → \"\(address)\" (från: \"\(title)\")")
-            return (address: address, eventTitle: title, photoDateRange: first...last)
-        }.sorted(by: { $0.photoDateRange.lowerBound < $1.photoDateRange.lowerBound })
+            results.append((address: address, eventTitle: title, photoDateRange: first...last))
+        }
+        results.sort(by: { $0.photoDateRange.lowerBound < $1.photoDateRange.lowerBound })
 
         print("[Calendar] Resultat: \(results.count) adressmatchningar totalt")
         return results

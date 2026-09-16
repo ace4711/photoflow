@@ -38,7 +38,8 @@ extension PipelineRunner {
         for mapping in calendarMappings {
             let address = calendar.addressFolder(for: mapping.photoDateRange.lowerBound, mappings: calendarMappings) ?? mapping.address
             if addressMeta[address] == nil {
-                let bookingInfo = CalendarService.extractBookingInfo(from: mapping.eventTitle)
+                let titleInfo = await BookingTitleParser.shared.parse(title: mapping.eventTitle)
+                let bookingInfo = BookingTitleParser.bookingInfoText(from: titleInfo)
                 // A manually corrected coordinate (PipelineState.correctAddress) must
                 // win over automatic geocoding — that correction exists specifically
                 // because geocoding got this address wrong.
