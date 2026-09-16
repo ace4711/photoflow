@@ -1647,3 +1647,231 @@ stickprovskontrolleras på riktiga fastighetsbilder.
   brytas ut till egna, redigerbara fält i UI:t i en framtida fas om
   användaren vill kunna rätta enskilda felaktiga värden utan att skriva
   om hela extratexten.
+
+## Fas 3e – Systemintegration på macOS
+
+Utfört autonomt på branchen `forbattringar` medan användaren sov. Alla fem
+steg byggdes och testades grönt (`xcodebuild ... build`/`test`) innan varje
+commit — se `git log --oneline` för commit-för-commit-historik.
+
+### 1. `AVAudioNode.installTap` → `installAudioTap` (deprecerad i macOS 27)
+
+`DictationService.startRecordingAsync` använde den klassiska
+`installTap(onBus:bufferSize:format:block:)`, deprecerad i macOS 27.
+Ersättaren, `installAudioTap(onBus:bufferSize:format:tapProvider:)`, syns
+**inte** direkt i `AVAudioNode.h` — den råa ObjC-signaturen (med en
+`NSError**`-parameter) är märkt `NS_REFINED_FOR_SWIFT`, och den faktiska
+Swift-vänliga varianten hittades genom att läsa
+`AVFAudio.swiftmodule/*.swiftinterface` i macOS 27-SDK:n (`swift-api-digester`
+gav ofullständiga resultat; den textuella `.swiftinterface`-filen under
+`AVFAudio.framework/Versions/A/Modules/` var facit). Den nya API:t:
+
+- Kastar fel (`throws`) i stället för att vara `void`.
+- Ger tap-blocket en ny, `Sendable`, read-only `AVReadOnlyAudioPCMBuffer` i
+  stället för den gamla klassen `AVAudioPCMBuffer` — konverteras direkt
+  tillbaka med den nya `AVAudioPCMBuffer(copying:)`-initieraren så att
+  resten av flödet (`enqueue`/`makeAnalyzerInput`) inte behövde skrivas om.
+- Kräver macOS 27 (`@available`). Projektets deployment target är macOS 26,
+  så den nya varianten väljs bakom `if #available(macOS 27.0, *)` med den
+  gamla, deprecerade varianten som fallback för äldre system — verifierat
+  att detta INTE ger någon deprecationsvarning (Swift varnar bara om
+  deployment targetet självt är ≥ den deprecerade versionen; en gren som
+  bara körs på system < 27 kan fortsätta kalla den gamla API:n utan
+  varning). `xcodebuild build` ger 0 varningar för filen efter ändringen.
+
+### 2. FSEvents-baserad filbevakning i stället för ren `Timer`-pollning
+
+`WatchService` bevakade tidigare bara via `Timer.scheduledTimer` var N:e
+sekund (`watchIntervalSeconds`, default 10s). Nu:
+
+- **FSEvents** (`FSEventStreamCreate`, `CoreServices`/`FSEvents.framework` —
+  signaturer verifierade mot headern i macOS 27-SDK:n) bevakar inputmappen
+  rekursivt i realtid. Callbacken bryr sig inte om VILKEN sökväg som
+  ändrades — varje händelse matar bara en debouncer, och den efterföljande
+  omkontrollen skannar mappen precis som fallback-pollningen redan gjorde.
+- **Debounce (~2s)**: `FSEventDebouncer`, en liten klass med en injicerbar
+  klocka (`recordEvent(at:)`/`tick(now:)` tar explicita `Date`-värden) så
+  hela besluts­logiken ("har det gått X sekunder tystnad sedan senaste
+  händelsen?") är enhetstestbar utan riktiga timers eller `sleep`. I
+  produktion drivs `tick(now:)` av en kort repeterande `Timer` (var 0.3:e
+  sekund).
+- **Stabilitetskontroll**: innan filer räknas som färdigkopierade jämförs
+  filstorleken vid två mätningar med 1 sekunds mellanrum
+  (`WatchService.isFileStable`/`stableFiles`, rena statiska funktioner över
+  storleksdictionaries) — viktigt när bilder kopieras direkt från ett
+  SD-kort in i inputmappen och en fil annars kunde fångas mitt i
+  skrivningen. Filer som fortfarande växer lämnas kvar till nästa kontroll
+  i stället för att skickas till pipelinen halvfärdiga.
+- **`NSWorkspace.didUnmountNotification`** tillagd (utöver den befintliga
+  `didMountNotification`) för att rensa `detectedVolumes` och logga när ett
+  SD-kort kopplas bort mitt i en session.
+- Den gamla `Timer`-pollningen behålls oförändrad som **fallback-skyddsnät**
+  (nu 60s i stället för 10s, default, eftersom FSEvents är primär mekanism
+  — `AppSettings.watchIntervalSeconds`) ifall FSEvents skulle missa en
+  händelse (t.ex. `kFSEventStreamEventFlagKernelDropped`).
+- Alla nya beteenden (debounce-fönster, stabilitetsfördröjning) är
+  hårdkodade konstanter snarare än nya inställningar — bedömdes inte
+  behöva vara justerbara av användaren; det enda existerande, användarnära
+  reglaget (`watchIntervalSeconds`) finns kvar och dess UI-text uppdaterad
+  för att förklara att den nu bara är fallback.
+- Tester: `WatchServiceDebounceStabilityTests.swift` (debounce-beslut med
+  injicerad klocka, stabilitetsfiltrering med syntetiska storleksdata —
+  inga riktiga filer/timers).
+
+### 3. Systemnotiser (`UserNotifications`) som komplement till ljud/tal
+
+Ny `NotificationService` (singleton, `@MainActor`, `UNUserNotificationCenter`)
+skickar notiser för fyra händelser (samma ställen som redan spelade
+ljud/tal via `AudioService`, men nu även som systemnotis):
+
+1. **Nya filer hittade och pipelinen startat** — `WatchService.checkDirectory`,
+   samma villkor som redan triggade `onNewFilesDetected` (autoStart på).
+2. **Pipeline klar, väntar på granskning** — `PipelineRunner.startPipeline`,
+   bredvid det befintliga `audio.playNeedsAttention()`.
+3. **Fel i ett steg** — pipelinens toppnivå-`catch` i `startPipeline`,
+   bredvid `audio.playError()`.
+4. **HDR-sammanslagning klar** — `PipelineRunner+HDR.runHDRMerge()` (hela
+   batch-steget, inte enskilda `reMergeHDR`-ommergningar under granskning,
+   för att undvika notis-spam), bredvid `audio.playStepComplete()`.
+
+Notisknappar: **"Granska nu"** (aktiverar appen och sätter
+`PipelineState.reviewRequestedFromNotification = true`, som `DashboardView`
+observerar via `onChange` för att öppna granskningsvyn — en bool på det
+delade `PipelineState` i stället för en direkt referens till dashboardens
+lokala `@State`, eftersom `PipelineState` redan är nåbar från både
+`PhotoFlowApp`/`NotificationService` och alla vyer) och **"Öppna mapp"**
+(öppnar mappen i Finder via `NSWorkspace`). `UNUserNotificationCenterDelegate`
+implementerad så notiser visas som `.banner` även när appen redan är i
+förgrunden (annars visas notiser bara medan appen är i bakgrunden, precis
+tvärtom mot vad som behövs här).
+
+**Behörighet begärs lat** — inte vid appstart, utan första gången en notis
+faktiskt ska skickas (`requestAuthorizationIfNeeded()` anropas inifrån
+`send(...)`), vilket i praktiken alltid blir pipelinens "nya filer
+hittade"-notis, dvs. första gången pipeline-läget faktiskt används. Ljud/tal
+(`AudioService`) är helt oförändrat och körs parallellt enligt befintliga
+inställningar — notisen skickas utan eget notisljud för att undvika en
+dubbel signal för samma händelse.
+
+Ny inställning `notificationsEnabled` (default på) i `AppSettings` +
+`SettingsView` (fliken "Ljud"/`AudioTab` döpt om till **"Ljud & notiser"**),
+med två testknappar (granskning/fel) för att stickprovskontrollera utan att
+behöva köra en hel pipeline.
+
+### 4. `MenuBarExtra` + bakgrundsläge
+
+Appen kan nu bevakas utan öppet huvudfönster:
+
+- **Ägandeskap flyttat**: `RunnerWrapper` (och därmed `WatchService`) ägs
+  numera av `PhotoFlowApp` (`@StateObject`) i stället för `ContentView` —
+  nödvändigt så både huvudfönstret och menyraden delar EXAKT samma
+  bevaknings-/pipeline-state. `ContentView` tar nu emot `runner` som
+  parameter och beter sig i övrigt identiskt (dashboardens beteende
+  oförändrat).
+- **`MenuBarExtra`**: ikon kamera i vila / öga (`eye.fill`) när bevakning är
+  aktiv. Meny: status ("Bevakar · N nya" / "Bevakning avstängd"),
+  starta/stoppa bevakning, "Öppna PhotoFlow" (via
+  `openWindow(id: "main")` — huvudfönstret gavs ett explicit
+  `WindowGroup`-id just för detta, så ett stängt fönster kan återöppnas),
+  "Öppna outputmapp" (Finder, inaktiverad om ingen outputmapp finns än),
+  "Avsluta". Ny inställning `showMenuBarExtra` (default på).
+- `RunnerWrapper` vidarebefordrar nu `watcher.objectWillChange` till sitt
+  eget `objectWillChange` (en liten Combine-`sink`) — annars hade
+  `MenuBarExtra`s ikon/meny aldrig fått en anledning att uppdateras när
+  `watcher.isWatching`/`newFilesFound` ändras, eftersom `WatchService`s
+  egna `@Published`-fält inte renderas av något annat UI-lager sedan
+  tidigare (bara `PipelineState`s egna fält gör det).
+- **`SMAppService.mainApp`** (`ServiceManagement`, signaturer verifierade
+  mot macOS 27-SDK:n) kopplad till en ny inställning "Starta vid
+  inloggning" i `SettingsView`s Bevakning-flik, med felhantering (visar
+  felmeddelande och återställer togglen till det faktiska systemläget om
+  `register()`/`unregister()` kastar) och synk mot
+  `SMAppService.mainApp.status` varje gång fliken visas (användaren kan ha
+  stängt av det i Systeminställningar sedan sist).
+
+#### En allvarlig bugg hittad och fixad under verifiering
+
+Första implementationen band `MenuBarExtra(isInserted:)` mot
+`$settings.showMenuBarExtra`, en `Binding` proxad genom `AppSettings`
+(en vanlig `ObservableObject`-klass vars `showMenuBarExtra` är en
+`@AppStorage`-property, INTE `@Published`). Det gav en **oändlig
+scen-graf-uppdateringsloop** — upptäckt för att `xcodebuild test` kör hela
+appen som testvärd (`TEST_HOST` i `PhotoFlowTests`s build settings), så
+även ett rent enhetstest startar `PhotoFlowApp` på riktigt. Reproducerades
+deterministiskt: antingen en hängning på ~97 % CPU i flera minuter, eller
+en krasch (`EXC_BAD_ACCESS`/stack-overflow, `AppGraph.graphDidChange()` →
+`sceneList` → om och om igen i kraschloggen) — bekräftat med
+`~/Library/Logs/DiagnosticReports/PhotoFlow-*.ips`. Isolerad genom att
+binärsöka bort delar av `MenuBarExtra` (label, content, `isInserted`) tills
+den exakta triggern (`isInserted`-bindingen) hittades.
+
+**Fix**: deklarera `showMenuBarExtra` som en egen `@AppStorage` DIREKT i
+`PhotoFlowApp`-structen (samma UserDefaults-nyckel som `AppSettings`s
+kopia, så `SettingsView`s toggle och menyradens `isInserted`-binding
+förblir synkade) i stället för att gå via klassen — den native,avsedda
+användningen av `@AppStorage` som property wrapper direkt på en
+`View`/`Scene`/`App`. Verifierat stabilt över flera upprepade
+`xcodebuild test`-körningar efter fixen. **Läxa för framtida faser**: undvik
+att skapa `Binding`s till `@AppStorage`-properties som ligger på en vanlig
+`ObservableObject`-klass (`$settings.xxx`-mönstret som redan användes
+flitigt i `SettingsView` för vanliga `Toggle`/`TextField` fungerar bra där,
+men `MenuBarExtra(isInserted:)` — och möjligen andra API:er som skriver
+tillbaka till bindingen internt — tål det uppenbarligen inte).
+
+### 5. Övrigt
+
+- Alla nya inställningar (`notificationsEnabled`, `showMenuBarExtra`,
+  `launchAtLoginRequested`) har vettiga default-värden och är
+  avstängningsbara, enligt de gemensamma reglerna.
+- Inga ändringar i `PhotoFlow/project.yml` denna fas förutom nya källfiler
+  som redan täcks av de befintliga glob-mönstren (`Sources`/`Tests`) —
+  `xcodegen generate` kördes ändå efter varje ny fil för att uppdatera
+  `.xcodeproj`.
+
+### Manuell testning användaren bör göra
+
+1. **Notistillstånd**: kör pipelinen mot en riktig session (eller tryck
+   testknapparna i Inställningar → Ljud & notiser) och bekräfta att macOS
+   faktiskt frågar om notisbehörighet vid första tillfället, att notisen
+   syns som banner (även med huvudfönstret i förgrunden), och att
+   "Granska nu"/"Öppna mapp"-knapparna gör rätt sak. Kontrollera även i
+   Systeminställningar → Notiser → PhotoFlow att appen listas korrekt.
+2. **Menyraden**: bekräfta att ikonen faktiskt växlar kamera ↔ öga när
+   bevakning startas/stoppas (både via menyn och via dashboardens egna
+   kontroller), att "Öppna PhotoFlow" återöppnar huvudfönstret efter att
+   det stängts (inte bara aktiverar appen utan fönster), och att "Avsluta"
+   verkligen avslutar hela appen (inte bara stänger fönstret).
+3. **"Starta vid inloggning"**: slå på/av i Inställningar → Bevakning,
+   logga ut/in (eller starta om) och bekräfta i Systeminställningar →
+   Allmänt → Inloggningsobjekt att PhotoFlow faktiskt listas/inte listas.
+4. **FSEvents med ett riktigt SD-kort**: koppla in ett kort och kopiera (via
+   Finder/Bild-tagning) en sats NEF-filer direkt in i den konfigurerade
+   inputmappen (inte bara till en undermapp på kortet i sig — den vägen
+   testas redan av den befintliga volym-scanningen). Bekräfta att
+   pipelinen INTE startar förrän hela kopieringen är klar (stabilitets-
+   kontrollen ska filtrera bort halvkopierade filer) och att den startar
+   inom några sekunder efter att kopieringen avslutats (debounce-fönstret).
+   Detta gick inte att testa mot ett riktigt SD-kort i den här autonoma,
+   GUI-lösa körningen.
+5. **HDR-klart-notisen**: kör en session med flera bracket-grupper och
+   bekräfta att notisen bara skickas EN gång för hela HDR-steget (inte per
+   grupp), med korrekt antal lyckade/misslyckade i texten.
+
+### Kvarstående / inte gjort i Fas 3e
+
+- Ingen striktare FSEvents-scoping (t.ex. att bara reagera på händelser i
+  undermappar som faktiskt kan innehålla NEF-filer) — varje händelse i
+  hela inputträdet triggar en omkontroll efter debounce, vilket är billigt
+  nog (en `FileManager`-skanning) för att inte optimera bort i den här
+  fasen.
+- `MenuBarExtra`s meny uppdaterar inte "Bevakar · N nya" i realtid om
+  pipelinen körs och `newFilesFound` sätts om under körning (den
+  återspeglar `WatchService.newFilesFound`, som bara uppdateras av
+  `checkDirectory`/`searchVolumeForNEFs`, inte av själva pipeline-
+  körningen) — bedömdes inte kritiskt, texten är ändå korrekt vid nästa
+  bevaknings­kontroll.
+- Om användaren byter inputmapp i Inställningar MEDAN bevakning redan
+  pågår flyttas FSEvents-strömmen till den nya mappen först vid nästa
+  `checkForNewFiles`-anrop (inom en fallback-pollningsperiod, eller
+  direkt om en FSEvents-händelse redan var på väg) — inte omedelbart. Inte
+  testat manuellt.
