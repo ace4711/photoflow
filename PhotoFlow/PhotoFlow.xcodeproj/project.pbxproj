@@ -122,6 +122,7 @@
 		D922C28ED4E9A2CCE49C29F9 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83D7AE05B80A7B44D2B244CB /* AppSettings.swift */; };
 		D99D933C100CB517176FD63E /* FieldNote.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29E248F241C6E12D1E3044CA /* FieldNote.swift */; };
 		DE054EA5F41BBFB3ED6F9697 /* BracketReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7B2958CAA674C585FF19619 /* BracketReviewView.swift */; };
+		DF4946F59F2E507B89C2DDEB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 19B86DF2CA370AB50B0AFA85 /* Assets.xcassets */; };
 		E07356499310A60CA6E21D60 /* SessionHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7F2A71D70B1ACBB0728340C /* SessionHistoryView.swift */; };
 		E3A447AC3A5605054F0C75DA /* PipelineStateManifestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F795A5BA4CDEF5F498D8C2F6 /* PipelineStateManifestTests.swift */; };
 		E7E42A0887D9258A3FCE7B8C /* PipelineRunner+Lightroom.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04F7EB11531DBB10EA697354 /* PipelineRunner+Lightroom.swift */; };
@@ -168,6 +169,7 @@
 		130D67322F34D53E2FC1D475 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		153B93145B4921E4F181418C /* HDRWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRWriter.swift; sourceTree = "<group>"; };
 		18FEAA9B84EC62BC44C9AEB6 /* PipelineRunner+Metadata.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+Metadata.swift"; sourceTree = "<group>"; };
+		19B86DF2CA370AB50B0AFA85 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		1AC7B76587B31A598A9D24BE /* TranslationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationServiceTests.swift; sourceTree = "<group>"; };
 		230AF67C14F78CC9A5F63D1F /* CalendarServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarServiceTests.swift; sourceTree = "<group>"; };
 		2556040AD182883742EE0D19 /* bracket5_dark.csv */ = {isa = PBXFileReference; path = bracket5_dark.csv; sourceTree = "<group>"; };
@@ -533,6 +535,7 @@
 		E5050DD01B71A20BCB3E9F60 /* SourcesField */ = {
 			isa = PBXGroup;
 			children = (
+				19B86DF2CA370AB50B0AFA85 /* Assets.xcassets */,
 				A9194C289AA128559AB08EC6 /* PhotoFlowFieldApp.swift */,
 				691C617B4DEFE6A7CF898BBC /* Models */,
 				6BEEA30FD608D82306A6EA8F /* Services */,
@@ -609,6 +612,7 @@
 			buildConfigurationList = 3DD600B81A1191BED33CF02C /* Build configuration list for PBXNativeTarget "PhotoFlowField" */;
 			buildPhases = (
 				F23283F02555C1B5BB20C4D8 /* Sources */,
+				95799618BE957AE5AC5E7C88 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -676,6 +680,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				FA497D8851D429850EF87A22 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		95799618BE957AE5AC5E7C88 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DF4946F59F2E507B89C2DDEB /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

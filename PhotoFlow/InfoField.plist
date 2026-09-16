@@ -35,6 +35,8 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<false/>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>PhotoFlow Fält använder din plats för att spara var varje fältanteckning gjordes, så Mac-appen kan sätta rätt position på bilderna.</string>
 	<key>NSMicrophoneUsageDescription</key>
