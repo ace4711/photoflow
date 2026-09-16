@@ -20,6 +20,13 @@ struct DashboardView: View {
                 dashboardContent
             }
         }
+        .toolbar {
+            if showReview {
+                reviewToolbarContent
+            } else {
+                dashboardToolbarContent
+            }
+        }
         .sheet(isPresented: $showSettings) {
             SettingsView()
                 .frame(width: 700, height: 620)
@@ -45,39 +52,34 @@ struct DashboardView: View {
     // MARK: - Dashboard content
 
     private var dashboardContent: some View {
-        VStack(spacing: 0) {
-            topBar
-            Divider()
+        VStack(spacing: 12) {
+            if settings.calendarMatchEnabled {
+                AddressBanner()
+                    .padding(.horizontal, 20)
+            }
 
-            VStack(spacing: 12) {
-                if settings.calendarMatchEnabled {
-                    AddressBanner()
-                        .padding(.horizontal, 20)
-                }
-
-                LazyVGrid(columns: columns, spacing: 12) {
-                    ForEach(DashboardStep.allCases) { step in
-                        let status = pipeline.stepStatuses[step] ?? .idle
-                        StepCardView(
-                            step: step,
-                            status: status,
-                            onTap: { handleStepTap(step) },
-                            onRerun: { runner.rerunStep(step) },
-                            allPhotos: step == .manualReview ? pipeline.allPhotos : []
-                        )
-                    }
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-
-                Spacer(minLength: 0)
-
-                if showLog {
-                    Divider()
-                    logPanel
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(DashboardStep.allCases) { step in
+                    let status = pipeline.stepStatuses[step] ?? .idle
+                    StepCardView(
+                        step: step,
+                        status: status,
+                        onTap: { handleStepTap(step) },
+                        onRerun: { runner.rerunStep(step) },
+                        allPhotos: step == .manualReview ? pipeline.allPhotos : []
+                    )
                 }
             }
+            .padding(.horizontal, 20)
+
+            Spacer(minLength: 0)
+
+            if showLog {
+                Divider()
+                logPanel
+            }
         }
+        .padding(.top, 12)
     }
 
     // MARK: - Review content (replaces dashboard, supports resize + fullscreen)
@@ -85,56 +87,7 @@ struct DashboardView: View {
     @State private var showDeleteReviewConfirm: Bool = false
 
     private var reviewContent: some View {
-        VStack(spacing: 0) {
-            // Thin top bar with back button
-            HStack(spacing: 12) {
-                Button(action: { showReview = false }) {
-                    Label("Tillbaka", systemImage: "chevron.left")
-                        .font(.system(.body, design: .rounded))
-                }
-                .buttonStyle(.plain)
-
-                Divider().frame(height: 24)
-
-                Text(pipeline.currentStep == .culling || !settings.hdrMergeEnabled ? "Gallring" : "Bracket-granskning")
-                    .font(.system(.headline, design: .rounded))
-
-                Spacer()
-
-                HStack(spacing: 8) {
-                    StatPill(icon: "checkmark.circle.fill", count: pipeline.allPhotos.filter { $0.accepted }.count, color: .green)
-                    StatPill(icon: "xmark.circle.fill", count: pipeline.allPhotos.filter { $0.rejected }.count, color: .red)
-                    StatPill(icon: "questionmark.circle", count: pipeline.allPhotos.filter { !$0.accepted && !$0.rejected }.count, color: .gray)
-
-                    Text("\(pipeline.allPhotos.count) totalt")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                Button(action: { showDeleteReviewConfirm = true }) {
-                    Label("Radera granskningsdata", systemImage: "trash")
-                        .font(.caption)
-                        .foregroundColor(.red)
-                }
-                .buttonStyle(.bordered)
-                .help("Radera alla gallringsbeslut och anteckningar")
-                .alert("Radera all granskningsdata?", isPresented: $showDeleteReviewConfirm) {
-                    Button("Radera", role: .destructive) {
-                        clearAllReviewData()
-                    }
-                    Button("Avbryt", role: .cancel) {}
-                } message: {
-                    Text("Detta raderar alla gallringsbeslut (ja/nej) och dikterade anteckningar. Kan inte angras.")
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Color(nsColor: .controlBackgroundColor))
-
-            Divider()
-
+        Group {
             if pipeline.currentStep == .culling || !settings.hdrMergeEnabled {
                 PreviewCullView()
                     .environmentObject(runner)
@@ -143,24 +96,23 @@ struct DashboardView: View {
             }
         }
         .environmentObject(pipeline)
+        .alert("Radera all granskningsdata?", isPresented: $showDeleteReviewConfirm) {
+            Button("Radera", role: .destructive) {
+                clearAllReviewData()
+            }
+            Button("Avbryt", role: .cancel) {}
+        } message: {
+            Text("Detta raderar alla gallringsbeslut (ja/nej) och dikterade anteckningar. Kan inte angras.")
+        }
     }
 
-    // MARK: - Top bar (branding + folders + controls)
+    // MARK: - Dashboard toolbar (Fas 3g: riktiga verktygsfältsobjekt i stället
+    // för en handbyggd HStack med egen `controlBackgroundColor`-bakgrund, som
+    // annars krockar med Xcode 27:s automatiska Liquid Glass-fönsterdesign.)
 
-    private var topBar: some View {
-        HStack(spacing: 16) {
-            // Logo
-            HStack(spacing: 8) {
-                Image(systemName: "camera.fill")
-                    .font(.system(size: 24))
-                    .foregroundColor(.accentColor)
-                Text("PhotoFlow")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-            }
-
-            Divider().frame(height: 32)
-
-            // Input folder
+    @ToolbarContentBuilder
+    private var dashboardToolbarContent: some ToolbarContent {
+        ToolbarItemGroup(placement: .navigation) {
             folderButton(
                 icon: "folder",
                 label: "Input",
@@ -171,11 +123,6 @@ struct DashboardView: View {
                 pickInputFolder()
             }
 
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundColor(.secondary.opacity(0.5))
-
-            // Output folder
             folderButton(
                 icon: "folder.fill",
                 label: "Output",
@@ -185,111 +132,121 @@ struct DashboardView: View {
             ) {
                 pickOutputFolder()
             }
+        }
 
-            Spacer()
-
-            // Status
-            if pipeline.isRunning {
+        if pipeline.isRunning {
+            ToolbarItem(placement: .principal) {
                 HStack(spacing: 6) {
                     ProgressView()
-                        .scaleEffect(0.6)
+                        .controlSize(.small)
                     Text(pipeline.currentStep.title)
                         .font(.caption)
                         .foregroundColor(.accentColor)
                 }
             }
+        }
 
-            // Pause/Resume
+        ToolbarItemGroup(placement: .primaryAction) {
             if pipeline.isRunning {
                 Button(action: { runner.togglePause() }) {
                     Label(
-                        pipeline.isPaused ? "Fortsatt" : "Pausa",
+                        pipeline.isPaused ? "Fortsätt" : "Pausa",
                         systemImage: pipeline.isPaused ? "play.fill" : "pause.fill"
                     )
                 }
-                .buttonStyle(.bordered)
             }
 
-            // Auto mode: run all
             Button(action: { startPipeline() }) {
                 Label(
-                    pipeline.isRunning ? "Kor..." : "Auto",
+                    pipeline.isRunning ? "Kör..." : "Auto",
                     systemImage: "bolt.circle.fill"
                 )
             }
-            .buttonStyle(.borderedProminent)
             .tint(.accentColor)
-            .controlSize(.large)
             .disabled(pipeline.isRunning || settings.inputDirectory == nil)
-            .help("Kor hela pipelinen automatiskt")
+            .help("Kör hela pipelinen automatiskt")
 
-            // Watch mode
             Button(action: { toggleWatchMode() }) {
                 Image(systemName: pipeline.isWatchMode ? "eye.slash" : "eye")
             }
-            .buttonStyle(.bordered)
             .tint(pipeline.isWatchMode ? .orange : nil)
             .help(pipeline.isWatchMode ? "Stoppa bevakning" : "Bevaka inputmapp")
+        }
 
-            // Log toggle
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+
+        ToolbarItemGroup(placement: .primaryAction) {
             Button(action: { withAnimation { showLog.toggle() } }) {
                 Image(systemName: "text.alignleft")
-                    .foregroundColor(showLog ? .accentColor : .secondary)
             }
-            .buttonStyle(.plain)
-            .help("Visa/dolj logg")
+            .tint(showLog ? .accentColor : nil)
+            .help("Visa/dölj logg")
 
-            // Settings
             Button(action: { showSettings = true }) {
                 Image(systemName: "gearshape")
-                    .foregroundColor(.secondary)
             }
-            .buttonStyle(.plain)
-            .help("Installningar")
+            .help("Inställningar")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Color(nsColor: .controlBackgroundColor))
     }
 
-    // MARK: - Folder button
+    // MARK: - Review toolbar
+
+    @ToolbarContentBuilder
+    private var reviewToolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            Button(action: { showReview = false }) {
+                Label("Tillbaka", systemImage: "chevron.left")
+            }
+        }
+
+        ToolbarItem(placement: .principal) {
+            Text(pipeline.currentStep == .culling || !settings.hdrMergeEnabled ? "Gallring" : "Bracket-granskning")
+                .font(.system(.headline, design: .rounded))
+        }
+
+        ToolbarItemGroup(placement: .primaryAction) {
+            StatPill(icon: "checkmark.circle.fill", count: pipeline.allPhotos.filter { $0.accepted }.count, color: .green)
+            StatPill(icon: "xmark.circle.fill", count: pipeline.allPhotos.filter { $0.rejected }.count, color: .red)
+            StatPill(icon: "questionmark.circle", count: pipeline.allPhotos.filter { !$0.accepted && !$0.rejected }.count, color: .gray)
+        }
+
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+
+        ToolbarItem(placement: .primaryAction) {
+            Button(action: { showDeleteReviewConfirm = true }) {
+                Label("Radera granskningsdata", systemImage: "trash")
+            }
+            .tint(.red)
+            .help("Radera alla gallringsbeslut och anteckningar")
+        }
+    }
+
+    // MARK: - Folder button (toolbar)
 
     private func folderButton(icon: String, label: String, path: String?, color: Color, detail: String?, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.system(size: 16))
-                    .foregroundColor(color)
+                    .foregroundStyle(color)
                 VStack(alignment: .leading, spacing: 1) {
                     if let path {
                         Text(path)
                             .font(.system(.caption, design: .monospaced))
-                            .foregroundColor(.primary)
                             .lineLimit(1)
                     } else {
-                        Text("Valj \(label.lowercased())mapp...")
+                        Text("Välj \(label.lowercased())mapp...")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
                     if let detail {
                         Text(detail)
                             .font(.system(size: 9))
-                            .foregroundColor(color.opacity(0.8))
+                            .foregroundStyle(color.opacity(0.8))
                     }
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(nsColor: .textBackgroundColor))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(color.opacity(0.3), lineWidth: 1)
-            )
         }
-        .buttonStyle(.plain)
+        .help(path == nil ? "Välj \(label.lowercased())mapp" : path!)
     }
 
     // MARK: - Log panel
