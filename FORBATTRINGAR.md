@@ -2107,3 +2107,156 @@ Ny Swift-test `PipelineRunnerLightroomTests` (bridge-mappens sökväg).
   den utan att ändra själva förslagslogiken.
 - Ingen ny inställning för hur många ångra-poster som sparas (hårdkodat 50)
   — bedömdes inte behöva vara justerbart av användaren.
+
+## Fas 3g – UI-genomgång med Liquid Glass
+
+Utfört autonomt på branchen `forbattringar` medan användaren sov. Bakgrund:
+i Xcode 27/macOS 26+ går det inte längre att välja bort Liquid Glass — appen
+får designen automatiskt vid ombyggnad. Problemet var att flera vyer byggde
+egna "toolbars" och flytande överlägg med `Color(nsColor:
+.controlBackgroundColor)`/`.ultraThinMaterial`/solida färgbakgrunder och
+egna knappstilar, vilket krockade visuellt med den nya designen (dubbla
+material/glaskanter, hårda rutor ovanpå det nya systemglaset).
+
+Alla nya API:er verifierades mot **`SwiftUI.swiftinterface`/
+`SwiftUICore.swiftinterface`** i den installerade macOS 27-SDK:n innan de
+användes (`grep` mot
+`.../MacOSX.sdk/System/Library/Frameworks/SwiftUI{,Core}.framework/.../*.swiftinterface`)
+— inga gissade signaturer. Bekräftat tillgängliga (alla `macOS 26.0+`, vilket
+matchar appens deployment target):
+
+- `View.glassEffect(_ glass: Glass = .regular, in shape: some Shape = ...)`
+  samt `Glass.regular`/`.clear`/`.identity`/`.tint(_:)`/`.interactive(_:)`
+  (`SwiftUICore.swiftinterface`).
+- `GlassEffectContainer<Content>` (grupperar flera glasformer för korrekt
+  sammansmältning/kant-sampling).
+- `PrimitiveButtonStyle.glass` / `GlassButtonStyle` (`SwiftUI.swiftinterface`).
+- `ToolbarSpacer(_ sizing: SpacerSizing = .flexible, placement:)` — delar upp
+  ett verktygsfält i separata glaskapslar (`.fixed`/`.flexible`).
+- `ToolbarItem`/`ToolbarItemGroup`/`ToolbarItemPlacement` (`.navigation`,
+  `.principal`, `.primaryAction`) fanns redan sedan tidigare macOS-versioner
+  och användes för första gången i den här appen.
+
+### 1. DashboardView: handbyggd topplist → riktiga verktygsfält
+
+`DashboardView.topBar` (en `HStack` med egen `controlBackgroundColor`-
+bakgrund) och granskningslägets tunna "Tillbaka"-list (samma mönster) är
+ersatta med `.toolbar { ... }` på `DashboardView`s rotvy, med två separata
+`@ToolbarContentBuilder`-vyer (`dashboardToolbarContent`/
+`reviewToolbarContent`) som växlas beroende på `showReview` — exakt samma
+funktioner som förut, bara som riktiga `ToolbarItem`/`ToolbarItemGroup`:
+
+- Input-/output-mappval (med filnamn + NEF-antal) i en
+  `ToolbarItemGroup(.navigation)`.
+- Körstatus (`ProgressView` + stegtitel) i `.principal` när pipelinen körs.
+- Pausa/Fortsätt, Auto (fortfarande `.borderedProminent` för att sticka ut
+  som huvud-CTA), Bevaka i en `ToolbarItemGroup(.primaryAction)`, separerad
+  med `ToolbarSpacer(.fixed, placement: .primaryAction)` från Logg-/
+  Inställningar-gruppen.
+- Granskningslägets Tillbaka-knapp/titel/statistik-piller/"Radera
+  granskningsdata" är samma uppdelning (`.navigation`/`.principal`/
+  `.primaryAction`); `alert`-modifieraren för raderingen ligger nu på
+  `reviewContent`s rot i stället för på själva knappen.
+
+`folderButton()` förenklad för toolbar-bruk — ingen egen
+`RoundedRectangle`-bakgrund/kant längre (den gav annars en dubbel glasram
+ovanpå verktygsfältets egen glaseffekt).
+
+### 2. Glaseffekter på flytande överlägg
+
+`.ultraThinMaterial`/solida färgbakgrunder ersatta med
+`.glassEffect(_:in:)`/`GlassEffectContainer` på element som ligger ovanpå
+bildinnehåll (INTE på strukturella paneler som `bottomStrip`s/`headerBar`s
+egen `controlBackgroundColor`-bakgrund, som är kvar — de är inbäddade
+paneler, inte flytande överlägg, och ändrades inte):
+
+- **`CountdownOverlay`**: `.glassEffect(.regular.tint(.orange.opacity(0.15)), in: RoundedRectangle(cornerRadius: 14))` i stället för `.ultraThinMaterial`
+  (den orangea konturen är kvar som `.overlay`-kant).
+- **`PreviewCullView`**: "Bra/Kassera/Ej granskad"-badgen
+  (`verdictBadgeLarge`), "Föreslog X bilder"-bannern (`suggestionBanner`),
+  bildinfolisten i botten (`photoInfoBar`) och hela knapp-/filmremsraden i
+  fullskärmsläget (`fullscreenBottomBar`) är glaseffekter. De stora
+  symbolknapparna (`symbolButton`/`fsSymbol`, medvetet stora för snabb
+  tangentbords-/musgallring — **oförändrad storlek**) och dikteringsknappen
+  (`dictationButton`/`dictationButtonFS`) använder `.buttonStyle(.glass)` i
+  stället för `.plain`, grupperade i `GlassEffectContainer` för korrekt
+  sammansmältning mellan intilliggande glasformer.
+- **`BracketReviewView`**: "HDR-sammanslagning"/motor-etiketterna,
+  "Visa HDR (H)"-knappen (nu `.buttonStyle(.glass).tint(.orange)` i stället
+  för en manuell `Color.orange.opacity(0.85)`-bakgrund) och de tre
+  statusbadgarna (Algoritmens val/Ditt val/Avvisad) är glaseffekter i
+  stället för solida färgade rutor.
+
+Mörk tining (`.black.opacity(0.25...0.35)`) lades på botten-/infolisterna
+som ligger direkt ovanpå fotot (`photoInfoBar`, `fullscreenBottomBar`) —
+`.regular`-glas antar annars fel kontrast om fotot eller ljust/mörkt läge
+råkar göra glaset för ljust för den vita texten ovanpå. Se kommentarer i
+koden.
+
+### 3. Bildvisning i fullskärmsgallringen
+
+`ProgressiveImageView` i `PreviewCullView.fullscreenView` fick ett explicit
+`.frame(maxWidth: .infinity, maxHeight: .infinity)` + `.ignoresSafeArea()`
+i stället för att förlita sig på `ZStack`ens implicita storleksförslag —
+den svarta bakgrunden (`Color.black.ignoresSafeArea()`, redan fanns)
+letterboxar det som fotots egen bildproportion inte täcker, så de flytande
+glas-overlägen (topplist, verdict-badge, knapprad) alltid ligger ovanpå
+antingen svart eller foto, aldrig mot en hård kant.
+
+### 4. Kontroller/knappstilar
+
+Genomsökt `DashboardView`/`PreviewCullView`/`BracketReviewView`/
+`CountdownOverlay` efter `Button`+manuell bakgrund. De återstående (efter
+punkt 2 ovan) använder redan standardstilar (`.bordered`,
+`.borderedProminent`) sedan tidigare faser — inget mer att byta där.
+
+### 5. Mörkt/ljust läge — INTE visuellt verifierat
+
+**Kunde inte skärmbildsverifieras den här körningen**: skärmen var låst
+(`CGSSessionScreenIsLocked=Yes` via `ioreg -n Root -d1`) under hela
+sessionen — troligen skärmsläckare/låsning eftersom användaren sover.
+`screencapture` gav bara svarta bilder (macOS blockerar avsiktligt
+skärmdumpar av låsskärmen), och det finns inget lösenord tillgängligt att
+låsa upp med (och det vore inte lämpligt att försöka). Appen kunde
+fortfarande byggas och köras (processen startade), men UI:t kunde inte
+faktiskt ses eller fotograferas — så **`AppleInterfaceStyle` ändrades
+aldrig** (lästes bara: var `Dark` från början, oförändrat).
+
+Verifiering gjordes i stället genom kodgranskning av färgkontrast:
+
+- Alla nya `glassEffect`-tintningar använder antingen en stark färgad
+  tint (grön/röd/orange/blå vid 0.8–0.85 opacitet) eller en mörk tint
+  (svart vid 0.25–0.5) bakom vit text — båda dominerar tillräckligt över
+  `Glass.regular`s adaptiva ljus/mörk-bastoning för att vit text ska
+  förbli läsbar oavsett systemläge eller hur ljust/mörkt fotot bakom
+  råkar vara.
+- `CountdownOverlay` använder `.primary`/`.secondary` textfärger (redan
+  adaptiva) på en lätt tintad (`15%` orange) `.regular`-glas, samma
+  mönster som `.ultraThinMaterial` hade innan — ingen ny kontrastrisk.
+
+**Användaren bör göra en snabb visuell koll i både ljust och mörkt läge**
+(`Systeminställningar → Utseende`, eller `defaults write -g
+AppleInterfaceStyle Dark`/`defaults delete -g AppleInterfaceStyle` +
+omstart av appen) av: verktygsfältet i `DashboardView` (båda lägena),
+`CountdownOverlay` (kräver en pågående röstmeddelande-nedräkning),
+gallringens fullskärmsläge (`f`-tangenten), och bracket-granskningens
+HDR-etiketter — särskilt att ingen vit text hamnar på ett för ljust glas i
+ljust läge.
+
+### Kvarstående / inte gjort i Fas 3g
+
+- Inga skärmbilder kunde tas (se punkt 5) — all verifiering är bygge
+  (`xcodebuild build`), alla 141 tester (`xcodebuild test`) och manuell
+  SDK-verifiering av varje ny API-signatur, inte visuell inspektion.
+- `StepCardView`, `SettingsView`, `DictationPanelView` och
+  `LocalImageView`s "RAW"-badge har kvar sina
+  `controlBackgroundColor`/`ultraThinMaterial`-bakgrunder — de är
+  strukturella inbäddade paneler/kort (inte flytande överlägg ovanpå
+  bildinnehåll) och låg utanför den här fasens uttryckliga scope
+  (DashboardView, CountdownOverlay, PreviewCullView, BracketReviewView).
+  Kan vara värt en egen genomgång i en senare fas om de känns
+  inkonsekventa mot resten av appen i praktiken.
+- `ToolbarItemGroup(.navigation)`s två mappknappar visas nu utan den
+  gamla `chevron.right`-pilen mellan dem (verktygsfältets egen gruppering
+  gör pilen överflödig) — en liten visuell ändring, inte en
+  funktionsförlust.
