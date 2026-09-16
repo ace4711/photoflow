@@ -206,7 +206,9 @@ struct DictationPanelView: View {
             }
         }
         .padding(10)
-        .background(Color(nsColor: .controlBackgroundColor))
+        // Fas 5: samma regularMaterial-kortstil som StepCardView i stället
+        // för en solid controlBackgroundColor-panel.
+        .background(.regularMaterial)
         // Apples Translation-ramverk: sessionen skapas/uppdateras av SwiftUI
         // varje gång `translator.configuration` ändras eller ogiltigförklaras
         // (se `TranslationService.translate`/`invalidate()`), och stängs ner

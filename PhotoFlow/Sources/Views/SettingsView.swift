@@ -42,7 +42,9 @@ struct SettingsView: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
-            .background(Color(nsColor: .controlBackgroundColor))
+            // Fas 5: regularMaterial i stället för en solid platta — samma
+            // tidsenliga stil som resten av appen sedan Fas 3g.
+            .background(.regularMaterial)
         }
     }
 }
@@ -542,7 +544,7 @@ struct SystemCheckTab: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 10)
-                .background(Color(nsColor: .controlBackgroundColor))
+                .background(.regularMaterial)
             }
 
             if deps.isChecking {
@@ -650,9 +652,10 @@ struct DependencyRow: View {
             }
         }
         .padding(12)
+        // Fas 5: riktigt kort (regularMaterial), samma stil som StepCardView.
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(Color(nsColor: .controlBackgroundColor))
+                .fill(.regularMaterial)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10)

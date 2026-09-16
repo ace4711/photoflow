@@ -98,9 +98,12 @@ struct StepCardView: View {
         .padding(.vertical, 14)
         .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, minHeight: 130)
+        // Fas 5: riktigt kort (regularMaterial) i stället för en solid
+        // controlBackgroundColor-platta — samma tidsenliga stil som Fas 3g
+        // gav DashboardView/PreviewCullView/BracketReviewView.
         .background(
             RoundedRectangle(cornerRadius: 14)
-                .fill(status.phase == .disabled ? Color.clear : Color(nsColor: .controlBackgroundColor))
+                .fill(status.phase == .disabled ? AnyShapeStyle(.clear) : AnyShapeStyle(.regularMaterial))
         )
         .overlay {
             borderOverlay
@@ -349,7 +352,7 @@ struct StepDetailSheet: View {
                     .buttonStyle(.bordered)
             }
             .padding(16)
-            .background(Color(nsColor: .controlBackgroundColor))
+            .background(.regularMaterial)
 
             Divider()
 
