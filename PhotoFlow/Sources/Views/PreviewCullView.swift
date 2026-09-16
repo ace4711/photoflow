@@ -241,9 +241,16 @@ struct PreviewCullView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            // Large image
+            // Large image — bleeds to the window edges (ignoresSafeArea +
+            // an explicit fill frame, rather than relying on the ZStack's
+            // implicit sizing) with the black background letterboxing
+            // whatever the photo's own aspect ratio doesn't cover, so the
+            // floating glass toolbar/bars above always sit on black or photo,
+            // never on a hard content edge.
             if let photo = currentPhoto {
                 ProgressiveImageView(previewURL: photo.previewURL, fullResURL: photo.nefURL, dngURL: photo.dngURL)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
                     .overlay(alignment: .topTrailing) {
                         verdictBadgeLarge(for: photo)
                             .padding(20)
