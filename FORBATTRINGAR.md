@@ -3432,3 +3432,205 @@ bilder, N sessionsanteckningar" + vilka adresser som fick rättad GPS).
   (gamla dagars anteckningar staplas tills de raderas manuellt i appen) —
   bedömdes rimligt för en enkel fältanteckningsapp, men en framtida
   "arkivera/rensa gamla anteckningar"-funktion vore en naturlig utökning.
+
+## Fas 8 – Isoleringsgranskning och slutförda rester
+
+Utfört autonomt på branchen `forbattringar` medan användaren sov, ett steg i
+taget med bygge + tester gröna före varje commit. Se `git log --oneline` för
+commit-för-commit-historik. 210 tester totalt efter denna fas (upp från 208).
+
+### Bakgrund
+
+En krasch-klass hittades precis före denna fas (commit `4cb01db`):
+`SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor` (Fas 2b) gör closures/funktioner
+utan explicit isolering MainActor-isolerade som standard. När ett C-/
+Objective-C-API (t.ex. `SFSpeechRecognizer.requestAuthorization`,
+`UNUserNotificationCenter.requestAuthorization`) anropar ett sådant block
+från en bakgrundskö kraschar appen direkt i Swift 6:s isoleringskontroll
+(`dispatch_assert_queue`, EXC_BREAKPOINT) INNAN blockets kropp körs — även om
+kroppen bara innehåller `Task { @MainActor in ... }`. Fas 8:s uppdrag var att
+systematiskt leta efter FLER ställen med samma mönster, verifiera med en
+riktig körning (kompilatorn fångar inte detta), och knyta ihop kvarvarande
+lösa trådar från tidigare faser.
+
+### 1. Systematisk isoleringsgranskning
+
+Alla filer med callback-baserade Apple-API:er (completion-handlers,
+delegate-metoder, C-callbacks, `DispatchQueue.global`-block,
+`NotificationCenter`/`NSWorkspace`-observatörer, SwiftUI-scenmodifierare)
+lästes igenom i sin helhet. Checklista (fil:rad — bedömning):
+
+**Redan fixat i `4cb01db` (verifierat oförändrat, ingen ny åtgärd):**
+- `DictationService.swift:100` `checkAuthorization()` — `nonisolated`. OK.
+- `DictationService.swift:113` `requestAuthorizationOnce()` — `nonisolated`. OK.
+- `NotificationService.swift:67` `requestAuthorizationIfNeeded()` —
+  `@Sendable`-block. OK.
+- `FieldDictationService.swift:54` `checkAuthorization()` — `nonisolated`. OK.
+
+**NY HÖG-risk-bugg hittad och fixad i denna fas:**
+- `DictationService.swift:297` (macOS, `installTap`-fallbacken för
+  macOS < 27) och `FieldDictationService.swift:211` (iOS, samma fallback
+  för iOS < 27) — EXAKT samma kraschmönster som `4cb01db`, fast för
+  ljudtapp-blocket i stället för behörighetsdialogen:
+  `AVAudioNodeTapBlock` är inte `@Sendable`-märkt i SDK:n, så blocket blev
+  MainActor-isolerat av standardinställningen trots att `AVAudioEngine`
+  anropar det från sin egen realtids-ljudtråd. Bara ett latent problem på
+  DEN HÄR utvecklingsmaskinen (macOS 27/iOS 27 Simulator tar alltid den
+  nyare `installAudioTap`-grenen, se nedan) — men skulle krascha vid varje
+  dikteringsstart på en riktig macOS 26- eller iOS 26-installation/enhet.
+  Fixat med `@Sendable` på blocket + en ny delad
+  `Sources/Shared/SendableAudioBuffer.swift` (`@unchecked Sendable`-wrapper,
+  samma escape-hatch-mönster som `ProcessCancellationBox`) eftersom den råa
+  `AVAudioPCMBuffer`-parametern annars utlöste Swifts regionbaserade
+  "sending risks causing data races"-kontroll. Se commit "Fas 8 (3)" för
+  fullständig motivering.
+- `DictationService.swift:260`/`FieldDictationService.swift:178`
+  (`installAudioTap`, den nyare macOS/iOS 27+-grenen) — redan korrekt sedan
+  tidigare (blockets typ är `@Sendable` i SDK:n, koden hoppar redan till
+  `Task { @MainActor in }`). OK, ingen ändring.
+
+**Granskat, redan korrekt/inget fynd:**
+- `WatchService.swift` — `NSWorkspace`-observatörerna (rad ~153–180) hoppar
+  redan till `@MainActor` och extraherar bara `Sendable`-data (URL) i det
+  icke-isolerade callbacket (Fas 7-mönster). `FSEventStreamCallback`
+  (rad ~238) är en `@convention(c)`-closure utan captures — kan strukturellt
+  inte bli actor-isolerad. OK.
+- `AudioService.swift` — `NSEvent.addLocalMonitorForEvents` (rad ~102, 109):
+  lokala monitorer levereras garanterat på huvudtråden av AppKit, och
+  klassen är redan `@MainActor`. LÅG risk, ingen ändring behövs.
+- `CalendarService.swift` — `requestFullAccessToEvents()` och
+  `MKGeocodingRequest`/`mapItems` är redan moderna `async`/`await`-API:er,
+  inga completion-handlers. OK.
+- `FieldLocationService.swift` — `CLLocationManagerDelegate`-metoderna
+  (rad 62–86) var redan `nonisolated` + `Task { @MainActor in }` sedan
+  Fas 7. OK, inget nytt fynd.
+- `VisionTaggingService.swift`, `PhotoQualityService.swift`,
+  `HDRAlignment.swift`, `ExifReader.swift` — moderna `async`
+  Vision-request-API:er eller synkront `VNImageRequestHandler.perform`
+  (`completionHandler: nil`), och/eller redan `nonisolated enum`. OK.
+- `PhotoDescriptionService.swift` — `actor`, rent `async`/`await` mot
+  Foundation Models. OK.
+- `TranslationService.swift` — `.translationTask` är en SwiftUI-
+  scenmodifierare (garanterat MainActor) + `CheckedContinuation`. OK.
+- `ProcessRunner.swift` — `DispatchQueue.global(qos:).async`-blockets
+  parametertyp är `@Sendable` i Dispatch-overlayen, så det tvingas redan
+  icke-isolerat av typkontrollen; `ProcessCancellationBox` är redan
+  `nonisolated` + `@unchecked Sendable` med egen lås. OK.
+- `DependencyManager.swift` — bara synkrona, `nonisolated` Process-anrop,
+  inga completion-handlers/URLSession. OK.
+- `LocalImageView.swift` — `ImageLoader` är redan `nonisolated enum`;
+  `DispatchQueue.global`-blocken där har samma `@Sendable`-tvingade typ som
+  `ProcessRunner`. OK.
+- `PhotoFlowApp.swift` — `.onOpenURL` är en SwiftUI-scenmodifierare
+  (garanterat MainActor). OK.
+- `SessionHistoryView.swift`, `PreviewCullView.swift`, `AddressBanner.swift`,
+  `BracketReviewView.swift`, `DictationPanelView.swift`, `SettingsView.swift`,
+  `FieldContentView.swift` — inga egna `NotificationCenter`/completion-
+  baserade callbacks utöver SwiftUI:s egna (garanterat MainActor). OK.
+- `ImageCache.swift`, `NotesManager.swift`, `BracketAnalyzer.swift`,
+  `AddressFolderLayout.swift`, `BookingTitleParser.swift`,
+  `ToolLocator.swift`, `FileSafety.swift`, `SessionManifestStore.swift`,
+  `SessionHistoryStore.swift`, `AppSettings.swift` — inga
+  callback-baserade Apple-API:er som körs utanför huvudtråden. OK.
+
+**Slutsats**: EN ny, verklig kraschrisk hittades och fixades (den gamla
+`installTap`-fallbacken). Alla andra granskade ställen var antingen redan
+korrekta (flera tidigare faser hade redan tillämpat `nonisolated`/
+`@Sendable`-mönstret proaktivt, t.ex. Fas 7:s `FieldLocationService` och
+Fas 6/7:s `WatchService`) eller aldrig i riskzonen (moderna `async`-API:er,
+`@convention(c)`-callbacks, eller SwiftUI-scenmodifierare som redan är
+MainActor-garanterade).
+
+### 2. Runtime-verifiering
+
+- **macOS**: byggde till `/private/tmp/.../scratchpad/dd`, `open -n`:ade
+  `PhotoFlow.app` (efter samtliga isoleringsfixar ovan), lät den ligga i
+  ~30 sekunder. `pgrep -x PhotoFlow` visade processen vid liv genom hela
+  väntetiden, `~/Library/Logs/DiagnosticReports` fick INGEN ny
+  `PhotoFlow-*.ips`-post. Avslutad med `osascript -e 'quit app "PhotoFlow"'`
+  (+ `kill` för en kvarvarande andra instans). Pipelinen/bevakningen
+  startades ALDRIG och inga användarmappar rördes.
+- **iOS**: byggde till `dd_ios`, installerade och startade
+  `com.photoflow.field` på den bootade "iPhone 17"-simulatorn
+  (`4999A723-D7C8-451B-BAB3-264F445A9B3C`) via
+  `xcrun simctl launch --terminate-running-process`. Appen startade utan
+  krasch och visade platsbehörighetsdialogen (skärmbild tagen och
+  granskad) — bekräftar att appstartens behörighetskontroller (samma
+  callback-väg som kraschade i `4cb01db`) fungerar. Ingen ny post i
+  `~/Library/Logs/DiagnosticReports` för "PhotoFlow Fält" (bara den gamla,
+  FÖRE-fix-reproduktionen från `4cb01db`s verifiering kvar). Avslutad med
+  `xcrun simctl terminate`.
+- Kunde INTE verifiera den fixade `installTap`-fallbacken (punkt 1) med en
+  riktig körning på den här maskinen — macOS 27/iOS 27 Simulator tar alltid
+  den nyare `installAudioTap`-grenen via `#available`. Byggkontrollen
+  (typkontrollerar BÅDA grenarna oavsett värd-OS) och den manuella
+  SDK-verifieringen av API-signaturerna är den bästa verifiering som var
+  möjlig här — flaggat som kvarstående manuellt test nedan.
+
+### 3. Resterande punkter från tidigare faser
+
+- **iOS-appikon**: `PhotoFlowField` saknade helt `Assets.xcassets` (tom
+  ikon i Simulatorn). Genererade en enkel 1024×1024-ikon med ImageMagick
+  (samma mörkblå/ljusblå kamera-bländartema som macOS-appens ikon, plus en
+  orange mikrofonbadge för att särskilja fältappen) som ett universellt
+  engångsstorlek-`AppIcon`-asset (Xcode 14+-formatet). Ny fil:
+  `PhotoFlow/SourcesField/Assets.xcassets/`.
+- **Byggvarning "opening documents in place"**: `LSSupportsOpeningDocumentsInPlace: false`
+  tillagt i `PhotoFlowField`s Info-inställningar (`project.yml`). Samma
+  nyckel gav ett HÅRT byggfel på macOS-målet ("not supported on macOS ...
+  set it to YES") — macOS-bygget visade dessutom aldrig varningen i CLI-
+  bygget, så nyckeln lades bara till för iOS-målet.
+- **Fingerprint-gating utökad**: Fas 6 lämnade manifest-fingerprint-baserad
+  skip-kontroll bara för bracket-analysen och AI-taggningen (dokumenterad
+  avgränsning). Lade till samma mönster för:
+  - Preview-generering (`generatePreviews`) — mest för spårbarhet, den
+    befintliga per-fil-kontrollen var redan starkare.
+  - Kalendermatchning (`findCalendarInfo`) — fingerprint av
+    `bracket_groups.json` + vald kalender (`calendarName`); ett kalenterbyte
+    triggar nu om matchningen i stället för att återanvända en gammal
+    `calendar_matches.json` mot fel kalender.
+  - Filsortering (`moveToFolders`) — fingerprint av bildlista + HDR-läge +
+    adress-/GPS-rättningssignatur; en adressrättning på en redan sorterad
+    session sorterar nu om till rätt mapp.
+  - Metadataskrivning (`writeIPTCTags`) — fingerprint av bildlista +
+    AI-taggning på/av + AI-taggar/beskrivning per bild + samma
+    adress-/GPS-signatur; en omkörd AI-taggning skriver nu om metadatan.
+  - Bakåtkompatibilitet bevarad: sessioner utan ett manifest-steg-record
+    för respektive steg (körda före Fas 6/8) faller tillbaka till den gamla,
+    räkne-baserade kontrollen precis som innan.
+- **Historikvyn — ta bort en post**: `SessionHistoryStore.remove(sessionID:)`
+  tar bort EN rad ur `sessions.json` (aldrig filer på disk).
+  `SessionHistoryView` har nu en bekräftelsedialog (swipe-to-delete eller
+  knapp på raden) som är tydlig med att bara registerposten försvinner —
+  skiljer sig medvetet från `pruneMissingOutputDirectories` (som rensar
+  tyst, bara för redan-borta mappar, utan att fråga).
+
+### Manuell testning användaren bör göra
+
+1. **Diktering på en riktig macOS 26- eller iOS 26-installation** (inte
+   27) om en sådan finns tillgänglig — det var det enda fyndet i denna fas
+   som inte kunde verifieras med en riktig körning här. Kontrollera att
+   mikrofonknappen/dikteringen fungerar utan krasch (både macOS-appen och
+   `PhotoFlowField`).
+2. **Kalenderbyte**: kör en session, byt sedan `calendarName` i
+   Inställningar och kör om — kalendermatchningen ska nu göras om (inte
+   hoppas över), synligt i `decision_log.jsonl` (`calendar_match`,
+   `decision: "ran"` inte `"skipped"`).
+3. **Adressrättning + omsortering**: rätta en adress GPS-manuellt på en
+   redan sorterad/metadata-skriven session, kör pipelinen igen — filerna
+   ska sorteras om till rätt mapp och metadata skrivas om, inte hoppas över.
+4. **Historik → "Ta bort ur historik"**: kontrollera att bekräftelsedialogen
+   visas, att posten försvinner ur listan efter bekräftelse, och att
+   in-/outputmapparna på disk INTE rörs.
+5. **iOS-appikonen**: kontrollera i Simulatorn (eller Xcodes
+   asset-katalog-förhandsvisning) att ikonen ser rimlig ut i alla storlekar.
+
+### Kvarstående / inte gjort i Fas 8
+
+- `installTap`-fixen (punkt 1) kunde bara verifieras genom typkontroll +
+  manuell SDK-signaturgranskning, inte en riktig körning (se ovan) — låg
+  men inte obefintlig risk att något i den manuella buffertkopieringen
+  (`copyPCMBuffer`) beter sig oväntat på riktig äldre hårdvara.
+- Ingen ytterligare isoleringsgranskning gjordes av tredjeparts-Swift-paket
+  (projektet har inga externa paketberoenden i skrivande stund, så detta är
+  inte en känd lucka, bara ej tillämpligt).
