@@ -47,10 +47,7 @@ struct CountdownOverlay: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
-            .background(
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(.ultraThinMaterial)
-            )
+            .glassEffect(.regular.tint(.orange.opacity(0.15)), in: RoundedRectangle(cornerRadius: 14))
             .overlay(
                 RoundedRectangle(cornerRadius: 14)
                     .stroke(Color.orange.opacity(0.4), lineWidth: 1)

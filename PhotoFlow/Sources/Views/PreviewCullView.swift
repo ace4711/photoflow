@@ -203,8 +203,7 @@ struct PreviewCullView: View {
                 .foregroundColor(.white)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
-                .background(Color.orange.opacity(0.92))
-                .cornerRadius(10)
+                .glassEffect(.regular.tint(.orange.opacity(0.85)), in: RoundedRectangle(cornerRadius: 10))
                 .shadow(color: .black.opacity(0.3), radius: 4)
                 .transition(.move(edge: .top).combined(with: .opacity))
                 .onTapGesture { withAnimation { self.suggestionMessage = nil } }
@@ -285,10 +284,8 @@ struct PreviewCullView: View {
                     .font(.title3)
                     .foregroundColor(.white)
                     .padding(8)
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(8)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.glass)
         }
         .padding(16)
     }
@@ -300,36 +297,40 @@ struct PreviewCullView: View {
                 .frame(height: 90)
 
             // Large symbol bar on bottom
-            HStack(spacing: 0) {
-                Spacer()
-                fsSymbol(icon: "chevron.left", label: "←", color: .white, action: { navigate(-1) })
-                Spacer()
-                fsSymbol(icon: "xmark.circle.fill", label: "X", color: .red, action: rejectPhoto)
-                Spacer()
-                fsSymbol(icon: "checkmark.circle.fill", label: "Return", color: .green, action: acceptPhoto)
-                Spacer()
-                fsSymbol(icon: "chevron.right", label: "→", color: .white, action: { navigate(1) })
+            GlassEffectContainer {
+                HStack(spacing: 0) {
+                    Spacer()
+                    fsSymbol(icon: "chevron.left", label: "←", color: .white, action: { navigate(-1) })
+                    Spacer()
+                    fsSymbol(icon: "xmark.circle.fill", label: "X", color: .red, action: rejectPhoto)
+                    Spacer()
+                    fsSymbol(icon: "checkmark.circle.fill", label: "Return", color: .green, action: acceptPhoto)
+                    Spacer()
+                    fsSymbol(icon: "chevron.right", label: "→", color: .white, action: { navigate(1) })
 
-                Spacer()
-                Divider().frame(height: 44).opacity(0.4)
-                Spacer()
+                    Spacer()
+                    Divider().frame(height: 44).opacity(0.4)
+                    Spacer()
 
-                dictationButtonFS
-                Spacer()
-                fsSymbol(icon: "wand.and.stars", label: "S", color: .white, action: suggestCulling)
-                Spacer()
-                if !undoStack.isEmpty {
-                    fsSymbol(icon: "arrow.uturn.backward.circle", label: "Z", color: .white, action: performUndo)
+                    dictationButtonFS
+                    Spacer()
+                    fsSymbol(icon: "wand.and.stars", label: "S", color: .white, action: suggestCulling)
+                    Spacer()
+                    if !undoStack.isEmpty {
+                        fsSymbol(icon: "arrow.uturn.backward.circle", label: "Z", color: .white, action: performUndo)
+                        Spacer()
+                    }
+                    fsSymbol(icon: "arrow.down.right.and.arrow.up.left", label: "F", color: .white, action: { withAnimation { isFullscreen = false } })
+                    Spacer()
+                    fsSymbol(icon: "rectangle.portrait.and.arrow.right", label: "ESC", color: .orange, action: finishCulling)
                     Spacer()
                 }
-                fsSymbol(icon: "arrow.down.right.and.arrow.up.left", label: "F", color: .white, action: { withAnimation { isFullscreen = false } })
-                Spacer()
-                fsSymbol(icon: "rectangle.portrait.and.arrow.right", label: "ESC", color: .orange, action: finishCulling)
-                Spacer()
+                .padding(.vertical, 12)
             }
-            .padding(.vertical, 12)
         }
-        .background(.ultraThinMaterial)
+        // Mörk tining av samma anledning som `photoInfoBar` — bakgrunden är
+        // oftast svart (letterboxad bild), men kan vara fotot självt.
+        .glassEffect(.regular.tint(.black.opacity(0.25)), in: Rectangle())
     }
 
     private func fsSymbol(icon: String, label: String, color: Color, action: @escaping () -> Void) -> some View {
@@ -343,7 +344,7 @@ struct PreviewCullView: View {
                     .foregroundColor(.white.opacity(0.6))
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.glass)
         .frame(width: 80)
     }
 
@@ -452,46 +453,48 @@ struct PreviewCullView: View {
             Divider()
 
             // All actions as large symbol buttons
-            HStack(spacing: 0) {
-                Spacer()
-                symbolButton(icon: "chevron.left", label: "←", color: .secondary, action: { navigate(-1) })
-                Spacer()
-                symbolButton(icon: "xmark.circle.fill", label: "X", color: .red, action: rejectPhoto)
-                Spacer()
-                symbolButton(icon: "checkmark.circle.fill", label: "Return", color: .green, action: acceptPhoto)
-                Spacer()
-                symbolButton(icon: "chevron.right", label: "→", color: .secondary, action: { navigate(1) })
+            GlassEffectContainer {
+                HStack(spacing: 0) {
+                    Spacer()
+                    symbolButton(icon: "chevron.left", label: "←", color: .secondary, action: { navigate(-1) })
+                    Spacer()
+                    symbolButton(icon: "xmark.circle.fill", label: "X", color: .red, action: rejectPhoto)
+                    Spacer()
+                    symbolButton(icon: "checkmark.circle.fill", label: "Return", color: .green, action: acceptPhoto)
+                    Spacer()
+                    symbolButton(icon: "chevron.right", label: "→", color: .secondary, action: { navigate(1) })
 
-                Spacer()
-                Divider().frame(height: 44)
-                Spacer()
+                    Spacer()
+                    Divider().frame(height: 44)
+                    Spacer()
 
-                dictationButton
-                Spacer()
+                    dictationButton
+                    Spacer()
 
-                if !notesManager.notes.isEmpty {
-                    symbolButton(icon: "envelope", label: "Mail", color: .secondary, action: {
-                        if let url = notesManager.mailtoURL() {
-                            NSWorkspace.shared.open(url)
-                        }
-                    })
+                    if !notesManager.notes.isEmpty {
+                        symbolButton(icon: "envelope", label: "Mail", color: .secondary, action: {
+                            if let url = notesManager.mailtoURL() {
+                                NSWorkspace.shared.open(url)
+                            }
+                        })
+                        Spacer()
+                    }
+
+                    symbolButton(icon: "wand.and.stars", label: "S", color: .secondary, action: suggestCulling)
+                    Spacer()
+
+                    if !undoStack.isEmpty {
+                        symbolButton(icon: "arrow.uturn.backward.circle", label: "Z", color: .secondary, action: performUndo)
+                        Spacer()
+                    }
+
+                    symbolButton(icon: "arrow.up.left.and.arrow.down.right", label: "F", color: .secondary, action: { withAnimation(.easeInOut(duration: 0.25)) { isFullscreen.toggle() } })
+                    Spacer()
+                    symbolButton(icon: "rectangle.portrait.and.arrow.right", label: "ESC", color: .orange, action: finishCulling)
                     Spacer()
                 }
-
-                symbolButton(icon: "wand.and.stars", label: "S", color: .secondary, action: suggestCulling)
-                Spacer()
-
-                if !undoStack.isEmpty {
-                    symbolButton(icon: "arrow.uturn.backward.circle", label: "Z", color: .secondary, action: performUndo)
-                    Spacer()
-                }
-
-                symbolButton(icon: "arrow.up.left.and.arrow.down.right", label: "F", color: .secondary, action: { withAnimation(.easeInOut(duration: 0.25)) { isFullscreen.toggle() } })
-                Spacer()
-                symbolButton(icon: "rectangle.portrait.and.arrow.right", label: "ESC", color: .orange, action: finishCulling)
-                Spacer()
+                .padding(.vertical, 12)
             }
-            .padding(.vertical, 12)
         }
         .background(Color(nsColor: .controlBackgroundColor))
     }
@@ -586,7 +589,7 @@ struct PreviewCullView: View {
     private func verdictBadgeLarge(for photo: PhotoItem) -> some View {
         let text = photo.accepted ? "Bra" : (photo.rejected ? "Kassera" : "Ej granskad")
         let icon = photo.accepted ? "checkmark.circle.fill" : (photo.rejected ? "xmark.circle.fill" : "questionmark.circle")
-        let bg = photo.accepted ? Color.green.opacity(0.9) : (photo.rejected ? Color.red.opacity(0.9) : Color.gray.opacity(0.7))
+        let tint = photo.accepted ? Color.green : (photo.rejected ? Color.red : Color.gray)
 
         Label(text, systemImage: icon)
             .font(.title2.bold())
@@ -594,8 +597,7 @@ struct PreviewCullView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .frame(minWidth: 180)
-            .background(bg)
-            .cornerRadius(10)
+            .glassEffect(.regular.tint(tint.opacity(0.8)), in: RoundedRectangle(cornerRadius: 10))
             .shadow(color: .black.opacity(0.3), radius: 4)
             .animation(.none, value: text)
     }
@@ -749,7 +751,7 @@ struct PreviewCullView: View {
                     .foregroundColor(dictation.isRecording ? .red : .secondary)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.glass)
         .frame(width: 80)
         .onChange(of: dictation.isRecording) { _, recording in
             if recording {
@@ -788,7 +790,7 @@ struct PreviewCullView: View {
                     .foregroundColor(dictation.isRecording ? .red : .white.opacity(0.6))
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.glass)
         .frame(width: 80)
     }
 
@@ -805,7 +807,7 @@ struct PreviewCullView: View {
                     .foregroundColor(.secondary)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.glass)
         .frame(width: 80)
     }
 
@@ -848,7 +850,10 @@ struct PreviewCullView: View {
         .foregroundColor(.white)
         .padding(.horizontal, 20)
         .padding(.vertical, 8)
-        .background(.ultraThinMaterial)
+        // Fas 3g: mörk tining på glaset (i stället för ren .ultraThinMaterial)
+        // — bilden bakom kan vara ljus, och vit text måste vara läsbar oavsett
+        // vad som råkar synas igenom glaset.
+        .glassEffect(.regular.tint(.black.opacity(0.35)), in: Rectangle())
     }
 
     // MARK: - Actions

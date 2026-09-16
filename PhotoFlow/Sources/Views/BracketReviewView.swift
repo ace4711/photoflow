@@ -254,22 +254,22 @@ struct BracketReviewView: View {
                 VStack(spacing: 12) {
                     LocalImageView(url: hdrURL)
                         .overlay(alignment: .topTrailing) {
-                            VStack(alignment: .trailing, spacing: 6) {
-                                Label("HDR-sammanslagning", systemImage: "photo.stack")
-                                    .font(.title3.bold())
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 6)
-                                    .background(Color.orange)
-                                    .cornerRadius(8)
+                            GlassEffectContainer {
+                                VStack(alignment: .trailing, spacing: 6) {
+                                    Label("HDR-sammanslagning", systemImage: "photo.stack")
+                                        .font(.title3.bold())
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .glassEffect(.regular.tint(.orange.opacity(0.85)), in: RoundedRectangle(cornerRadius: 8))
 
-                                Label(engineLabel, systemImage: "cpu")
-                                    .font(.caption.bold())
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 4)
-                                    .background(Color.black.opacity(0.6))
-                                    .cornerRadius(6)
+                                    Label(engineLabel, systemImage: "cpu")
+                                        .font(.caption.bold())
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 4)
+                                        .glassEffect(.regular.tint(.black.opacity(0.5)), in: RoundedRectangle(cornerRadius: 6))
+                                }
                             }
                             .padding(12)
                         }
@@ -300,13 +300,9 @@ struct BracketReviewView: View {
                                 Button(action: { showHDRPreview = true }) {
                                     Label("Visa HDR (H)", systemImage: "photo.stack")
                                         .font(.caption.bold())
-                                        .foregroundColor(.white)
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 5)
-                                        .background(Color.orange.opacity(0.85))
-                                        .cornerRadius(6)
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(.glass)
+                                .tint(.orange)
                                 .padding(12)
                             }
                         }
@@ -357,24 +353,21 @@ struct BracketReviewView: View {
                 .foregroundColor(.white)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(Color.green)
-                .cornerRadius(8)
+                .glassEffect(.regular.tint(.green.opacity(0.85)), in: RoundedRectangle(cornerRadius: 8))
         } else if photo.accepted && !photo.algorithmSuggested {
             Label("Ditt val", systemImage: "hand.tap")
                 .font(.title3.bold())
                 .foregroundColor(.white)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(Color.blue)
-                .cornerRadius(8)
+                .glassEffect(.regular.tint(.blue.opacity(0.85)), in: RoundedRectangle(cornerRadius: 8))
         } else if photo.rejected {
             Label("Avvisad", systemImage: "xmark.circle.fill")
                 .font(.title3.bold())
                 .foregroundColor(.white)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(Color.red)
-                .cornerRadius(8)
+                .glassEffect(.regular.tint(.red.opacity(0.85)), in: RoundedRectangle(cornerRadius: 8))
         }
     }
 
