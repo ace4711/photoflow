@@ -93,7 +93,13 @@ struct DashboardView: View {
                         status: status,
                         onTap: { handleStepTap(step) },
                         onRerun: { runner.rerunStep(step) },
-                        allPhotos: step == .manualReview ? pipeline.allPhotos : [],
+                        // Fas 10: skickar bara de tre färdigräknade talen (O(1)
+                        // läsningar från PipelineState) i stället för hela
+                        // `pipeline.allPhotos` (upp till ~2100 `PhotoItem`) —
+                        // se `CullStats`/`StepCardView`s doc-kommentar.
+                        cullStats: (step == .manualReview && !pipeline.allPhotos.isEmpty)
+                            ? CullStats(accepted: pipeline.acceptedCount, rejected: pipeline.rejectedCount, unreviewed: pipeline.unreviewedCount)
+                            : nil,
                         onOpenSettings: { tab in
                             settingsInitialTab = tab
                             showSettings = true
@@ -247,9 +253,11 @@ struct DashboardView: View {
         }
 
         ToolbarItemGroup(placement: .primaryAction) {
-            StatPill(icon: "checkmark.circle.fill", count: pipeline.allPhotos.filter { $0.accepted }.count, color: .green)
-            StatPill(icon: "xmark.circle.fill", count: pipeline.allPhotos.filter { $0.rejected }.count, color: .red)
-            StatPill(icon: "questionmark.circle", count: pipeline.allPhotos.filter { !$0.accepted && !$0.rejected }.count, color: .gray)
+            // Fas 10: cachade O(1)-räknare i stället för tre `.filter{}.count`
+            // genomlöpningar av `pipeline.allPhotos` per omritning.
+            StatPill(icon: "checkmark.circle.fill", count: pipeline.acceptedCount, color: .green)
+            StatPill(icon: "xmark.circle.fill", count: pipeline.rejectedCount, color: .red)
+            StatPill(icon: "questionmark.circle", count: pipeline.unreviewedCount, color: .gray)
         }
 
         ToolbarSpacer(.fixed, placement: .primaryAction)
@@ -516,10 +524,12 @@ struct DashboardView: View {
         // Reset in-memory state. allPhotos is the single source of truth for cull
         // decisions — BracketGroup only stores photoIDs, so resetting it here is
         // enough for both BracketReviewView and PreviewCullView to see the change.
-        for i in pipeline.allPhotos.indices {
-            pipeline.allPhotos[i].accepted = false
-            pipeline.allPhotos[i].rejected = false
-        }
+        // Fas 10: går via `clearAllCullDecisions()` i stället för en manuell
+        // per-index-loop, så PipelineState's cachade räknare (acceptedCount/
+        // rejectedCount) nollställs korrekt och en väntande debounced
+        // gallringsskrivning inte kan skriva tillbaka de precis raderade
+        // besluten till disk efteråt.
+        pipeline.clearAllCullDecisions()
 
         pipeline.appendLog("All granskningsdata raderad.", type: .warning)
     }

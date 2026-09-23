@@ -1,12 +1,27 @@
 import SwiftUI
 
+/// Fas 10 (prestanda vid stora sessioner): de tre gallringsräknarna för
+/// `manualReview`-kortet, förberäknade av `PipelineState`/`DashboardView` i
+/// stället för att `StepCardView` fick hela `pipeline.allPhotos` (upp till
+/// ~2100 `PhotoItem`) och räknade om `.filter { ... }.count`/`.contains`
+/// tre-fyra gånger i `body` — vilket kördes vid VARJE omritning av
+/// dashboarden (dvs. vid varje enskilt gallringsbeslut, eftersom `allPhotos`
+/// är `@Published`).
+struct CullStats {
+    let accepted: Int
+    let rejected: Int
+    let unreviewed: Int
+    var hasUnreviewed: Bool { unreviewed > 0 }
+}
+
 struct StepCardView: View {
     let step: DashboardStep
     let status: StepStatus
     var onTap: (() -> Void)? = nil
     var onRerun: (() -> Void)? = nil
-    /// For manualReview step: pass allPhotos to show cull stats
-    var allPhotos: [PhotoItem] = []
+    /// For manualReview step: förberäknade gallringsräknare att visa, `nil` om
+    /// kortet inte ska visa någon gallringsstatistik (alla andra steg).
+    var cullStats: CullStats? = nil
     /// Fas 9: infopopoverns "Öppna inställningar"-knapp — hoppar till
     /// `SettingsView`s flik med index `tab` (se `DashboardStep.info.settingsTab`).
     var onOpenSettings: ((_ tab: Int) -> Void)? = nil
@@ -135,7 +150,7 @@ struct StepCardView: View {
         }
         // Needs attention badge (top-left) — only if unreviewed photos remain
         .overlay(alignment: .topLeading) {
-            if step == .manualReview && status.phase == .needsAttention && allPhotos.contains(where: { !$0.accepted && !$0.rejected }) {
+            if step == .manualReview && status.phase == .needsAttention && (cullStats?.hasUnreviewed ?? false) {
                 HStack(spacing: 3) {
                     Image(systemName: "hand.raised.fill")
                         .font(.system(size: 10))
@@ -152,11 +167,11 @@ struct StepCardView: View {
         }
         // Cull stats (bottom-left)
         .overlay(alignment: .bottomLeading) {
-            if step == .manualReview && !allPhotos.isEmpty {
+            if step == .manualReview, let cullStats {
                 HStack(spacing: 5) {
-                    miniStat(icon: "checkmark.circle.fill", count: allPhotos.filter { $0.accepted }.count, color: .green)
-                    miniStat(icon: "xmark.circle.fill", count: allPhotos.filter { $0.rejected }.count, color: .red)
-                    miniStat(icon: "questionmark.circle", count: allPhotos.filter { !$0.accepted && !$0.rejected }.count, color: .gray)
+                    miniStat(icon: "checkmark.circle.fill", count: cullStats.accepted, color: .green)
+                    miniStat(icon: "xmark.circle.fill", count: cullStats.rejected, color: .red)
+                    miniStat(icon: "questionmark.circle", count: cullStats.unreviewed, color: .gray)
                 }
                 .padding(6)
             }
