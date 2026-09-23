@@ -3634,3 +3634,82 @@ MainActor-garanterade).
 - Ingen ytterligare isoleringsgranskning gjordes av tredjeparts-Swift-paket
   (projektet har inga externa paketberoenden i skrivande stund, så detta är
   inte en känd lucka, bara ej tillämpligt).
+
+## Infopopover per steg
+
+Varje stegkort på dashboarden (`StepCardView.swift`) har fått en diskret
+`info.circle`-knapp i hörnet som förklarar vad steget faktiskt gör och hur
+logiken fungerar — efterfrågat eftersom flera steg (fingerprint-baserad
+hoppa-över-logik, symlänkar i stället för kopior, NEF-vs-DNG-hanteringen i
+metadataskrivningen m.m.) inte är självförklarande bara av titel/undertitel.
+
+### Var texterna bor
+
+- **`PhotoFlow/Sources/Models/DashboardStepInfo.swift`** (ny fil): en
+  `StepInfo`-struct (`summary: String`, `details: [String]`,
+  `settingsTab: Int?`) plus `extension DashboardStep { var info: StepInfo }`.
+  En egen fil, separat från `DashboardStep.swift`, just för att hålla den
+  filen kort — den här väger betydligt mer och ändras i en annan takt (i takt
+  med pipeline-logiken, inte stegens identitet/ordning).
+- Varje `summary` (en mening) och `details` (3–6 punkter) är härledda direkt
+  ur den faktiska implementationen — `PipelineRunner+DNG/Previews/Calendar/
+  AITagging/HDR/SortFolders/Metadata/Culling/Lightroom.swift`, `WatchService.
+  swift`, `AddressFolderLayout.swift` — inte påhittade. Punkterna nämner
+  konkret: vad steget läser/skriver, vilka verktyg som används (exiftool,
+  Adobe DNG Converter, Core Image RAW, Vision, EventKit, Foundation Models),
+  när det HOPPAS ÖVER (manifest-fingerprint + markörfiler, med undantag där
+  det är relevant, t.ex. att en adressrättning eller ett kalenderbyte alltid
+  tvingar en omkörning), vilka inställningar (exakt namn som i
+  `SettingsView`) som styr det, och ett typiskt fel/varning.
+- Två steg (`convertToDNG`, `generatePreviews`) har medvetet ingen
+  "Öppna inställningar"-knapp: det förra har ingen egen inställning (bara en
+  hårdkodad sökväg till konverteraren), och det senare läses av
+  `previewQuality`/`previewMaxDimension`-inställningarna INTE — de finns i
+  `SettingsView` men är i praktiken oanvända av det här steget, vilket texten
+  säger rakt ut i stället för att antyda en koppling som inte finns i koden.
+
+### UI
+
+- `StepCardView`: `info.circle`-knapp i botten-höger hörn (det enda hörnet
+  inget annat overlay redan använde — topp-höger är loggknappen,
+  topp-vänster "Väntar"-märket, botten-vänster gallringsstatistiken för
+  `manualReview`). Opacitet 0.16 normalt, 0.55 vid hover över hela kortet,
+  1.0 vid hover över själva knappen — syns men konkurrerar aldrig med
+  status/ikon. Egen träffyta (`.buttonStyle(.plain)`), verifierad att den
+  inte stjäl klick från kortets `onTap` eller "kör om"-knappen (samma mönster
+  som den redan existerande loggknappen använde sedan tidigare).
+  `.help(step.info.summary)` på hela kortet ger samma text som systemets
+  tooltip vid hover, och knappen har
+  `.accessibilityLabel("Om steget: \(titel)")` för tangentbord/VoiceOver.
+- `StepInfoPopover` (ny view, i `StepCardView.swift`): rubrik + ikon,
+  sammanfattning, punktlista, och — om `settingsTab` är satt — en
+  "Öppna inställningar"-knapp. Bredd 340pt, `.regularMaterial`-bakgrund,
+  samma stil som resten av appen sedan Fas 3g/5.
+- `SettingsView` fick en `initialTab`-init-parameter (`@State selectedTab` +
+  `TabView(selection:)`) så "Öppna inställningar" kan hoppa direkt till rätt
+  flik i stället för att bara öppna på den flik som råkade vara öppen sist.
+  `DashboardView` äger nu `settingsInitialTab` och skickar en closure
+  (`onOpenSettings`) ner till varje `StepCardView`.
+
+### Verifiering
+
+- 210 tester gröna innan arbetet påbörjades; 216 gröna efteråt
+  (`xcodebuild ... test`) — 6 nya i `DashboardStepInfoTests.swift`, som
+  kontrollerar att ALLA `DashboardStep.allCases` har en icke-tom `summary`,
+  3–6 `details`, ingen tom eller orimligt lång (>200 tecken) rad, och att ett
+  eventuellt `settingsTab` pekar på en giltig flik (0–4).
+- Byggde och startade appen (`open -n`), tog en skärmbild
+  (`screencapture -x -o`) och granskade den — dashboarden renderas som
+  förut, infoknappen syns diskret i varje korts nedre högra hörn. Avslutad
+  med `osascript -e 'quit app "PhotoFlow"'`. Pipelinen/bevakningen
+  startades aldrig och inga användarmappar rördes.
+
+### Så här håller du texterna i synk framöver
+
+Om ett stegs logik ändras (nytt hoppa-över-villkor, ny inställning, ny
+skrivplats för filer): uppdatera motsvarande `StepInfo` i
+`DashboardStepInfo.swift` i SAMMA commit som kodändringen. Testet
+(`DashboardStepInfoTests`) fångar bara strukturella regressioner (tom text,
+fel antal punkter, för långa rader) — inte om innehållet fortfarande stämmer
+med koden, det kräver en människa som läser igenom `StepInfo`-caset för det
+ändrade steget.

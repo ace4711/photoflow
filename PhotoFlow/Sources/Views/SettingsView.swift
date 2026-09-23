@@ -5,10 +5,18 @@ import EventKit
 struct SettingsView: View {
     @ObservedObject var settings = AppSettings.shared
     @Environment(\.dismiss) private var dismiss
+    // Fas 9: låter infopopovern på ett stegkort (StepCardView) hoppa direkt
+    // till rätt flik ("Öppna inställningar") i stället för att bara öppna
+    // Inställningar på den flik som råkade vara öppen sist.
+    @State private var selectedTab: Int
+
+    init(initialTab: Int = 0) {
+        _selectedTab = State(initialValue: initialTab)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            TabView {
+            TabView(selection: $selectedTab) {
                 DirectoriesTab(settings: settings)
                     .tabItem { Label("Mappar", systemImage: "folder") }
                     .tag(0)

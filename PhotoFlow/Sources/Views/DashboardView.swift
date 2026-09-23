@@ -7,6 +7,9 @@ struct DashboardView: View {
     @State private var showLog: Bool = true
     @State private var showReview: Bool = false
     @State private var showSettings: Bool = false
+    // Fas 9: vilken flik Inställningar ska öppnas på — satt av ett stegkorts
+    // infopopover ("Öppna inställningar"), 0 (Mappar) annars.
+    @State private var settingsInitialTab: Int = 0
     // Fas 6: "Historik" i verktygsfältet — se SessionHistoryView.
     @State private var showHistory: Bool = false
     @State private var nefCount: Int = 0
@@ -32,7 +35,7 @@ struct DashboardView: View {
             }
         }
         .sheet(isPresented: $showSettings) {
-            SettingsView()
+            SettingsView(initialTab: settingsInitialTab)
                 .frame(width: 700, height: 620)
         }
         .sheet(isPresented: $showHistory) {
@@ -90,7 +93,11 @@ struct DashboardView: View {
                         status: status,
                         onTap: { handleStepTap(step) },
                         onRerun: { runner.rerunStep(step) },
-                        allPhotos: step == .manualReview ? pipeline.allPhotos : []
+                        allPhotos: step == .manualReview ? pipeline.allPhotos : [],
+                        onOpenSettings: { tab in
+                            settingsInitialTab = tab
+                            showSettings = true
+                        }
                     )
                 }
             }

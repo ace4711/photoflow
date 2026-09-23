@@ -7,11 +7,25 @@ struct StepCardView: View {
     var onRerun: (() -> Void)? = nil
     /// For manualReview step: pass allPhotos to show cull stats
     var allPhotos: [PhotoItem] = []
+    /// Fas 9: infopopoverns "Öppna inställningar"-knapp — hoppar till
+    /// `SettingsView`s flik med index `tab` (se `DashboardStep.info.settingsTab`).
+    var onOpenSettings: ((_ tab: Int) -> Void)? = nil
     @State private var showDetail: Bool = false
+    @State private var showStepInfo: Bool = false
+    // Fas 9: infoknappen ska vara diskret — låg opacitet normalt, tydligare
+    // vid hover över KORTET, full opacitet vid hover över själva knappen.
+    @State private var isCardHovered: Bool = false
+    @State private var isInfoButtonHovered: Bool = false
 
     @State private var dashPhase: CGFloat = 0
     @State private var pulseScale: CGFloat = 1.0
     @State private var pulseOpacity: Double = 0.6
+
+    private var infoButtonOpacity: Double {
+        if isInfoButtonHovered { return 1.0 }
+        if isCardHovered { return 0.55 }
+        return 0.16
+    }
 
     private var phaseColor: Color {
         switch status.phase {
@@ -147,11 +161,36 @@ struct StepCardView: View {
                 .padding(6)
             }
         }
+        // Fas 9: diskret infoknapp (bottom-trailing — det enda hörnet inget
+        // annat overlay redan använder: top-trailing är logg-info, top-leading
+        // "Väntar", bottom-leading gallringsstatistik). Egen tydlig träffyta
+        // (.contentShape + .buttonStyle(.plain)) så den aldrig triggar kortets
+        // egen onTapGesture/"kör om"-knappen.
+        .overlay(alignment: .bottomTrailing) {
+            Button(action: { showStepInfo = true }) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .opacity(infoButtonOpacity)
+            .animation(.easeInOut(duration: 0.15), value: infoButtonOpacity)
+            .onHover { hovering in isInfoButtonHovered = hovering }
+            .padding(4)
+            .accessibilityLabel("Om steget: \(step.title)")
+            .popover(isPresented: $showStepInfo, arrowEdge: .bottom) {
+                StepInfoPopover(step: step, onOpenSettings: onOpenSettings)
+            }
+        }
         .opacity(status.phase == .disabled ? 0.5 : 1.0)
         .contentShape(Rectangle())
         .onTapGesture {
             onTap?()
         }
+        .onHover { hovering in isCardHovered = hovering }
+        .help(step.info.summary)
         .onAppear { startAnimations() }
         .onChange(of: status.phase) { _, _ in startAnimations() }
         .sheet(isPresented: $showDetail) {
@@ -301,6 +340,69 @@ struct StepCardView: View {
             pulseOpacity = 0.6
             dashPhase = 0
         }
+    }
+}
+
+// MARK: - Step info popover
+
+/// Fas 9: diskret förklaring av vad ett steg gör och hur logiken fungerar —
+/// innehållet kommer från `DashboardStep.info` (`DashboardStepInfo.swift`),
+/// härlett ur den faktiska pipeline-koden, inte påhittat. Stil matchar
+/// appens övriga glas/`regularMaterial`-look sedan Fas 3g/5.
+struct StepInfoPopover: View {
+    let step: DashboardStep
+    var onOpenSettings: ((_ tab: Int) -> Void)? = nil
+    @Environment(\.dismiss) private var dismiss
+
+    private var info: StepInfo { step.info }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: step.systemImage)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(.accentColor)
+                Text(step.title)
+                    .font(.system(.headline, design: .rounded, weight: .semibold))
+                Spacer()
+            }
+
+            Text(info.summary)
+                .font(.callout)
+                .foregroundColor(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(info.details.enumerated()), id: \.offset) { _, detail in
+                    HStack(alignment: .top, spacing: 6) {
+                        Text("–")
+                            .foregroundColor(.secondary)
+                        Text(detail)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            if let settingsTab = info.settingsTab, let onOpenSettings {
+                Divider()
+                Button {
+                    dismiss()
+                    onOpenSettings(settingsTab)
+                } label: {
+                    Label("Öppna inställningar", systemImage: "gearshape")
+                        .font(.caption.weight(.medium))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding(16)
+        .frame(width: 340, alignment: .leading)
+        .background(.regularMaterial)
     }
 }
 
