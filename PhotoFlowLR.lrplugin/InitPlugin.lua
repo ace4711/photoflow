@@ -34,11 +34,17 @@ end
 LrTasks.startAsyncTask(function()
     logger:trace("Bakgrundspollning startad (var " .. HDRMergeCore.pollIntervalSeconds() .. "s)")
     while true do
-        local ok, err = LrTasks.pcall(function()
-            HDRMergeCore.runOnce({ showDialogIfMissing = false, showSummaryDialog = false })
-        end)
-        if not ok then
-            logger:warn("Bakgrundspollning: fel i en omgång: " .. tostring(err))
+        -- Read fresh every iteration (both are live LrPrefs reads, see
+        -- HDRMergeCore.lua) so a change made in the Plug-in Manager
+        -- settings panel — either the interval or the on/off checkbox —
+        -- takes effect on the very next cycle, no plugin reload needed.
+        if HDRMergeCore.pollingEnabled() then
+            local ok, err = LrTasks.pcall(function()
+                HDRMergeCore.runOnce({ showDialogIfMissing = false, showSummaryDialog = false })
+            end)
+            if not ok then
+                logger:warn("Bakgrundspollning: fel i en omgång: " .. tostring(err))
+            end
         end
         LrTasks.sleep(HDRMergeCore.pollIntervalSeconds())
     end

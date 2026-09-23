@@ -38,10 +38,18 @@ local M = {}
 -- launch contexts/macOS versions can hand out different $TMPDIR values).
 -- Both sides now use this fixed, well-known location instead, removing the
 -- ambiguity entirely.
-local function bridgeDir()
+--- Pure path computation, no filesystem side effects — safe to call from a
+--- read-only context like the Plug-in Manager settings panel, where
+--- creating the folder just because someone opened the panel would make
+--- "the bridge folder doesn't exist yet" impossible to ever observe.
+local function bridgeDirPath()
     local home = LrPathUtils.getStandardFilePath("home")
     local dir = LrPathUtils.child(LrPathUtils.child(home, "Library"), "Application Support")
-    dir = LrPathUtils.child(dir, "PhotoFlow")
+    return LrPathUtils.child(dir, "PhotoFlow")
+end
+
+local function bridgeDir()
+    local dir = bridgeDirPath()
     if not LrFileUtils.exists(dir) then
         LrFileUtils.createAllDirectories(dir)
     end
@@ -55,27 +63,86 @@ function M.donePath() return LrPathUtils.child(bridgeDir(), "lr_done.json") end
 -- MARK: - Configurable wait times ---------------------------------------------
 --
 -- Backed by `LrPrefs` (persists in Lightroom's own plugin preferences) so
--- they're adjustable without editing this file — e.g. from Lightroom's
--- File > Plug-in Extras > Plug-in Manager > "PhotoFlow HDR" > "Lua console"-
--- style tooling, or a future Plug-in Manager settings panel could read/write
--- the same keys. A full custom `sectionsForTopOfDialog` settings screen
--- wasn't built in this pass — it can't be exercised without a running
--- Lightroom instance to click through, and shipping untested LrView dialog
--- code seemed riskier than these safely-defaulted, still-adjustable prefs.
+-- they're adjustable without editing this file. `PluginInfo.lua` now gives
+-- the user a real Plug-in Manager settings panel
+-- (File > Plug-in Manager > "PhotoFlow HDR") that binds directly to these
+-- same `LrPrefs` keys via `LrView`/`LrBinding`, so changes made there save
+-- immediately — no separate "apply"/OK step, and no code edit required.
+--
+-- `M.DEFAULTS` is the single source of truth for default values AND for
+-- what "invalid" means: every getter below re-reads `prefs[name]` at call
+-- time (never cached at require-time — `require` only runs once per
+-- Lightroom session, so a module-level cache would freeze whatever value
+-- was live when the plugin first loaded) and falls back to the default
+-- whenever the stored value is missing, not a number, or outside
+-- `MIN_WAIT_SECONDS`..`MAX_WAIT_SECONDS`. That fallback is what makes a
+-- zero/garbage pref safe: it can never make `processGroup` skip a wait
+-- outright, only use the same safe default it would use if the pref had
+-- never been set. `M.pollingEnabled()` follows the same live-read pattern
+-- for its boolean pref.
 local prefs = LrPrefs.prefsForPlugin()
 
-local function pref(name, default)
-    if prefs[name] == nil then
-        prefs[name] = default
+M.MIN_WAIT_SECONDS = 1
+M.MAX_WAIT_SECONDS = 60
+
+M.DEFAULTS = {
+    pollIntervalSeconds = 5,
+    selectSettleDelaySeconds = 1,
+    hdrPreviewWaitSeconds = 5,
+    postMergeSettleSeconds = 8,
+    betweenGroupsDelaySeconds = 2,
+    pollingEnabled = true,
+}
+
+-- Names of the numeric wait-time prefs, in the order they run during a
+-- merge — used both by `waitPref`'s validation and by `M.resetDefaults()`.
+local WAIT_PREF_NAMES = {
+    "pollIntervalSeconds", "selectSettleDelaySeconds", "hdrPreviewWaitSeconds",
+    "postMergeSettleSeconds", "betweenGroupsDelaySeconds",
+}
+
+local function waitPref(name)
+    local value = prefs[name]
+    if type(value) ~= "number" or value < M.MIN_WAIT_SECONDS or value > M.MAX_WAIT_SECONDS then
+        return M.DEFAULTS[name]
     end
-    return prefs[name]
+    return value
 end
 
-function M.pollIntervalSeconds() return pref("pollIntervalSeconds", 5) end
-function M.selectSettleDelaySeconds() return pref("selectSettleDelaySeconds", 1) end
-function M.hdrPreviewWaitSeconds() return pref("hdrPreviewWaitSeconds", 5) end
-function M.postMergeSettleSeconds() return pref("postMergeSettleSeconds", 8) end
-function M.betweenGroupsDelaySeconds() return pref("betweenGroupsDelaySeconds", 2) end
+function M.pollIntervalSeconds() return waitPref("pollIntervalSeconds") end
+function M.selectSettleDelaySeconds() return waitPref("selectSettleDelaySeconds") end
+function M.hdrPreviewWaitSeconds() return waitPref("hdrPreviewWaitSeconds") end
+function M.postMergeSettleSeconds() return waitPref("postMergeSettleSeconds") end
+function M.betweenGroupsDelaySeconds() return waitPref("betweenGroupsDelaySeconds") end
+
+--- Whether the background poller (`InitPlugin.lua`) should actually check
+--- for a trigger file each cycle. Defaults to on (today's behavior). A
+--- non-boolean stored value (shouldn't normally happen, but a corrupted
+--- prefs.lua or a future migration bug could produce one) falls back to
+--- the default rather than being treated as truthy/falsy by accident.
+function M.pollingEnabled()
+    local value = prefs.pollingEnabled
+    if type(value) ~= "boolean" then return M.DEFAULTS.pollingEnabled end
+    return value
+end
+
+--- Resets every setting exposed in the Plug-in Manager panel back to its
+--- default. Used by that panel's "Återställ till standard" button; also
+--- handy from Lightroom's Lua console for support/debugging.
+function M.resetDefaults()
+    for _, name in ipairs(WAIT_PREF_NAMES) do
+        prefs[name] = M.DEFAULTS[name]
+    end
+    prefs.pollingEnabled = M.DEFAULTS.pollingEnabled
+end
+
+--- Exposes the bridge directory path (shared with `PipelineRunner+Lightroom.
+--- swift`) for the settings panel's status section. Deliberately the
+--- non-creating `bridgeDirPath()`, not `bridgeDir()` — the settings panel
+--- only reads/displays this, and must be able to tell the user the folder
+--- doesn't exist yet, which `bridgeDir()`'s create-on-access behavior would
+--- make impossible to ever see.
+function M.bridgeDir() return bridgeDirPath() end
 
 -- MARK: - Minimal JSON decoder -------------------------------------------------
 --

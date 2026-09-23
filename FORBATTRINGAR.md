@@ -3950,3 +3950,167 @@ photoflow-cli run --input <mapp> --output <mapp> --no-calendar --json
   isAvailable`) nån gång kan krascha/hänga testvärden vid kallstart. Inte
   reproducerad ytterligare, ingen kodändring gjord — dokumenteras här som
   en känd, ovanlig flakiness att hålla utkik efter om den återkommer.
+
+## Lightroom-pluginets inställningar
+
+Fas 4 byggde inte den egna Plug-in Manager-inställningsdialogen för
+HDR-pluginets väntetider (dokumenterat där som "kan inte övas in utan en
+riktig Lightroom-instans"). Den här sessionen bygger den dialogen, gjord
+autonomt utan att kunna driva Lightroom Classic (installerad — bekräftad med
+`ls /Applications` — men inte startbar/klickbar här). Rörde bara
+`PhotoFlowLR.lrplugin/` — ingen `xcodegen`, inga Swift-mål.
+
+### 1. Ny fil `PluginInfo.lua`, registrerad via `LrPluginInfoProvider`
+
+Lägger till en sektion i **Arkiv → Plug-in Manager → "PhotoFlow HDR"** med:
+
+- Fyra väntetidsfält (etikett + redigeringsfält + "sekunder (1–60)"):
+  "Efter att HDR-dialogen öppnats" (`hdrPreviewWaitSeconds`), "Efter Enter
+  (medan Lightroom mergear)" (`postMergeSettleSeconds`), "Mellan grupper"
+  (`betweenGroupsDelaySeconds`), och "Efter att bilderna valts (innan
+  Ctrl+H)" (`selectSettleDelaySeconds`) — den sistnämnda fanns redan som
+  `LrPrefs`-värde i Fas 4 men saknade UI, tas med här för fullständighetens
+  skull även om uppgiftsbeskrivningen bara nämnde de tre första.
+- En kryssruta "Pollning efter trigger-fil aktiverad" (ny prefs-nyckel
+  `pollingEnabled`, standard PÅ = dagens beteende) och ett pollintervall-fält
+  (`pollIntervalSeconds`), avaktiverat när kryssrutan är av.
+- En "Återställ till standard"-knapp (`LrDialogs.confirm` följt av
+  `HDRMergeCore.resetDefaults()`).
+- En andra sektion "Senaste körning" som läser bryggmappens `lr_done.json`
+  och visar t.ex. "Senaste körning: 8 grupp(er), 7 lyckades, 1
+  misslyckades. Bryggmapp: ~/Library/Application Support/PhotoFlow", eller
+  ett tydligt "Bryggmappen finns inte än: <sökväg>" om mappen saknas
+  (uppgiften nämnde filnamnet `photoflow_hdr_status.json` — den faktiska
+  bryggfilen från Fas 4 heter `lr_done.json`/`lr_status.json`, det är den
+  som faktiskt skrivs och som används här).
+
+Alla kontroller binder direkt mot `LrPrefs.prefsForPlugin()` via
+`bind_to_object = prefs` (inte en separat dialog-lokal `propertyTable` som
+bara skrivs tillbaka i `endDialog`) — enligt Lightroom SDK:t är
+`LrPrefs`-tabeller själva bindbara, så en ändring i dialogen sparas i den
+riktiga preferensen omedelbart, ingen OK/Apply-knapp.
+
+### 2. `HDRMergeCore.lua`: robust läsning + delade defaultvärden
+
+- Ny `M.DEFAULTS`-tabell (samma standardvärden som Fas 4 hade hårdkodade:
+  `hdrPreviewWaitSeconds=5`, `postMergeSettleSeconds=8`,
+  `betweenGroupsDelaySeconds=2`, `selectSettleDelaySeconds=1`,
+  `pollIntervalSeconds=5`, `pollingEnabled=true`) — enda källan till
+  standardvärden, använd av både getters och `M.resetDefaults()`.
+- `M.MIN_WAIT_SECONDS=1`/`M.MAX_WAIT_SECONDS=60`. Den gamla `pref()`-
+  funktionen (satte bara default om värdet var `nil`) ersatt av `waitPref()`
+  som vid VARJE anrop (aldrig cachat vid `require`-tillfället) läser
+  `prefs[name]` direkt och faller tillbaka till standardvärdet om värdet
+  saknas, inte är ett tal, eller ligger utanför 1–60 — täcker robusthetskravet
+  (punkt 4): en nolla, ett negativt tal, en trasig sträng eller ett för högt
+  värde i prefs kan aldrig få `processGroup` att skicka Enter för tidigt,
+  bara falla tillbaka till samma säkra default som om prefset aldrig satts.
+- `M.pollingEnabled()` samma mönster för den booleska pollningsprefen
+  (icke-boolskt värde → default `true`).
+- `M.bridgeDir()` bytt till en ren, sidoeffektfri path-beräkning
+  (`bridgeDirPath()`) i stället för den befintliga `bridgeDir()` som skapar
+  mappen om den saknas — annars hade bara det att öppna
+  inställningspanelen tyst skapat bryggmappen, vilket gjort "mappen saknas"
+  omöjligt att någonsin visa i statussektionen. `M.triggerPath`/`statusPath`/
+  `donePath` fortsätter använda den skapande varianten internt (oförändrat
+  beteende för själva sammanslagningslogiken).
+- `InitPlugin.lua`s bakgrundsloop kollar nu `HDRMergeCore.pollingEnabled()`
+  varje varv (live-läst, precis som väntetiderna) innan den anropar
+  `runOnce` — ändras kryssrutan i Plug-in Manager slår det igenom inom en
+  pollcykel, ingen omstart av pluginet krävs.
+
+### 3. Verifiering (ingen riktig Lightroom-instans tillgänglig)
+
+- **Syntax**: `lua -e "assert(loadfile(...))"` (Homebrew Lua 5.5, samma
+  verktyg Fas 4 använde) på samtliga fem `.lua`-filer i pluginet — alla OK.
+  Koden använder bara Lua 5.1-kompatibel syntax (inga `goto`, ingen
+  heltalsdivision `//`, inga bitvisa operatorer) så 5.5-tolken duger som
+  syntaxkontroll även om den inte är exakt samma version som Lightrooms
+  inbäddade 5.1-runtime.
+- **Prefs-logik**: mockade `LrPrefs`/`LrFileUtils`/`LrPathUtils`/`LrTasks`/
+  `LrDialogs`/`LrView` (inte incheckade, bara scratchpad-skript, samma
+  ansats som Fas 4) körda mot den riktiga `HDRMergeCore.lua`/`PluginInfo.lua`:
+  standardvärden, live-läsning (ändrat prefs-värde syns direkt, inget
+  `require`-cache), fallback för 0/negativt/för högt/icke-tal/`nil`,
+  gränsvärdena 1 och 60 accepteras exakt, `pollingEnabled` fallback för
+  icke-boolskt värde, `resetDefaults()` återställer alla sex nycklar, och
+  att `bridgeDir()` (visningsvarianten) INTE skapar mappen som sidoeffekt.
+  25 assertions, alla gröna.
+- **`PluginInfo.sectionsForTopOfDialog`**: byggd mot en minimal `LrView`-mock
+  (view-factory som taggar varje widget-anrop med sin typ) — kör igenom
+  utan fel, ger exakt två sektioner med rätt titlar, statustexten visar
+  korrekt "mappen saknas"-läge OCH (med en riktig `lr_done.json`-fil på
+  disk i mock-bryggmappen) korrekt "8 grupp(er), 7 lyckades, 1
+  misslyckades"-läge, och Återställ-knappens `action`-funktion kör utan
+  fel när bekräftelsedialogen avböjs.
+- **`Info.lua`**: `LrPluginInfoProvider`-nyckeln verifierad mot Lightroom
+  Classics EGEN inbäddade SDK — `LightroomSDK.framework/Versions/A/
+  Resources/AgPluginManager.lua` (kompilerad Lua 5.1-bytekod, bekräftar
+  också att Lua 5.1 är rätt målversion) innehåller de bokstavliga strängarna
+  `LrPluginInfoProvider`, `sectionsForTopOfDialog`, `sectionsForBottomOfDialog`,
+  `startDialog`, `endDialog` och `propTableForPluginInfoProvider` — hittat
+  med `strings AgPluginManager.lua`. Samma sökning i
+  `PluginManagerStatusSection.lua`/`PluginManagerDiagnosticsSection.lua`
+  (Lightrooms EGNA plug-in-manager-paneler, byggda med samma `LrView`-API)
+  bekräftade också `bind`, `bind_to_object`, `static_text`, `checkbox`,
+  `push_button`, `group_box`, `spacer`, `column`, `title`, `width`, `value`,
+  `precision`, `enabled` som riktiga, använda nycklar.
+- **Inte verifierat** (ingen körande Lightroom): om `min`/`max` är giltiga
+  nycklar på `edit_field` specifikt kunde INTE bekräftas i de tillgängliga
+  bytekod-filerna (bara `slider`-relaterad kod hittades inte heller, så
+  ingen träff där) — `PluginInfo.lua` undviker därför `min`/`max` på
+  `edit_field` och clampar enbart via den bekräftade `validate`-mekanismen
+  (samma effekt, mindre risk). Den faktiska visuella renderingen,
+  fälttabbning, om `validate`s felmeddelande visas som förväntat, om
+  `bind_to_object`-bindningen verkligen uppdaterar UI:t direkt efter
+  `HDRMergeCore.resetDefaults()` (satt programmatiskt, inte via
+  användarens egen redigering av ett fält) och om `LrDialogs.confirm`s
+  knapptexter/returvärden ("ok"/"cancel") stämmer exakt — allt detta kräver
+  en riktig Lightroom-instans och täcks av "Manuell testning" nedan.
+
+### Manuell testning användaren bör göra
+
+1. **Öppna dialogen**: Lightroom Classic → Arkiv → Plug-in Manager (eller
+   Redigera-menyn beroende på macOS-version) → välj "PhotoFlow HDR" i
+   listan till vänster → bekräfta att båda nya sektionerna ("väntetider för
+   HDR-sammanslagning" och "senaste körning") visas utan Lua-fel i
+   `lrc_console.log`.
+2. **Ändra ett väntetidsfält** (t.ex. sätt "Efter att HDR-dialogen
+   öppnats" till 15), stäng Plug-in Manager UTAN att trycka någon
+   "spara"-knapp (det finns ingen), öppna dialogen igen och kontrollera att
+   15 fortfarande visas — bekräftar att `bind_to_object`-bindningen
+   verkligen skriver till `LrPrefs` direkt.
+3. **Testa validering**: skriv ett negativt tal eller text i ett
+   väntetidsfält och lämna fältet — bekräfta att `validate` klampar/avvisar
+   rimligt i UI:t. Sätt sedan (via Lua-konsolen om det behövs) ett prefs-
+   värde till 0 direkt och kör en riktig HDR-sammanslagning — bekräfta att
+   `HDRMergeCore.lua` ändå använder standardvärdet 5 s (loggas i
+   `lrc_console.log` via `logger:trace`) i stället för att skicka Enter
+   omedelbart.
+4. **Pollnings-kryssrutan**: avmarkera "Pollning efter trigger-fil
+   aktiverad", lägg en trigger-fil manuellt (eller kör pipeline med
+   HDR-grupper), och bekräfta att INGET händer automatiskt förrän
+   kryssrutan markeras igen eller menyalternativet körs manuellt.
+5. **Återställ-knappen**: ändra flera värden, tryck "Återställ till
+   standard", bekräfta i dialogen, och kontrollera BÅDE att fälten i UI:t
+   uppdateras direkt till standardvärdena (5/8/2/1/5/på) UTAN att man
+   behöver stänga och öppna panelen igen, och att `LrPrefs` faktiskt har de
+   nya värdena (t.ex. via Lua-konsolen).
+6. **Statussektionen**: kör en riktig HDR-sammanslagning så `lr_done.json`
+   skapas, öppna sedan Plug-in Manager och bekräfta att texten matchar
+   filens innehåll (rätt antal grupper/lyckade), samt att sektionen visar
+   "mappen saknas"-texten på en maskin där bryggmappen aldrig skapats.
+
+### Kvarstående / inte gjort
+
+- `min`/`max`-egenskaper på `edit_field` användes inte (se
+  verifieringsavsnittet) — clamping sker bara via `validate` i UI:t plus
+  `HDRMergeCore.waitPref()` vid körning. Funktionellt likvärdigt, men om
+  Lightroom SDK:t visar sig stödja `min`/`max` på `edit_field` också hade
+  det gett en snyggare inline-begränsning (t.ex. gråad "spinner") i stället
+  för att vänta på att fältet tappar fokus.
+- Ingen egen inställning för antalet ångra-poster eller andra icke-HDR-
+  relaterade prefs — utanför uppgiftens omfång.
+- Testade inte `LrDialogs.confirm`s exakta knapptext-till-returvärde-mappning
+  mot en riktig Lightroom-instans (antar `"ok"`/`"cancel"` baserat på
+  etablerad SDK-kunskap, inte hittat i de tillgängliga bytekod-filerna).
