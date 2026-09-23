@@ -1,10 +1,40 @@
 import Foundation
 import Combine
 import CoreLocation
+import AppKit
 import os
 
 @MainActor
 class PipelineState: ObservableObject {
+    /// Fas 10 (prestanda vid stora sessioner): bevakar `NSApplication.willTerminateNotification`
+    /// så en väntande debounced gallringsskrivning (se `saveCullDecisions()`) ALDRIG
+    /// går förlorad bara för att appen stängs innan 1-sekunderstimern hinner löpa
+    /// ut — se `flushCullDecisions()`. Registrerad med `queue: .main` och en
+    /// icke-isolerad ytterklosur som hoppar till MainActor inuti, samma mönster
+    /// som agent-rules.md beskriver för C-/ObjC-callbacks under
+    /// `SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor` (annars riskerar man en krasch
+    /// om AppKit någon gång levererar notisen på en bakgrundskö).
+    ///
+    /// Ingen `deinit`/explicit `removeObserver` — `PipelineState` är ett
+    /// `@StateObject` som lever hela appens livstid (skapas en gång av
+    /// `PhotoFlowApp`), och `[weak self]` gör closuren ofarlig om den ändå
+    /// skulle överleva (den blir bara en no-op). Att ta bort observatören i en
+    /// `deinit` hade dessutom krävt att komma åt en icke-`Sendable`
+    /// `NSObjectProtocol` från `deinit`s icke-isolerade kontext.
+    private func observeAppTermination() {
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.flushCullDecisions()
+            }
+        }
+    }
+
+    init() {
+        observeAppTermination()
+    }
+
     @Published var currentStep: PipelineStep = .idle
     @Published var progress: Double = 0.0
     @Published var currentFileIndex: Int = 0
@@ -50,7 +80,28 @@ class PipelineState: ObservableObject {
 
     @Published var bracketGroups: [BracketGroup] = []
     @Published var allPhotos: [PhotoItem] = [] {
-        didSet { rebuildPhotoIndex() }
+        // Fas 10 (prestanda vid stora sessioner, se FORBATTRINGAR.md): tidigare
+        // byggdes `photoIndexByID` om (O(n)) på VARJE mutation av `allPhotos`,
+        // inklusive ett enda `setDecision`-anrop (som dessutom skrev TVÅ separata
+        // fält => två ombyggnader). Över en hel 2000-bilders gallringssession
+        // (ett `setDecision`-anrop per accept/avvisa) blev det en O(n²)-kostnad
+        // — uppmätt till ~2.5s för 2000 sekventiella beslut, se
+        // scratchpad-mätningen i FORBATTRINGAR.md.
+        //
+        // Ombyggnaden behövs bara när `allPhotos` STRUKTURELLT ändras (bulk-
+        // laddning av en session, `reset()`, `clearAllCullDecisions()`) — inte
+        // när ett enskilt fälts värde (accepted/rejected/algorithmSuggested)
+        // ändras på en redan existerande bild. `oldValue.count != allPhotos.count`
+        // är en billig (O(1)) proxy för "strukturellt ändrad": verifierat (grep)
+        // att ingen kod någonstans omordnar `allPhotos` på plats med OFÖRÄNDRAT
+        // antal — om det någonsin blir sant måste den koden anropa
+        // `rebuildPhotoIndexAndCounts()` explicit, annars blir `photoIndexByID`/
+        // de cachade räknarna nedan felaktiga (tyst, utan krasch).
+        didSet {
+            if oldValue.count != allPhotos.count {
+                rebuildPhotoIndexAndCounts()
+            }
+        }
     }
 
     /// O(1) lookup from `PhotoItem.id` to its index in `allPhotos`, kept in sync
@@ -59,8 +110,27 @@ class PipelineState: ObservableObject {
     /// this index by `photos(in:)`.
     private var photoIndexByID: [String: Int] = [:]
 
-    private func rebuildPhotoIndex() {
+    /// Cachade O(1)-räknare för gallringsläget — ersätter de tre
+    /// `allPhotos.filter { $0.accepted }.count`-genomlöpningarna som tidigare
+    /// kördes VARJE gång `PreviewCullView`/`BracketReviewView`/`StepCardView`/
+    /// `DashboardView` ritades om (dvs. vid varje beslut, eftersom `allPhotos`
+    /// är `@Published`). Hålls i synk inkrementellt av `setDecision`
+    /// (O(1) per anrop) och fullständigt av `rebuildPhotoIndexAndCounts()` vid
+    /// strukturella ändringar. Antar (liksom all tidigare kod) att en bild
+    /// aldrig är både `accepted` och `rejected` samtidigt — det är precis vad
+    /// `setDecision` garanterar, se dess implementation.
+    @Published private(set) var acceptedCount: Int = 0
+    @Published private(set) var rejectedCount: Int = 0
+    // `max(0, ...)` som ett rent defensivt skydd (matchar hur `syncManifest`
+    // redan klampade sin gamla `.filter`-baserade uträkning) — kan aldrig bli
+    // negativt om invarianten ovan hålls, vilket `PipelineStateCullDecisionsTests`
+    // verifierar efter varje typ av mutation.
+    var unreviewedCount: Int { max(0, allPhotos.count - acceptedCount - rejectedCount) }
+
+    private func rebuildPhotoIndexAndCounts() {
         photoIndexByID = Dictionary(uniqueKeysWithValues: allPhotos.enumerated().map { ($1.id, $0) })
+        acceptedCount = allPhotos.reduce(0) { $0 + ($1.accepted ? 1 : 0) }
+        rejectedCount = allPhotos.reduce(0) { $0 + ($1.rejected ? 1 : 0) }
     }
 
     /// Resolves a group's photos from `allPhotos`, in the group's original order.
@@ -72,15 +142,49 @@ class PipelineState: ObservableObject {
     /// Sets a photo's accept/reject decision by ID. Since `allPhotos` is the only
     /// place decisions are stored, this is the one function both BracketReviewView
     /// and PreviewCullView should call to change a decision.
+    ///
+    /// Fas 10: writes BOTH fields in a single array assignment (one `didSet`
+    /// firing instead of two) and updates `acceptedCount`/`rejectedCount`
+    /// incrementally instead of relying on the (now count-guarded) full
+    /// recompute — see `allPhotos`'s `didSet` doc comment.
     func setDecision(photoID: String, accepted: Bool, rejected: Bool) {
         guard let idx = photoIndexByID[photoID] else { return }
-        allPhotos[idx].accepted = accepted
-        allPhotos[idx].rejected = rejected
+        let old = allPhotos[idx]
+        guard old.accepted != accepted || old.rejected != rejected else { return }
+        var photo = old
+        photo.accepted = accepted
+        photo.rejected = rejected
+        allPhotos[idx] = photo
+        if old.accepted != accepted { acceptedCount += accepted ? 1 : -1 }
+        if old.rejected != rejected { rejectedCount += rejected ? 1 : -1 }
     }
 
     func setAlgorithmSuggested(photoID: String, suggested: Bool) {
         guard let idx = photoIndexByID[photoID] else { return }
         allPhotos[idx].algorithmSuggested = suggested
+    }
+
+    /// Clears every photo's accept/reject decision in ONE array assignment
+    /// (`DashboardView`'s "Radera all granskningsdata" — tidigare en `for`-loop
+    /// som mutera `allPhotos[i]` styck för styck, vilket med den gamla ovillkorade
+    /// `didSet`-ombyggnaden hade varit O(n²); med dagens count-baserade guard är
+    /// loopen i sig inte längre farlig, men en enda tilldelning är ändå
+    /// tydligare och billigare — se `flushCullDecisions()`'s doc för varför en
+    /// väntande debounced skrivning också avbryts här) och nollställer de
+    /// cachade räknarna direkt i stället för att förlita sig på
+    /// count-oförändrad-guarden (som INTE hade triggat en ombyggnad här).
+    func clearAllCullDecisions() {
+        pendingCullSaveTask?.cancel()
+        pendingCullSaveTask = nil
+        guard !allPhotos.isEmpty else { return }
+        allPhotos = allPhotos.map { photo in
+            var p = photo
+            p.accepted = false
+            p.rejected = false
+            return p
+        }
+        acceptedCount = 0
+        rejectedCount = 0
     }
 
     func selectedCount(in group: BracketGroup) -> Int {
@@ -198,6 +302,12 @@ class PipelineState: ObservableObject {
     }
 
     func reset() {
+        // Fas 10: en väntande debounced gallringsskrivning (se
+        // `saveCullDecisions()`) får ALDRIG hinna bli irrelevant bara för att
+        // pipelinen laddar om en ny/annan session — flusha den gamla sessionens
+        // beslut (med det ÄNNU giltiga `outputDirectory`/`allPhotos` nedanför)
+        // innan de nollställs.
+        flushCullDecisions()
         currentStep = .idle
         progress = 0.0
         currentFileIndex = 0
@@ -379,11 +489,14 @@ class PipelineState: ObservableObject {
                 manuallyCorrected: correctedCoordinates[match.address] != nil
             )
         }
-        let accepted = allPhotos.filter(\.accepted).count
-        let rejected = allPhotos.filter(\.rejected).count
+        // Fas 10: läser de cachade räknarna i stället för två `allPhotos.filter`-
+        // genomlöpningar — `syncManifest()` anropas synkront från VARJE
+        // `updateStep`/`updateStepProgress`/`completeStep`/`saveCullDecisions`,
+        // så det här var ytterligare en O(n)-kostnad per tangenttryck under
+        // gallring innan cachningen fanns.
         manifest.cullSummary = SessionManifest.CullSummary(
-            accepted: accepted, rejected: rejected,
-            unreviewed: max(0, allPhotos.count - accepted - rejected)
+            accepted: acceptedCount, rejected: rejectedCount,
+            unreviewed: unreviewedCount
         )
         manifest.inputDirectory = (inputDirectory ?? outputDir).path
         manifest.outputDirectory = outputDir.path
@@ -415,27 +528,110 @@ class PipelineState: ObservableObject {
         appendLog("[\(step.title)] \(text)", type: type)
     }
 
-    // MARK: - Persist cull decisions
+    // MARK: - Persist cull decisions (Fas 10: debounced, se FORBATTRINGAR.md)
 
+    /// Väntande debounced skrivning schemalagd av `saveCullDecisions()` —
+    /// avbryts av varje ny `saveCullDecisions()`-anrop (debounce) och av
+    /// `flushCullDecisions()`/`clearAllCullDecisions()`/`reset()`.
+    private var pendingCullSaveTask: Task<Void, Never>?
+
+    /// 1s — kort nog att kännas "sparat direkt" om man pausar, lång nog att
+    /// slå ihop en snabb serie tangenttryck (accept/avvisa/ångra/förslag) till
+    /// en enda diskskrivning.
+    nonisolated private static let cullSaveDebounceNanoseconds: UInt64 = 1_000_000_000
+
+    /// Schemalägger en debounced skrivning av gallringsbesluten till disk.
+    /// Anropas idag från VARJE accept/avvisa/ångra/"Föreslå gallring"
+    /// (PreviewCullView/BracketReviewView) — innan Fas 10 serialiserade det
+    /// hela beslutsordboken till JSON SYNKRONT på huvudtråden vid varje sådant
+    /// anrop (mätt: se FORBATTRINGAR.md "Prestanda vid stora sessioner").
+    ///
+    /// GARANTIN att inget beslut går förlorat kommer INTE från att den här
+    /// timern hinner löpa ut — den kommer från att `flushCullDecisions()`
+    /// anropas synkront överallt ett beslut MÅSTE finnas på disk innan nästa
+    /// steg tar vid: `PreviewCullView.performFinishCulling()` (innan
+    /// `finishCullingAction()` kör), `.onDisappear` i `PreviewCullView`/
+    /// `BracketReviewView` (vyn stängs), `reset()` (pipelinen laddar om en ny
+    /// session), och `NSApplication.willTerminateNotification` (appen
+    /// avslutas) — se `terminationObserver` i `init()`.
+    ///
+    /// Läser INTE `allPhotos` här (bara vid den faktiska skrivningen, se
+    /// `writeCullDecisionsInBackground()`) — annars skulle det tidigare
+    /// per-tangenttryck-jobbet (dictionary-bygget) fortfarande köras vid varje
+    /// anrop, bara den faktiska diskskrivningen sköts upp. Genom att skjuta
+    /// upp ALLT till when timern faktiskt löper ut (om ingen nyare
+    /// `saveCullDecisions()`/flush hunnit avbryta den) läses alltid det
+    /// SENASTE beslutet, utan risk för en inaktuell ögonblicksbild.
     func saveCullDecisions() {
-        guard let outputDir = outputDirectory else { return }
-        let file = outputDir.appendingPathComponent("cull_decisions.json")
-        var decisions: [String: String] = [:]
+        pendingCullSaveTask?.cancel()
+        pendingCullSaveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.cullSaveDebounceNanoseconds)
+            guard !Task.isCancelled else { return }
+            await self?.writeCullDecisionsInBackground()
+        }
+        // Manifestets gallringssammanfattning läser nu de cachade räknarna
+        // (O(1), se syncManifest()) så det är billigt nog att hållas synkront
+        // och behöver inte vänta på den debouncade diskskrivningen ovan.
+        syncManifest()
+    }
 
+    /// Läser `allPhotos` (MainActor, O(1) COW-kopiering av arrayreferensen —
+    /// inget per-bild-arbete sker här) och gör själva O(n)-arbetet (bygga
+    /// beslutsordboken + JSON-serialisera + skriva till disk) på en fristående
+    /// bakgrundstask, så varken debounce-timerns avfyrning eller huvudtråden
+    /// blockeras av en stor sessions gallringsbeslut.
+    private func writeCullDecisionsInBackground() async {
+        guard let outputDir = outputDirectory else { return }
+        let photos = allPhotos
+        await Task.detached(priority: .utility) {
+            let decisions = Self.buildCullDecisionsDict(photos)
+            Self.writeCullDecisionsDict(decisions, to: outputDir)
+        }.value
+    }
+
+    /// Skriver gallringsbesluten till disk OMEDELBART, synkront på anropande
+    /// tråd, och avbryter en eventuell väntande debounced skrivning från
+    /// `saveCullDecisions()`. Medvetet INTE bakgrundad (till skillnad från
+    /// `saveCullDecisions()`) — den här anropas bara vid sällsynta
+    /// "garanti"-tillfällen (se `saveCullDecisions()`s doc-kommentar), och att
+    /// invänta en bakgrundstask precis när appen avslutas riskerar att
+    /// processen hinner dö innan skrivningen är klar. Att blockera
+    /// huvudtråden i de här enstaka fallen (inte per tangenttryck) för en
+    /// JSON-skrivning av ett par tusen poster är i praktiken omärkbart.
+    func flushCullDecisions() {
+        pendingCullSaveTask?.cancel()
+        pendingCullSaveTask = nil
+        guard let outputDir = outputDirectory else { return }
+        let decisions = Self.buildCullDecisionsDict(allPhotos)
+        Self.writeCullDecisionsDict(decisions, to: outputDir)
+    }
+
+    // `nonisolated static` — måste INTE hoppa till MainActor eftersom de bara
+    // rör lokala (Sendable) parametrar, vilket gör dem säkra att anropa från
+    // `Task.detached` i `writeCullDecisionsInBackground()` ovan. Utan
+    // `nonisolated` hade de (som alla members av en `@MainActor`-klass, se
+    // agent-rules.md Swift 6-fällan) implicit blivit MainActor-isolerade och
+    // tvingat en onödig MainActor-hopp mitt i bakgrundsarbetet.
+    nonisolated private static func buildCullDecisionsDict(_ photos: [PhotoItem]) -> [String: String] {
+        var decisions: [String: String] = [:]
+        decisions.reserveCapacity(photos.count)
         // allPhotos is the single source of truth for cull decisions — BracketGroup
         // only stores photoIDs, so there's no second copy to reconcile here anymore.
-        for photo in allPhotos {
+        for photo in photos {
             if photo.accepted {
                 decisions[photo.id] = "accepted"
             } else if photo.rejected {
                 decisions[photo.id] = "rejected"
             }
         }
+        return decisions
+    }
 
+    nonisolated private static func writeCullDecisionsDict(_ decisions: [String: String], to outputDir: URL) {
+        let file = outputDir.appendingPathComponent("cull_decisions.json")
         if let data = try? JSONSerialization.data(withJSONObject: decisions, options: .prettyPrinted) {
             try? data.write(to: file)
         }
-        syncManifest()
     }
 
     func loadCullDecisions() -> [String: String] {
