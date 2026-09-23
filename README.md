@@ -53,6 +53,18 @@ photoflow-cli run --input <mapp med NEF> --output <mapp> [--no-hdr] [--no-calend
 efteråt att källfilerna är orörda, att symlänkar pekar rätt och att HDR-filerna
 är 16-bitars.
 
+### Verifiera en session
+
+```bash
+photoflow-cli verify --output <mapp> [--json] [--repair-links [--dry-run]]
+```
+
+Kontrollerar att en färdig session är hel: brutna symlänkar, bilder som saknar
+preview eller DNG, HDR-filer som blivit kvar i `hdr/`, metadata på plats,
+gallringsbesluten mot vad som ligger på disk, och manifestet mot verkligt
+filantal. Varje fynd säger vad man gör åt det. Samma kontroll finns i appen via
+"Verifiera" i historikvyn, där också knappen "Reparera länkar" finns.
+
 ## Vad som hamnar var
 
 För varje matchad adress skapas tre mappar i outputkatalogen:
@@ -66,6 +78,11 @@ Lindvägen 12, Tyresö ÖVRIGA/       original-NEF (symlänkar) + XMP-sidecars +
 Bilder utan kalendermatchning hamnar under `Osorterade`. Arbetsfilerna ligger kvar
 i `dng/`, `previews/`, `hdr/` och `bracket_groups/` — adressmapparna innehåller
 symlänkar dit, så inget dupliceras.
+
+Länkar inom sessionen skrivs **relativt**, så hela sessionsmappen går att flytta
+och arkivera utan att länkarna bryts. Länkar till original-NEF i inputmappen är
+absoluta, eftersom den ligger utanför sessionen. Äldre sessioner med absoluta
+länkar lagas med "Reparera länkar" i verifieringen.
 
 **Original-NEF ändras aldrig.** Metadata skrivs in i DNG och JPEG, medan NEF får en
 `.xmp`-sidecar bredvid sig.
