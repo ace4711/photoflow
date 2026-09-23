@@ -148,7 +148,7 @@ class CalendarService {
 
     /// Extract address from a calendar event title.
     /// Expected formats:
-    ///   "Lindvägen 12, Tyresö, villa ca 169 kvm. Erik:0701234567"
+    ///   "Lindvägen 12, Tyresö, villa ca 169 kvm. Erik: 0701234567"
     ///   "Almstigen 9 136 40 Handen Anna Ek 070-123 45 67"
     ///   "Kastanjevägen 60 bv, Fjälling 070-765 43 21"
     /// Returns: "Street Number, City" — everything after city is truncated.
@@ -188,7 +188,7 @@ class CalendarService {
         return address
     }
 
-    /// Extract just the city name (first word) from a string like "Älta  Klara Nord" or "Fjälling 070-765"
+    /// Extract just the city name (first word) from a string like "Tyresö  Klara Nord" or "Fjälling 070-765"
     private static func extractCityName(from text: String) -> String {
         let words = text.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
         guard let first = words.first else { return text }
@@ -377,8 +377,8 @@ class CalendarService {
     }
 
     /// Extract the "extra info" from a booking title (everything after the address).
-    /// E.g. "Lindvägen 12, Tyresö, villa ca 169 kvm. Erik:0701234567"
-    /// → "villa ca 169 kvm. Erik:0701234567"
+    /// E.g. "Lindvägen 12, Tyresö, villa ca 169 kvm. Erik: 0701234567"
+    /// → "villa ca 169 kvm. Erik: 0701234567"
     static func extractBookingInfo(from title: String) -> String? {
         guard !title.isEmpty else { return nil }
 

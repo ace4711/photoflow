@@ -47,7 +47,7 @@ struct BookingTitleParserTests {
 
     @Test("addressString formaterar 'Gata Nummer, Ort' — samma form som gamla extractAddress")
     func addressString_matchesOldFormat() {
-        let info = BookingTitleParser.heuristicParse(title: "Lindvägen 12, Tyresö, villa ca 169 kvm. Erik:0701234567")
+        let info = BookingTitleParser.heuristicParse(title: "Lindvägen 12, Tyresö, villa ca 169 kvm. Erik: 0701234567")
         #expect(BookingTitleParser.addressString(from: info) == "Lindvägen 12, Tyresö")
     }
 
@@ -60,7 +60,7 @@ struct BookingTitleParserTests {
     @Test("bookingInfoText formaterar typ, area och kontakt i samma stil som gamla extractBookingInfo")
     func bookingInfoText_formatsAllFields() {
         let info = BookingInfo(street: "X", city: "Y", propertyType: "Villa", areaSquareMeters: 169, contactName: "Erik", contactPhone: "0701234567")
-        #expect(BookingTitleParser.bookingInfoText(from: info) == "Villa ca 169 kvm. Erik:0701234567")
+        #expect(BookingTitleParser.bookingInfoText(from: info) == "Villa ca 169 kvm. Erik: 0701234567")
     }
 
     @Test("Tom titel ger tom BookingInfo, inte en krasch")

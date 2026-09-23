@@ -10,7 +10,7 @@ struct CalendarServiceTests {
 
     @Test("Adress med kommaseparerad stad och extra info")
     func extractAddress_commaSeparatedCityAndInfo() {
-        let title = "Lindvägen 12, Tyresö, villa ca 169 kvm. Erik:0701234567"
+        let title = "Lindvägen 12, Tyresö, villa ca 169 kvm. Erik: 0701234567"
         #expect(CalendarService.extractAddress(from: title) == "Lindvägen 12, Tyresö")
     }
 
@@ -35,8 +35,8 @@ struct CalendarServiceTests {
 
     @Test("Bokningsinfo efter adress och stad extraheras")
     func extractBookingInfo_afterCity() {
-        let title = "Lindvägen 12, Tyresö, villa ca 169 kvm. Erik:0701234567"
-        #expect(CalendarService.extractBookingInfo(from: title) == "villa ca 169 kvm. Erik:0701234567")
+        let title = "Lindvägen 12, Tyresö, villa ca 169 kvm. Erik: 0701234567"
+        #expect(CalendarService.extractBookingInfo(from: title) == "villa ca 169 kvm. Erik: 0701234567")
     }
 
     @Test("Ingen bokningsinfo utan komma i titeln")

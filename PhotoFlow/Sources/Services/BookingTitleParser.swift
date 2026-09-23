@@ -8,7 +8,7 @@ import FoundationModels
 /// alltid finns kvar som fallback och vars kod inte ändrats av detta.
 ///
 /// Exempel på riktiga titlar (`CalendarService`s doc-kommentarer, Fas 0):
-///   "Lindvägen 12, Tyresö, villa ca 169 kvm. Erik:0701234567"
+///   "Lindvägen 12, Tyresö, villa ca 169 kvm. Erik: 0701234567"
 ///   "Almstigen 9 136 40 Handen Anna Ek 070-123 45 67"
 ///   "Kastanjevägen 60 bv, Fjälling 070-765 43 21"
 /// Se `BookingTitleParserTests` för fler syntetiska varianter (postnummer,
@@ -98,7 +98,7 @@ actor BookingTitleParser {
     }
 
     /// Kort "extra info"-rad för IPTC-beskrivningen, i samma stil som den
-    /// gamla `extractBookingInfo`-heuristiken ("villa ca 169 kvm. Erik:...").
+    /// gamla `extractBookingInfo`-heuristiken ("villa ca 169 kvm. Erik: ...").
     nonisolated static func bookingInfoText(from info: BookingInfo) -> String? {
         var parts: [String] = []
 
