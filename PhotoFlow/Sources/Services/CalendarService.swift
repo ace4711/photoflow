@@ -9,16 +9,76 @@ class CalendarService {
 
     private let store = EKEventStore()
     private var accessGranted = false
-    private var targetCalendar: EKCalendar?
 
     private init() {}
 
-    /// Resolve the named calendar. Call after access is granted.
+    /// Ren, testbar matchningslogik bakom `resolveCalendar()`: för varje valt
+    /// namn (i tur och ordning), hitta bästa träff bland de tillgängliga
+    /// kalendertitlarna — exakt → skiftlägesokänslig → partiell, precis som
+    /// den gamla enkalender-varianten. Bruten ut hit (i stället för att bo
+    /// inuti `resolveCalendar`, som pratar med EventKit/loggar) så den går
+    /// att testa headless utan `EKEventStore`.
+    ///
+    /// - `matched`: de matchande kalendertitlarna, utan dubbletter (om två
+    ///   valda namn råkar matcha samma kalender räknas den bara en gång),
+    ///   i den ordning de först matchades.
+    /// - `notFound`: de valda namn (trimmade) som inte gav någon träff alls.
+    static func matchCalendarNames(selected: [String], available: [String]) -> (matched: [String], notFound: [String]) {
+        var matched: [String] = []
+        var seen = Set<String>()
+        var notFound: [String] = []
+
+        for rawName in selected {
+            let name = rawName.trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else { continue }
+
+            let hit: String?
+            if let exact = available.first(where: { $0 == name }) {
+                hit = exact
+            } else if let caseInsensitive = available.first(where: { $0.localizedCaseInsensitiveCompare(name) == .orderedSame }) {
+                hit = caseInsensitive
+            } else if let partial = available.first(where: { $0.localizedCaseInsensitiveContains(name) || name.localizedCaseInsensitiveContains($0) }) {
+                hit = partial
+            } else {
+                hit = nil
+            }
+
+            if let hit {
+                if !seen.contains(hit) {
+                    seen.insert(hit)
+                    matched.append(hit)
+                }
+            } else {
+                notFound.append(name)
+            }
+        }
+
+        return (matched, notFound)
+    }
+
+    /// Stabil sträng att lägga in i `SessionManifestStore.fingerprint`s
+    /// `settings`-dictionary för `calendarNames` — sorterad (ordningen på
+    /// valet ska inte spela roll för om kalendersteget behöver köras om) och
+    /// JSON-kodad, INTE en naiv join, eftersom ett kalendernamn kan innehålla
+    /// nästan vilket separatortecken som helst (se `AppSettings.calendarNames`).
+    /// Bruten ut hit (i stället för att bo inline i
+    /// `PipelineRunner+Calendar.swift`) så det går att testa headless att ett
+    /// ändrat kalenderval faktiskt ger ett annat fingerprint-värde.
+    static func calendarNamesFingerprintValue(_ names: [String]) -> String {
+        let sorted = names.sorted()
+        guard let data = try? JSONEncoder().encode(sorted),
+              let json = String(data: data, encoding: .utf8) else {
+            return sorted.joined(separator: "|")
+        }
+        return json
+    }
+
+    /// Resolve the selected calendar(s). Call after access is granted.
     /// Returns the calendars array to use in predicates (nil = all calendars).
     private func resolveCalendar() -> [EKCalendar]? {
-        let name = AppSettings.shared.calendarName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else {
-            print("[Calendar] Inget kalendernamn konfigurerat – söker i alla kalendrar")
+        let names = AppSettings.shared.calendarNames
+        guard !names.isEmpty else {
+            print("[Calendar] Inga kalendernamn konfigurerade – söker i alla kalendrar")
             return nil
         }
 
@@ -28,31 +88,21 @@ class CalendarService {
             print("  • \"\(cal.title)\" (källa: \(cal.source?.title ?? "okänd"), typ: \(cal.type.rawValue))")
         }
 
-        // Exact match first
-        if let exact = allCalendars.first(where: { $0.title == name }) {
-            print("[Calendar] ✓ Exakt matchning: \"\(exact.title)\"")
-            targetCalendar = exact
-            return [exact]
+        let (matchedTitles, notFound) = Self.matchCalendarNames(selected: names, available: allCalendars.map(\.title))
+
+        if !notFound.isEmpty {
+            print("[Calendar] ✗ Hittade INTE följande valda kalendrar: \(notFound.joined(separator: ", ")) – de utesluts ur sökningen")
+            print("[Calendar]   Tips: Kontrollera stavning. Tillgängliga namn listas ovan.")
         }
 
-        // Case-insensitive fallback
-        if let caseInsensitive = allCalendars.first(where: { $0.title.localizedCaseInsensitiveCompare(name) == .orderedSame }) {
-            print("[Calendar] ✓ Case-insensitive matchning: \"\(caseInsensitive.title)\"")
-            targetCalendar = caseInsensitive
-            return [caseInsensitive]
+        guard !matchedTitles.isEmpty else {
+            print("[Calendar] Ingen av de valda kalendrarna hittades – söker i alla kalendrar som fallback")
+            return nil
         }
 
-        // Partial/contains fallback
-        if let partial = allCalendars.first(where: { $0.title.localizedCaseInsensitiveContains(name) || name.localizedCaseInsensitiveContains($0.title) }) {
-            print("[Calendar] ⚠ Partiell matchning: \"\(partial.title)\" (sökte: \"\(name)\")")
-            targetCalendar = partial
-            return [partial]
-        }
-
-        print("[Calendar] ✗ Hittade INTE kalender \"\(name)\" – söker i alla kalendrar som fallback")
-        print("[Calendar]   Tips: Kontrollera stavning. Tillgängliga namn listas ovan.")
-        targetCalendar = nil
-        return nil
+        let matchedCalendars = matchedTitles.compactMap { title in allCalendars.first(where: { $0.title == title }) }
+        print("[Calendar] ✓ Söker i \(matchedCalendars.count) vald(a) kalender(rar): \(matchedTitles.joined(separator: ", "))")
+        return matchedCalendars
     }
 
     /// EventKit's current authorization status for calendar (event) access,
@@ -71,6 +121,26 @@ class CalendarService {
     func availableCalendarNames() -> [String] {
         guard Self.authorizationStatus == .fullAccess else { return [] }
         return store.calendars(for: .event).map(\.title).sorted()
+    }
+
+    /// Read-only: hämtar kalenderhändelser från de VALDA kalendrarna (samma
+    /// `resolveCalendar()` som pipelinen använder) för de senaste `daysBack`
+    /// dagarna, fram till nu. Till "Testa matchning"-arket i Inställningar
+    /// (Fas 10) — visar vad en riktig körning SKULLE matcha utan att röra
+    /// `accessGranted`, skriva `calendar_matches.json` eller på annat sätt
+    /// påverka en senare pipeline-körning. Kräver att åtkomst redan beviljats
+    /// (anroparen kollar `authorizationStatus` och visar ett tydligt fel
+    /// annars, i stället för att den här metoden i onödan öppnar en
+    /// systemdialog mitt i en förhandsvisning).
+    func previewEvents(daysBack: Int) -> [EKEvent] {
+        guard Self.authorizationStatus == .fullAccess else { return [] }
+        let end = Date()
+        let start = Calendar.current.date(byAdding: .day, value: -daysBack, to: end) ?? end
+        let calendars = resolveCalendar()
+        let predicate = store.predicateForEvents(withStart: start, end: end, calendars: calendars)
+        return store.events(matching: predicate).sorted {
+            ($0.startDate ?? .distantPast) < ($1.startDate ?? .distantPast)
+        }
     }
 
     /// Request calendar access. Returns true if granted.

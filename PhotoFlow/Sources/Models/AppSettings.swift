@@ -50,10 +50,54 @@ class AppSettings: ObservableObject {
     @AppStorage("hdrAlignEnabled") var hdrAlignEnabled: Bool = true
     @AppStorage("detailedProgress") var detailedProgress: Bool = true
     @AppStorage("calendarMatchEnabled") var calendarMatchEnabled: Bool = true
-    /// Tomt = sök i ALLA kalendrar (se `CalendarService.resolveCalendar`).
-    /// Väljs med en `Picker` i SettingsView som listar riktiga kalendrar via
-    /// EventKit, med fritextfältet kvar som fallback när åtkomst saknas.
+    /// DEPRECERAD läsväg (flera kalendrar): ersatt av `calendarNames` nedan,
+    /// som stödjer att välja FLERA kalendrar samtidigt. Kvar bara som
+    /// bakåtkompatibel fallback för `calendarNames`s getter — en session som
+    /// aldrig sparat något i den nya nyckeln men har ett gammalt värde här
+    /// ska fortsätta fungera som ett enda valt namn, UTAN att något skrivs om
+    /// (se `calendarNames` och den borttagna migreringskommentaren nedan för
+    /// varför det medvetet inte skriver en tyst migrering).
     @AppStorage("calendarName") var calendarName: String = ""
+
+    /// Valda kalendernamn (tom lista = sök i ALLA kalendrar, se
+    /// `CalendarService.resolveCalendar`). Väljs med en flervalslista i
+    /// SettingsView som listar riktiga kalendrar via EventKit, med ett
+    /// fritextläge kvar som fallback när åtkomst saknas.
+    ///
+    /// Lagras som en JSON-kodad sträng (inte `@AppStorage`s inbyggda
+    /// array-stöd, som inte finns för `[String]`) direkt i `UserDefaults`,
+    /// inte via `@AppStorage`-macrot — dels för att kunna skilja på "nyckeln
+    /// saknas helt" och "nyckeln finns men listan är tom" (bakåtkompatibilitet
+    /// nedan bygger på just den skillnaden), dels för att kalendernamn kan
+    /// innehålla komma och de flesta andra separatortecken, så en naiv
+    /// sträng-join/split vore fel.
+    var calendarNames: [String] {
+        get {
+            if let json = UserDefaults.standard.string(forKey: Self.calendarNamesKey),
+               let data = json.data(using: .utf8),
+               let decoded = try? JSONDecoder().decode([String].self, from: data) {
+                return decoded
+            }
+            // Nyckeln saknas (aldrig sparad än) — bakåtkompatibilitet utan
+            // migreringsskrivning: tolka den gamla `calendarName` (om den har
+            // ett värde) som ett enda valt namn. En tidigare migrering här
+            // togs bort för att den skrev in ett hårdkodat personligt värde —
+            // gör inte om det misstaget genom att skriva något till
+            // UserDefaults i den här gettern.
+            let legacy = calendarName.trimmingCharacters(in: .whitespaces)
+            return legacy.isEmpty ? [] : [legacy]
+        }
+        set {
+            objectWillChange.send()
+            if let data = try? JSONEncoder().encode(newValue),
+               let json = String(data: data, encoding: .utf8) {
+                UserDefaults.standard.set(json, forKey: Self.calendarNamesKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.calendarNamesKey)
+            }
+        }
+    }
+    private static let calendarNamesKey = "calendarNames"
     @AppStorage("aiTaggingEnabled") var aiTaggingEnabled: Bool = true
     /// Fas 3d: genererar svenska bildbeskrivningar (rum, kategori, särdrag,
     /// bildtext) med Apples on-device Foundation Models, för ett urval

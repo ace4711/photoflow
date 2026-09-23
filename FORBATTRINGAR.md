@@ -4474,3 +4474,117 @@ funktionen är till för.
   (se den skarpa körningen mot `lint/OUTPUT` ovan) är ett fynd, inte något
   som fixats i den här fasen — det ligger i `exportToAddressFolders`
   (`PipelineRunner+SortFolders.swift`), utanför uppdragets "nya filer"-arena.
+
+## Flera kalendrar och testmatchning
+
+### Bakgrund
+
+Inställningar → Pipeline → Kalenderintegration lät bara välja EN kalender
+(eller "Alla kalendrar") — `AppSettings.calendarName` (tom = alla),
+uppslaget i `CalendarService.resolveCalendar()` med exakt →
+skiftlägesokänslig → partiell matchning. Den som fotograferar åt flera
+mäklare/kontor med separata kalendrar kunde inte begränsa matchningen till
+just de kalendrarna utan att välja en i taget. Dessutom fanns inget sätt att
+se VAD en kalendermatchning skulle ge (adress, mappnamn) utan att faktiskt
+köra hela pipelinen mot riktiga bilder.
+
+### 1. `AppSettings.calendarNames: [String]`
+
+Ny lagring — en JSON-kodad sträng direkt i `UserDefaults` (inte
+`@AppStorage`s inbyggda stöd, som inte finns för `[String]`), eftersom
+kalendernamn kan innehålla komma och de flesta andra separatortecken; en
+naiv join/split hade varit fel. Bakåtkompatibilitet UTAN migreringsskrivning
+(en tidigare migrering i den här filen togs bort för att den skrev in ett
+hårdkodat personligt värde, se `git log` — samma misstag görs inte om här):
+om `calendarNames`-nyckeln aldrig sparats men den gamla `calendarName` har
+ett värde, tolkas det som `[calendarName]` i gettern, utan att något skrivs.
+En EXPLICIT tom lista (nyckeln finns, sparad tom — "Alla kalendrar" valt
+medvetet efter att tidigare ha haft ett enkalenderval) faller INTE tillbaka
+på det gamla värdet. `calendarName` (singular) lever kvar, kommenterad som
+deprecerad läsväg.
+
+### 2. `CalendarService`
+
+- `resolveCalendar()` returnerar nu ALLA `EKCalendar` som matchar NÅGOT av
+  de valda namnen (fortfarande nil = alla kalendrar när listan är tom),
+  loggar vilka valda namn som inte hittades bland de riktiga kalendrarna.
+- Matchningslogiken är bruten ut till en ren, testbar
+  `static func matchCalendarNames(selected: [String], available: [String])
+  -> (matched: [String], notFound: [String])` — samma exakt →
+  skiftlägesokänslig → partiell-ordning som förut, per namn, med
+  deduplicering (två valda namn som råkar matcha samma kalender ger bara en
+  träff).
+- `static func calendarNamesFingerprintValue(_ names: [String]) -> String`:
+  sorterad + JSON-kodad sträng för `SessionManifestStore.fingerprint`s
+  `settings`-dictionary, så kalenderstegets skip-logik (`PipelineRunner+
+  Calendar.swift`) fortsätter ogiltigförklaras korrekt när kalendervalet
+  ändras — nu för en LISTA i stället för en enda sträng.
+- Ny read-only `previewEvents(daysBack:)`: hämtar händelser från de valda
+  kalendrarna för "Testa matchning"-arket, utan att röra `accessGranted`
+  eller skriva något.
+
+### 3. UI: flervalslista i `CalendarPickerRow`
+
+Ersätter den gamla `Picker` (ett val) med en `Menu` av `Toggle`-rader (ett
+"Alla kalendrar"-läge överst + en rad per riktig EventKit-kalender), plus en
+sammanfattande rad ("3 kalendrar valda" / "1 kalender vald" / "Alla
+kalendrar"). En sparad kalender som inte längre finns bland de riktiga
+visas fortsatt som "(hittas inte just nu)" i stället för att tyst försvinna
+ur valet. Fritextfallbacken (ingen åtkomst än) är nu en flerradig
+`TextEditor`, ett kalendernamn per rad — radbrytning i stället för komma som
+separator, av samma skäl som JSON-lagringen ovan.
+
+### 4. "Testa matchning"-arket (`CalendarMatchTestSheet`)
+
+Ny knapp i Kalenderintegration-sektionen öppnar ett strikt LÄSANDE ark:
+segmenterad period (7/14/30 dagar bakåt, standard 14), en rad per
+kalenderhändelse i de valda kalendrarna med tid, titel, extraherad adress
+och resulterande mappnamn (`CalendarService.sanitizeFolderName`). Adressen
+tas fram precis som en riktig körning: `BookingTitleParser` (Foundation
+Models) när `BookingTitleParser.isModelAvailable`, annars
+`CalendarService.extractAddress`-heuristiken direkt — vilken väg som
+användes visas som en liten etikett per rad. Händelser utan extraherad
+adress markeras tydligt (varningsikon + orange text) — det är just de
+fallen arket finns till för att upptäcka innan en riktig körning. Geokodning
+körs ALDRIG automatiskt (kostar nätverk/tid): en "Kontrollera GPS"-knapp per
+rad, plus en för alla synliga rader (seriellt, inte N samtidiga
+MapKit-anrop). Tydligt tomt läge (inga händelser i perioden) och tydligt
+fel (ingen kalenderåtkomst). Skriver INGET till disk — `previewEvents`
+rör aldrig pipelinens tillstånd, och `BookingTitleParser`s egen
+titel-cache (som finns oavsett, oberoende av det här arket) är den enda
+cachningen som sker.
+
+### Tester
+
+`CalendarServiceTests` (+10): `matchCalendarNames` — exakt, skiftläge,
+partiell, dubbletter (två namn → samma kalender ger ingen dubblett), namn
+som inte finns, tom lista, tomma/blanka namn ignoreras; samt
+`calendarNamesFingerprintValue` — ordningsoberoende, ändrat val ger annat
+värde, ett namn med komma i sig blandas inte ihop med två separata namn.
+Ny fil `AppSettingsCalendarNamesTests` (+6): default tom lista, rundtripp
+med namn som innehåller komma, bakåtkompatibilitet mot gamla `calendarName`
+(både att den fungerar OCH att den inte skriver något), att en explicit tom
+lista inte faller tillbaka på det gamla värdet, samt tom legacy-sträng ger
+`[]` (inte `[""]`). `SessionManifestStoreTests` (+1): kalenderstegets
+fingerprint ändras när urvalet växer/minskar men INTE när bara ordningen på
+samma urval ändras — speglar exakt hur `PipelineRunner+Calendar.swift`
+bygger fingerprintet, inte bara `fingerprint()`s generella beteende. EventKit
+självt (`resolveCalendar`/`previewEvents`/`CalendarPickerRow`/
+`CalendarMatchTestSheet` mot riktiga kalendrar) går inte att testa headless
+— oförändrat sedan tidigare faser. Full svit: 261 gröna tester (upp från
+244).
+
+### Vad som INTE gjordes / kända avgränsningar
+
+- Inget stöd för att välja kalendrar från flera olika EventKit-KÄLLOR
+  (`EKSource`) med SAMMA titel som separata val — matchningen jobbar på
+  kalendertitel, precis som förut, så två kalendrar med identiskt namn från
+  olika källor (t.ex. iCloud + ett delat Google-konto) räknas som samma
+  träff.
+- "Testa matchning"-arkets geokodningsknapp använder samma
+  `CalendarService.geocodeAddress`-cache (per adress, i minnet för appens
+  livstid) som en riktig körning skulle — en adress geokodad i
+  förhandsvisningen slipper alltså ett nytt nätverksanrop om samma session
+  sedan körs på riktigt. Bedömdes ofarligt (cachen är bara `[adress:
+  koordinat]`, ingen sessionsspecifik data) men värt att notera eftersom
+  uppdraget bad om striktast möjliga read-only.

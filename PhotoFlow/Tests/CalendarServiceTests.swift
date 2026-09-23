@@ -131,4 +131,96 @@ struct CalendarServiceTests {
     func sanitizeFolderName_tripleDot_isNotSpecialCased() {
         #expect(CalendarService.sanitizeFolderName("...") == "...")
     }
+
+    // MARK: - matchCalendarNames (Fas 10: flera valda kalendrar)
+
+    @Test("Exakt matchning per namn")
+    func matchCalendarNames_exactMatch() {
+        let result = CalendarService.matchCalendarNames(
+            selected: ["Jobb", "Privat"],
+            available: ["Jobb", "Privat", "Övrigt"]
+        )
+        #expect(result.matched == ["Jobb", "Privat"])
+        #expect(result.notFound.isEmpty)
+    }
+
+    @Test("Skiftlägesokänslig matchning")
+    func matchCalendarNames_caseInsensitiveMatch() {
+        let result = CalendarService.matchCalendarNames(
+            selected: ["jobb"],
+            available: ["Jobb", "Privat"]
+        )
+        #expect(result.matched == ["Jobb"])
+        #expect(result.notFound.isEmpty)
+    }
+
+    @Test("Partiell (delsträngs-) matchning i endera riktningen")
+    func matchCalendarNames_partialMatch() {
+        let result = CalendarService.matchCalendarNames(
+            selected: ["Fastighetsfoto"],
+            available: ["Fastighetsfoto Anna", "Privat"]
+        )
+        #expect(result.matched == ["Fastighetsfoto Anna"])
+        #expect(result.notFound.isEmpty)
+    }
+
+    @Test("Två valda namn som matchar SAMMA kalender ger ingen dubblett")
+    func matchCalendarNames_duplicateTargetCalendar_deduplicated() {
+        let result = CalendarService.matchCalendarNames(
+            selected: ["Jobb", "jobb", "JOBB"],
+            available: ["Jobb", "Privat"]
+        )
+        #expect(result.matched == ["Jobb"])
+        #expect(result.notFound.isEmpty)
+    }
+
+    @Test("Namn som inte finns bland tillgängliga kalendrar rapporteras som notFound")
+    func matchCalendarNames_nameNotFound() {
+        let result = CalendarService.matchCalendarNames(
+            selected: ["Jobb", "Finns Inte"],
+            available: ["Jobb", "Privat"]
+        )
+        #expect(result.matched == ["Jobb"])
+        #expect(result.notFound == ["Finns Inte"])
+    }
+
+    @Test("Tom vald-lista ger tomma resultat (ingen matchning, inget notFound)")
+    func matchCalendarNames_emptySelection_returnsEmpty() {
+        let result = CalendarService.matchCalendarNames(selected: [], available: ["Jobb", "Privat"])
+        #expect(result.matched.isEmpty)
+        #expect(result.notFound.isEmpty)
+    }
+
+    @Test("Tomma/blanka namn i vald-listan ignoreras helt (varken matchade eller notFound)")
+    func matchCalendarNames_blankNamesIgnored() {
+        let result = CalendarService.matchCalendarNames(selected: ["  ", ""], available: ["Jobb"])
+        #expect(result.matched.isEmpty)
+        #expect(result.notFound.isEmpty)
+    }
+
+    // MARK: - calendarNamesFingerprintValue
+
+    @Test("Samma namn i olika ordning ger samma fingerprint-värde (sorterat internt)")
+    func calendarNamesFingerprintValue_orderIndependent() {
+        let a = CalendarService.calendarNamesFingerprintValue(["Jobb", "Privat"])
+        let b = CalendarService.calendarNamesFingerprintValue(["Privat", "Jobb"])
+        #expect(a == b)
+    }
+
+    @Test("Ändrat kalenderval ger ett annat fingerprint-värde")
+    func calendarNamesFingerprintValue_changedSelection_differs() {
+        let a = CalendarService.calendarNamesFingerprintValue(["Jobb"])
+        let b = CalendarService.calendarNamesFingerprintValue(["Jobb", "Privat"])
+        #expect(a != b)
+    }
+
+    @Test("Ett kalendernamn som råkar innehålla ett komma hanteras korrekt (ingen naiv join)")
+    func calendarNamesFingerprintValue_nameWithComma_notConflated() {
+        // "A,B" (ett enda valt namn med komma i) ska INTE ge samma
+        // fingerprint-värde som ["A", "B"] (två separata namn) — vilket en
+        // naiv `joined(separator: ",")` hade råkat göra.
+        let single = CalendarService.calendarNamesFingerprintValue(["A,B"])
+        let two = CalendarService.calendarNamesFingerprintValue(["A", "B"])
+        #expect(single != two)
+    }
 }

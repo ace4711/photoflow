@@ -7,18 +7,21 @@ extension PipelineRunner {
     func matchCalendarBookings() async {
         guard let outputDir = state.outputDirectory else { return }
 
-        // Fas 8: manifest-fingerprint av bracket_groups.json (representerar
-        // fotodatumen matchningen läser) + vilken kalender som söks — satt
-        // HÄR (innan något skip-beslut) av samma skäl som övriga
-        // fingerprint-grindade steg. Byte av `calendarName` i Inställningar
-        // ändrar inte fotoantalet, men SKA trigga en ny matchning i stället
-        // för att tyst återanvända en gammal `calendar_matches.json` mot fel
-        // kalender — det var precis den sortens bugg (`maxTimeGap`) Fas 6:s
-        // fingerprint-mönster fanns till för att stänga.
+        // Fas 8 (utökad Fas 10 för flerval): manifest-fingerprint av
+        // bracket_groups.json (representerar fotodatumen matchningen läser) +
+        // vilka kalendrar som söks — satt HÄR (innan något skip-beslut) av
+        // samma skäl som övriga fingerprint-grindade steg. Byte av
+        // `calendarNames` i Inställningar ändrar inte fotoantalet, men SKA
+        // trigga en ny matchning i stället för att tyst återanvända en gammal
+        // `calendar_matches.json` mot fel kalender(rar) — det var precis den
+        // sortens bugg (`maxTimeGap`) Fas 6:s fingerprint-mönster fanns till
+        // för att stänga. JSON-kodad (sorterad) lista i stället för en naiv
+        // join, av samma skäl som `AppSettings.calendarNames` lagras som JSON
+        // — kalendernamn kan innehålla nästan vilket separatortecken som helst.
         let groupsJSONForFingerprint = outputDir.appendingPathComponent("bracket_groups.json")
         let calendarFingerprint = SessionManifestStore.fingerprint(
             fileURLs: [groupsJSONForFingerprint],
-            settings: ["calendarName": AppSettings.shared.calendarName]
+            settings: ["calendarNames": CalendarService.calendarNamesFingerprintValue(AppSettings.shared.calendarNames)]
         )
         state.setPendingFingerprint(calendarFingerprint, for: .findCalendarInfo)
 

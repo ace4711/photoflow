@@ -1,6 +1,7 @@
 import SwiftUI
 import ServiceManagement
 import EventKit
+import CoreLocation
 
 struct SettingsView: View {
     @ObservedObject var settings = AppSettings.shared
@@ -313,37 +314,24 @@ struct PipelineTab: View {
     }
 }
 
-/// Fas 4: låter användaren välja en kalender ur en riktig `Picker` (listar
-/// EventKit-kalendrarna via `CalendarService`) i stället för att bara skriva
-/// namnet i fritext. Fritextfältet finns kvar som fallback för de fall
-/// åtkomst ännu inte beviljats (eller nekats) — precis vad `CalendarService.
-/// resolveCalendar` redan stödjer (exakt/skiftlägesokänslig/delvis matchning
-/// mot fritexten).
+/// Fas 4, flerval i Fas 10: låter användaren välja EN ELLER FLERA kalendrar
+/// ur en flervalslista (listar EventKit-kalendrarna via `CalendarService`) i
+/// stället för att bara skriva namnet i fritext. Fritextläget finns kvar som
+/// fallback för de fall åtkomst ännu inte beviljats (eller nekats) — precis
+/// vad `CalendarService.resolveCalendar`/`matchCalendarNames` redan stödjer
+/// (exakt/skiftlägesokänslig/delvis matchning, per namn).
 struct CalendarPickerRow: View {
     @ObservedObject var settings: AppSettings
     @State private var availableCalendars: [String] = []
     @State private var accessStatus: EKAuthorizationStatus = CalendarService.authorizationStatus
     @State private var isRequesting = false
+    @State private var showTestMatchSheet = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             switch accessStatus {
             case .fullAccess:
-                Picker("Kalender", selection: $settings.calendarName) {
-                    Text("Alla kalendrar").tag("")
-                    ForEach(availableCalendars, id: \.self) { name in
-                        Text(name).tag(name)
-                    }
-                    // Sparat namn som inte längre finns bland de riktiga
-                    // kalendrarna (borttagen kalender sedan sist, eller ett
-                    // gammalt fritextvärde) — visa det ändå som ett eget
-                    // alternativ i stället för att valet tyst hoppar till
-                    // "Alla kalendrar" bara för att listan uppdaterades.
-                    if !settings.calendarName.isEmpty && !availableCalendars.contains(settings.calendarName) {
-                        Text("\(settings.calendarName) (hittas inte just nu)").tag(settings.calendarName)
-                    }
-                }
-                .pickerStyle(.menu)
+                calendarMultiSelect
             case .notDetermined:
                 HStack {
                     Text("Kalenderåtkomst har inte begärts än.")
@@ -355,18 +343,121 @@ struct CalendarPickerRow: View {
                 }
                 fallbackTextField
             default: // .denied, .restricted, .writeOnly (kan inte lista kalendrar)
-                Text("Ingen kalenderåtkomst — ange kalendernamnet manuellt nedan, eller aktivera åtkomst i Systeminställningar → Sekretess och säkerhet → Kalendrar.")
+                Text("Ingen kalenderåtkomst — ange kalendernamn manuellt nedan, eller aktivera åtkomst i Systeminställningar → Sekretess och säkerhet → Kalendrar.")
                     .font(.caption)
                     .foregroundColor(.orange)
                 fallbackTextField
             }
+
+            Button("Testa matchning…") { showTestMatchSheet = true }
+                .disabled(accessStatus != .fullAccess)
+            if accessStatus != .fullAccess {
+                Text("Kräver kalenderåtkomst.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
         }
         .onAppear { refresh() }
+        .sheet(isPresented: $showTestMatchSheet) {
+            CalendarMatchTestSheet()
+        }
+    }
+
+    // MARK: - Flerval (åtkomst beviljad)
+
+    /// Namn som är sparade i `calendarNames` men som inte längre finns bland
+    /// EventKit-kalendrarna (borttagen kalender sedan sist, eller ett gammalt
+    /// fritextvärde) — visas ändå som ett eget, ikryssat alternativ i stället
+    /// för att valet tyst försvinner bara för att listan uppdaterades.
+    private var missingSelectedNames: [String] {
+        settings.calendarNames.filter { !availableCalendars.contains($0) }
+    }
+
+    private var summaryText: String {
+        let count = settings.calendarNames.count
+        switch count {
+        case 0: return "Alla kalendrar"
+        case 1: return "1 kalender vald"
+        default: return "\(count) kalendrar valda"
+        }
+    }
+
+    private var calendarMultiSelect: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Menu {
+                Toggle("Alla kalendrar", isOn: Binding(
+                    get: { settings.calendarNames.isEmpty },
+                    set: { isOn in if isOn { settings.calendarNames = [] } }
+                ))
+                Divider()
+                ForEach(availableCalendars, id: \.self) { name in
+                    Toggle(name, isOn: selectionBinding(for: name))
+                }
+                if !missingSelectedNames.isEmpty {
+                    Divider()
+                    ForEach(missingSelectedNames, id: \.self) { name in
+                        Toggle("\(name) (hittas inte just nu)", isOn: selectionBinding(for: name))
+                    }
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "calendar")
+                    Text("Välj kalendrar")
+                    Spacer()
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+
+            Text(summaryText)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private func selectionBinding(for name: String) -> Binding<Bool> {
+        Binding(
+            get: { settings.calendarNames.contains(name) },
+            set: { isOn in
+                var names = settings.calendarNames
+                if isOn {
+                    if !names.contains(name) { names.append(name) }
+                } else {
+                    names.removeAll { $0 == name }
+                }
+                settings.calendarNames = names
+            }
+        )
+    }
+
+    // MARK: - Fritextfallback (åtkomst saknas)
+
+    /// Ett kalendernamn per rad — INTE kommaseparerat i ett enda fält, eftersom
+    /// riktiga kalendernamn kan innehålla komma (och de flesta andra
+    /// separatortecken). Radbrytning är i praktiken aldrig del av ett
+    /// kalendernamn, så den kan användas som separator här.
+    private var fallbackNamesBinding: Binding<String> {
+        Binding(
+            get: { settings.calendarNames.joined(separator: "\n") },
+            set: { newValue in
+                settings.calendarNames = newValue
+                    .split(separator: "\n", omittingEmptySubsequences: true)
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+            }
+        )
     }
 
     private var fallbackTextField: some View {
-        TextField("Kalendernamn (exakt, eller tomt = alla kalendrar)", text: $settings.calendarName)
-            .textFieldStyle(.roundedBorder)
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Kalendernamn, ett per rad (exakt eller delvis; tomt = alla kalendrar)")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            TextEditor(text: fallbackNamesBinding)
+                .font(.system(size: 12))
+                .frame(height: 54)
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.3)))
+        }
     }
 
     private func refresh() {
@@ -380,6 +471,261 @@ struct CalendarPickerRow: View {
             _ = await CalendarService.shared.requestAccess()
             isRequesting = false
             refresh()
+        }
+    }
+}
+
+/// Fas 10: "Testa matchning"-arket i Kalenderintegration. Visar vad en riktig
+/// pipeline-körning SKULLE matcha (adress + mappnamn per kalenderhändelse)
+/// för de valda kalendrarna, UTAN att röra pipelinen eller skriva något till
+/// disk. Läser händelser via `CalendarService.previewEvents(daysBack:)`
+/// (read-only) och extraherar adress precis som en riktig körning gör: via
+/// `BookingTitleParser` (Foundation Models) när modellen är tillgänglig på
+/// enheten, annars `CalendarService.extractAddress`-heuristiken direkt —
+/// vilken väg som användes visas som en liten etikett per rad. Geokodning
+/// (MapKit, nätverk) körs ALDRIG automatiskt — bara på begäran, per rad eller
+/// för alla synliga rader via knappen i headern.
+struct CalendarMatchTestSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var daysBack = 14
+    @State private var rows: [PreviewRow] = []
+    @State private var isLoading = false
+    @State private var accessStatus: EKAuthorizationStatus = CalendarService.authorizationStatus
+    @State private var geocodeResults: [String: GeocodeState] = [:]
+    @State private var isGeocodingAll = false
+
+    private enum GeocodeState: Equatable {
+        case loading
+        case found(latitude: Double, longitude: Double)
+        case notFound
+    }
+
+    private struct PreviewRow: Identifiable {
+        let id: String
+        let date: Date
+        let title: String
+        /// `nil` = ingen adress kunde extraheras ur titeln — precis de fallen
+        /// användaren vill upptäcka innan en riktig körning, se doc-kommentaren
+        /// ovan.
+        let address: String?
+        let extractionPath: String
+        let folderName: String?
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+
+            Divider()
+
+            Picker("Period", selection: $daysBack) {
+                Text("7 dagar").tag(7)
+                Text("14 dagar").tag(14)
+                Text("30 dagar").tag(30)
+            }
+            .pickerStyle(.segmented)
+            .padding()
+            .onChange(of: daysBack) { _, _ in loadEvents() }
+
+            Divider()
+
+            content
+        }
+        .frame(minWidth: 580, minHeight: 440)
+        .onAppear {
+            accessStatus = CalendarService.authorizationStatus
+            loadEvents()
+        }
+    }
+
+    private var header: some View {
+        HStack {
+            Text("Testa kalendermatchning")
+                .font(.headline)
+            Spacer()
+            if rows.contains(where: { $0.address != nil }) {
+                Button(isGeocodingAll ? "Kontrollerar GPS…" : "Kontrollera GPS för alla") {
+                    geocodeAll()
+                }
+                .disabled(isGeocodingAll)
+            }
+            Button("Stäng") { dismiss() }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+        }
+        .padding()
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if accessStatus != .fullAccess {
+            emptyState(
+                icon: "calendar.badge.exclamationmark",
+                text: "Ingen kalenderåtkomst — kan inte förhandsvisa matchning. Aktivera åtkomst i Systeminställningar → Sekretess och säkerhet → Kalendrar.",
+                color: .orange
+            )
+        } else if isLoading {
+            emptyState(icon: "hourglass", text: "Laddar händelser…", color: .secondary)
+        } else if rows.isEmpty {
+            emptyState(
+                icon: "calendar",
+                text: "Inga kalenderhändelser hittades de senaste \(daysBack) dagarna i valda kalendrar.",
+                color: .secondary
+            )
+        } else {
+            List(rows) { row in
+                rowView(row)
+            }
+            .listStyle(.plain)
+        }
+    }
+
+    private func emptyState(icon: String, text: String, color: Color) -> some View {
+        VStack(spacing: 8) {
+            Spacer()
+            Image(systemName: icon)
+                .font(.system(size: 28))
+                .foregroundColor(color)
+            Text(text)
+                .font(.callout)
+                .foregroundColor(color)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func rowView(_ row: PreviewRow) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(row.date, format: .dateTime.day().month().hour().minute())
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.secondary)
+                Text(row.title)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+                Spacer()
+                Text(row.extractionPath)
+                    .font(.caption2)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.15))
+                    .clipShape(Capsule())
+            }
+            if let address = row.address, let folderName = row.folderName {
+                HStack(spacing: 6) {
+                    Image(systemName: "mappin.circle")
+                        .foregroundColor(.green)
+                    Text(address)
+                        .font(.system(size: 12))
+                    Text("→ \"\(folderName)\"")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+                geocodeRow(for: row)
+            } else {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Text("Ingen adress kunde extraheras ur titeln")
+                        .font(.system(size: 12))
+                        .foregroundColor(.orange)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func geocodeRow(for row: PreviewRow) -> some View {
+        switch geocodeResults[row.id] {
+        case .some(.loading):
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.small)
+                Text("Geokodar…").font(.caption2).foregroundColor(.secondary)
+            }
+        case .some(.found(let lat, let lon)):
+            Text(String(format: "GPS: %.4f, %.4f", lat, lon))
+                .font(.caption2)
+                .foregroundColor(.green)
+        case .some(.notFound):
+            Text("Kunde inte geokoda adressen")
+                .font(.caption2)
+                .foregroundColor(.orange)
+        case .none:
+            Button("Kontrollera GPS") { geocode(row) }
+                .font(.caption2)
+                .buttonStyle(.link)
+        }
+    }
+
+    // MARK: - Data (strikt read-only)
+
+    /// Läser händelser via `CalendarService.previewEvents` (ingen skrivning,
+    /// ingen påverkan på `accessGranted`/pipelinen) och extraherar adress för
+    /// varje händelse. `BookingTitleParser` cachar titel→`BookingInfo` som
+    /// vanligt (samma cache pipelinen skulle byggt ändå) — inget annat
+    /// cachas eller skrivs av det här arket.
+    private func loadEvents() {
+        accessStatus = CalendarService.authorizationStatus
+        guard accessStatus == .fullAccess else { rows = []; return }
+        isLoading = true
+        geocodeResults = [:]
+        let daysBackSnapshot = daysBack
+        Task {
+            let events = CalendarService.shared.previewEvents(daysBack: daysBackSnapshot)
+            let useModel = BookingTitleParser.isModelAvailable
+            var built: [PreviewRow] = []
+            for event in events {
+                let title = event.title ?? "(ingen titel)"
+                let id = event.eventIdentifier ?? UUID().uuidString
+                let date = event.startDate ?? Date()
+                let address: String?
+                let path: String
+                if useModel {
+                    let info = await BookingTitleParser.shared.parse(title: title)
+                    address = BookingTitleParser.addressString(from: info)
+                    path = "Foundation Models"
+                } else {
+                    address = CalendarService.extractAddress(from: title)
+                    path = "Heuristik"
+                }
+                let folder = address.map { CalendarService.sanitizeFolderName($0) }
+                built.append(PreviewRow(id: id, date: date, title: title, address: address, extractionPath: path, folderName: folder))
+            }
+            rows = built
+            isLoading = false
+        }
+    }
+
+    private func geocode(_ row: PreviewRow) {
+        guard let address = row.address else { return }
+        geocodeResults[row.id] = .loading
+        Task {
+            if let coord = await CalendarService.shared.geocodeAddress(address) {
+                geocodeResults[row.id] = .found(latitude: coord.latitude, longitude: coord.longitude)
+            } else {
+                geocodeResults[row.id] = .notFound
+            }
+        }
+    }
+
+    /// Seriellt (inte N samtidiga MapKit-anrop) — geokodar bara rader som
+    /// ännu inte har ett resultat, en adress i taget.
+    private func geocodeAll() {
+        isGeocodingAll = true
+        Task {
+            for row in rows {
+                guard let address = row.address, geocodeResults[row.id] == nil else { continue }
+                geocodeResults[row.id] = .loading
+                if let coord = await CalendarService.shared.geocodeAddress(address) {
+                    geocodeResults[row.id] = .found(latitude: coord.latitude, longitude: coord.longitude)
+                } else {
+                    geocodeResults[row.id] = .notFound
+                }
+            }
+            isGeocodingAll = false
         }
     }
 }

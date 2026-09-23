@@ -235,4 +235,33 @@ struct SessionManifestStoreTests {
         let fp2 = SessionManifestStore.fingerprint(fileURLs: [fileA, fileB])
         #expect(fp1 != fp2)
     }
+
+    // MARK: - Fingerprint (Fas 10: kalenderstegets `calendarNames`)
+
+    @Test("Kalenderstegets fingerprint ändras när det valda kalenderurvalet ändras, oförändrade filer")
+    func fingerprint_changedCalendarSelection_changesFingerprint() {
+        let dir = tempDir("fp-calendar")
+        let groupsFile = dir.appendingPathComponent("bracket_groups.json")
+        try! Data("{}".utf8).write(to: groupsFile)
+
+        // Speglar EXAKT hur PipelineRunner+Calendar.swift bygger fingerprintet,
+        // så testet fångar en regression i den faktiska trådningen mellan
+        // `AppSettings.calendarNames` och kalenderstegets skip-logik, inte
+        // bara `SessionManifestStore.fingerprint`s generella beteende.
+        func fingerprintFor(_ names: [String]) -> String {
+            SessionManifestStore.fingerprint(
+                fileURLs: [groupsFile],
+                settings: ["calendarNames": CalendarService.calendarNamesFingerprintValue(names)]
+            )
+        }
+
+        let allCalendars = fingerprintFor([])
+        let oneCalendar = fingerprintFor(["Fastighetsfoto"])
+        let twoCalendars = fingerprintFor(["Fastighetsfoto", "Jobb"])
+
+        #expect(allCalendars != oneCalendar, "Från 'alla kalendrar' till ett val ska trigga en ny matchning.")
+        #expect(oneCalendar != twoCalendars, "Att lägga till ytterligare en vald kalender ska trigga en ny matchning.")
+        // Samma urval (oavsett ordning) ska INTE trigga en ny matchning.
+        #expect(fingerprintFor(["Fastighetsfoto", "Jobb"]) == fingerprintFor(["Jobb", "Fastighetsfoto"]))
+    }
 }
