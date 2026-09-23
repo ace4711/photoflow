@@ -18,6 +18,16 @@ struct SessionHistoryView: View {
     /// Fas 8: posten som väntar på bekräftelse i borttagningsdialogen —
     /// `nil` när ingen dialog visas.
     @State private var entryPendingDeletion: SessionHistoryStore.Entry?
+    /// "Verifiera session": mappen (+ visningstitel) som ska verifieras i ett
+    /// `SessionVerifyView`-sheet, `nil` när inget sådant sheet visas. Sätts
+    /// antingen från en historikrad eller från "Verifiera aktuell session".
+    @State private var verifyTarget: VerifyTarget?
+
+    private struct VerifyTarget: Identifiable {
+        let id: String
+        let outputDirectory: URL
+        let subtitle: String
+    }
 
     private var filteredEntries: [SessionHistoryStore.Entry] {
         let sorted = entries.sorted { $0.updatedAt > $1.updatedAt }
@@ -30,26 +40,30 @@ struct SessionHistoryView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if entries.isEmpty {
-                    ContentUnavailableView(
-                        "Inga sessioner än",
-                        systemImage: "clock.arrow.circlepath",
-                        description: Text("Kör pipelinen på en mapp med NEF-filer för att se sessioner här.")
-                    )
-                } else if filteredEntries.isEmpty {
-                    ContentUnavailableView.search(text: searchText)
-                } else {
-                    List(filteredEntries) { entry in
-                        SessionHistoryRow(
-                            entry: entry,
-                            onOpen: { open(entry) },
-                            onRevealInFinder: { reveal(entry) },
-                            onDelete: { entryPendingDeletion = entry }
+            VStack(spacing: 0) {
+                currentSessionBar
+                Group {
+                    if entries.isEmpty {
+                        ContentUnavailableView(
+                            "Inga sessioner än",
+                            systemImage: "clock.arrow.circlepath",
+                            description: Text("Kör pipelinen på en mapp med NEF-filer för att se sessioner här.")
                         )
-                        .swipeActions(edge: .trailing) {
-                            Button("Ta bort ur historik", role: .destructive) {
-                                entryPendingDeletion = entry
+                    } else if filteredEntries.isEmpty {
+                        ContentUnavailableView.search(text: searchText)
+                    } else {
+                        List(filteredEntries) { entry in
+                            SessionHistoryRow(
+                                entry: entry,
+                                onOpen: { open(entry) },
+                                onRevealInFinder: { reveal(entry) },
+                                onVerify: { verify(entry) },
+                                onDelete: { entryPendingDeletion = entry }
+                            )
+                            .swipeActions(edge: .trailing) {
+                                Button("Ta bort ur historik", role: .destructive) {
+                                    entryPendingDeletion = entry
+                                }
                             }
                         }
                     }
@@ -64,6 +78,9 @@ struct SessionHistoryView: View {
             }
         }
         .frame(minWidth: 560, minHeight: 420)
+        .sheet(item: $verifyTarget) { target in
+            SessionVerifyView(outputDirectory: target.outputDirectory, subtitle: target.subtitle)
+        }
         .onAppear {
             // "Fråga inte — logga bara" (uppdragets punkt 3): rensar tyst
             // poster vars outputmapp inte längre finns varje gång vyn öppnas,
@@ -96,8 +113,46 @@ struct SessionHistoryView: View {
         }
     }
 
+    /// "Verifiera aktuell session": ett genvägsfält högst upp i historikvyn
+    /// för den mapp som just nu är konfigurerad i Inställningar, oavsett om
+    /// den redan hunnit synkas till historikregistret. `DashboardView` (som
+    /// äger huvudverktygsfältet) rörs INTE av den här fasen — se
+    /// `FORBATTRINGAR.md`, "Verifiera session", för en notering om att en
+    /// genväg därifrån kan läggas till senare av den som äger den filen.
+    @ViewBuilder
+    private var currentSessionBar: some View {
+        if let outputDirectory = AppSettings.shared.outputDirectory {
+            HStack {
+                Label("Aktuell session", systemImage: "gearshape")
+                    .font(.subheadline.weight(.medium))
+                Text(outputDirectory.path)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+                Button("Verifiera") {
+                    verifyTarget = VerifyTarget(id: "current", outputDirectory: outputDirectory, subtitle: "aktuell session")
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(.regularMaterial)
+            Divider()
+        }
+    }
+
     private func reload() {
         entries = SessionHistoryStore.load()
+    }
+
+    private func verify(_ entry: SessionHistoryStore.Entry) {
+        verifyTarget = VerifyTarget(
+            id: entry.sessionID.uuidString,
+            outputDirectory: URL(fileURLWithPath: entry.outputDirectory),
+            subtitle: entry.addresses.isEmpty ? "Okänd adress" : entry.addresses.joined(separator: ", ")
+        )
     }
 
     private func open(_ entry: SessionHistoryStore.Entry) {
@@ -123,6 +178,7 @@ private struct SessionHistoryRow: View {
     let entry: SessionHistoryStore.Entry
     let onOpen: () -> Void
     let onRevealInFinder: () -> Void
+    let onVerify: () -> Void
     let onDelete: () -> Void
 
     private static let dateFormatter: DateFormatter = {
@@ -165,6 +221,9 @@ private struct SessionHistoryRow: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(!outputDirectoryExists)
                 Button("Visa i Finder", action: onRevealInFinder)
+                    .buttonStyle(.bordered)
+                    .disabled(!outputDirectoryExists)
+                Button("Verifiera", action: onVerify)
                     .buttonStyle(.bordered)
                     .disabled(!outputDirectoryExists)
                 Button("Ta bort ur historik", role: .destructive, action: onDelete)

@@ -35,6 +35,8 @@ struct PhotoFlowCLI {
         switch subcommand {
         case "run":
             await runCommand(Array(arguments.dropFirst()))
+        case "verify":
+            await verifyCommand(Array(arguments.dropFirst()))
         case "--help", "-h", "help":
             printUsage()
             exit(0)
@@ -48,13 +50,15 @@ struct PhotoFlowCLI {
     private static func printUsage() {
         print("""
         Användning: photoflow-cli run --input <mapp> --output <mapp> [flaggor]
+                    photoflow-cli verify --output <mapp> [--json]
 
-        Kör hela PhotoFlow-pipelinen (NEF -> DNG -> previews -> bracket-analys
-        -> [HDR] -> [kalendermatchning] -> [AI-taggning] -> adressmappar ->
-        metadata) headless, utan GUI/testvärd. Se FORBATTRINGAR.md, "Rök-test
-        via CLI", för bakgrund och verifierade körningar.
+        "run" kör hela PhotoFlow-pipelinen (NEF -> DNG -> previews ->
+        bracket-analys -> [HDR] -> [kalendermatchning] -> [AI-taggning] ->
+        adressmappar -> metadata) headless, utan GUI/testvärd. Se
+        FORBATTRINGAR.md, "Rök-test via CLI", för bakgrund och verifierade
+        körningar.
 
-        Flaggor:
+        Flaggor (run):
           --input <mapp>    Mapp med NEF-filer (rekursivt). Krävs.
           --output <mapp>   Mapp att skriva resultatet till. Krävs.
           --no-hdr          Stäng av HDR-sammanslagning (på som standard).
@@ -67,8 +71,16 @@ struct PhotoFlowCLI {
                              slutet (mellan PHOTOFLOW_CLI_JSON_SUMMARY_BEGIN/
                              _END-markörraderna på stdout).
 
-        Avslutar med exit-kod 0 om alla steg lyckades, annars 1. Exit-kod 2
-        vid felaktiga argument.
+        "verify" kör `SessionVerifier` (se FORBATTRINGAR.md, "Verifiera
+        session") mot en redan bearbetad outputmapp och skriver rapporten
+        till stdout.
+
+        Flaggor (verify):
+          --output <mapp>   Outputmapp att verifiera. Krävs.
+          --json            Skriv rapporten som JSON i stället för text.
+
+        Avslutar med exit-kod 0 om alla steg/kontroller lyckades, annars 1.
+        Exit-kod 2 vid felaktiga argument.
         """)
     }
 
@@ -265,6 +277,61 @@ struct PhotoFlowCLI {
         }
 
         exit(success ? 0 : 1)
+    }
+
+    // MARK: - verify
+
+    /// Kör `SessionVerifier` mot en redan bearbetad outputmapp — se
+    /// FORBATTRINGAR.md, "Verifiera session". Gör det möjligt att köra
+    /// verifieringen från `scripts/smoke-run.sh` så rök-testet kontrollerar
+    /// sitt eget resultat, och för att verifiera en riktig session utan att
+    /// öppna appen.
+    private static func verifyCommand(_ args: [String]) async {
+        var outputPath: String?
+        var jsonOutput = false
+
+        var idx = 0
+        while idx < args.count {
+            let arg = args[idx]
+            switch arg {
+            case "--output":
+                idx += 1
+                guard idx < args.count else { fail("--output kräver ett värde") }
+                outputPath = args[idx]
+            case "--json":
+                jsonOutput = true
+            case "--help", "-h":
+                printUsage()
+                exit(0)
+            default:
+                fail("Okänd flagga: \(arg)")
+            }
+            idx += 1
+        }
+
+        guard let outputPath else { fail("--output krävs") }
+        let outputURL = URL(fileURLWithPath: outputPath).standardizedFileURL
+
+        let report: SessionVerifier.Report
+        do {
+            report = try await SessionVerifier.verify(outputDir: outputURL)
+        } catch {
+            standardError("photoflow-cli verify: \(error.localizedDescription)\n")
+            exit(1)
+        }
+
+        if jsonOutput {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            if let data = try? encoder.encode(report), let json = String(data: data, encoding: .utf8) {
+                print(json)
+            }
+        } else {
+            print(report.asPlainText())
+        }
+
+        exit(report.errorCount == 0 ? 0 : 1)
     }
 
     // MARK: - Progress printing

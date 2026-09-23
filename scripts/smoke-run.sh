@@ -182,6 +182,18 @@ if [ "$ORPHAN_HDR" -gt 0 ]; then
 fi
 
 echo ""
+echo "=== Verifiering: SessionVerifier (photoflow-cli verify) ==="
+# Kör samma sessionsverifiering som "Verifiera"-knappen i appen (se
+# FORBATTRINGAR.md, "Verifiera session") — så rökprovet kontrollerar sitt
+# eget resultat med samma kontroller som en riktig session skulle få.
+"$CLI_BIN" verify --output "$OUTPUT_DIR"
+VERIFY_EXIT=$?
+if [ "$VERIFY_EXIT" -ne 0 ]; then
+    echo "FEL: SessionVerifier hittade fel i den egna rök-körningen (se ovan)" >&2
+    OVERALL_OK=0
+fi
+
+echo ""
 echo "=== Resultat ==="
 echo "Arbetsmapp (input+output sparas kvar för manuell inspektion): $WORKDIR"
 if [ "$OVERALL_OK" -eq 1 ] && [ "$CLI_EXIT" -eq 0 ]; then

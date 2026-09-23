@@ -4294,3 +4294,183 @@ O(n²)-regression) men vars utskrivna siffror är de som redovisas ovan.
 Full svit: 236 gröna tester efter denna fas (var 216 vid fasens start,
 plus tester från samtidigt pågående arbete i samma testkörning).
 
+## Verifiera session
+
+### Bakgrund
+
+Natten innan denna fas hittades ett verkligt fel manuellt: HDR-resultat som
+blev kvar i `hdr/`-stagingmappen utan att flyttas till en adressmapp (buggen
+själv är sedan tidigare fixad, se `PipelineRunnerHDROrphanTests`). Poängen
+med den här fasen är att göra den typen av upptäckt SYSTEMATISK i stället för
+att förlita sig på att någon råkar leta manuellt — användaren levererar
+bilder till mäklare och behöver kunna lita på att en "färdig" session
+verkligen är hel.
+
+### 1. `Services/SessionVerifier.swift`
+
+En ren, testbar `enum` som tar en outputmapp och returnerar en
+`SessionVerifier.Report` (`findings: [Finding]`, var och en med `severity`
+(`.error`/`.warning`/`.ok`), svensk rubrik, förklaring, valfri åtgärds-
+rekommendation och berörda filsökvägar). Sex kontroller, körda parallellt i
+en `TaskGroup`:
+
+- **Symlänkar**: varje symlänk i adressmapparna kontrolleras mot att målet
+  faktiskt finns kvar (brutna länkar t.ex. efter att en stagingmapp eller
+  ett SD-kort städats bort, eller — se skarpa körningar nedan — efter att
+  HELA sessionsmappen flyttats/arkiverats).
+- **Täckning per bild**: varje NEF i `bracket_groups.json` har en preview i
+  `previews/`, en DNG i `dng/`, och en fil (symlänk ELLER kopia — se nedan)
+  i rätt adressundermapp (TITTBILDER/adressmapp/ÖVRIGA, se
+  `AddressFolderLayout`).
+- **Föräldralösa filer**: filer i `hdr/`, `dng/` eller `previews/` som inte
+  hör till någon känd bild, och — specifikt den bugg som startade fasen —
+  HDR-resultat som aldrig flyttats ut ur `hdr/`.
+- **Metadata (stickprov, max 10 filer)**: via `exiftool`, ETT `-j`-anrop för
+  hela stickprovet (inte en process per fil) — har DNG fått IPTC/XMP-adress
+  och GPS där en kalendermatchning täcker bildens tidpunkt; har NEF en
+  `.xmp`-sidecar (den senare kontrolleras ALLTID, oavsett om `exiftool`
+  finns, eftersom det bara är en filsystemskontroll).
+- **Gallring**: räknar avvisade bilders faktiska filstatus (kvar/borttagen/
+  flyttad till `Gallrade/`) och avgör om det stämmer med EN konsekvent
+  `cullAction`-läge; vid `"markera"` stickprovskontrolleras `XMP:Rating`
+  också.
+- **Manifest mot disk**: `photoflow_session.json`s `processedCount` för
+  "Skapa previews"/"Konvertera DNG" jämförs mot faktiskt antal filer på
+  disk, plus `photoCount` mot `bracket_groups.json`.
+
+Varje fynd säger vad man gör åt det (nästan alltid "Kör om steget X").
+Läser **ALDRIG** via `SessionManifestStore.loadOrMigrate` (som skriver ett
+nytt manifest till disk om inget finns) — bara `SessionManifestStore.load`,
+eftersom en verifiering aldrig får ha sidoeffekter.
+
+**Koncurrency-knuten**: `SessionManifestStore.load`, `DashboardStep.title`/
+`.manifestKey` och `BracketAnalysisOutput`s `Decodable`-konformitet är alla
+`MainActor`-isolerade av projektets `SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor`
+(gäller även synteserade protokollkonformiteter och enum-`Equatable`,
+inte bara metoder — det tog några försök att räkna ut). Lösningen: `verify`/
+`loadContext` kör på `MainActor` och läser ALLT in i en ren `Sendable`-
+`Context` FÖRE `TaskGroup`:en startas; de sex `check*`-funktionerna är
+explicit `nonisolated` (samma mönster som `PhotoQualityService`/`HDREngine`)
+och anropas via `await safely(...)` — `await`:et hoppar faktiskt av
+`MainActor` för hela kontrollens (inklusive dess `exiftool`-anrops) körtid,
+så de körs parallellt på den globala trådpoolen i stället för att
+seriealiseras på UI-tråden. Ett internt fel i en enskild kontroll fångas i
+`safely` och blir bara ett `.error`-fynd, stoppar aldrig hela verifieringen.
+
+### 2. UI
+
+- `Views/SessionVerifyView.swift` (ny fil): visar rapporten som en lista
+  grupperad efter allvarlighetsgrad (fel/varningar/OK), en sammanfattning
+  överst ("3 fel, 5 varningar, 14 kontroller OK"), expanderbara
+  `DisclosureGroup`-rader med förklaring + åtgärd + en "Visa i Finder"-knapp
+  per berörd fil, och en verktygsfältsknapp som kopierar hela rapporten som
+  text till urklipp. Stil enligt appens `.regularMaterial`-kort, svenska
+  texter.
+- Ingång i `Views/SessionHistoryView.swift`: en "Verifiera"-knapp per
+  historikrad, PLUS ett eget fält högst upp ("Aktuell session") som visar
+  `AppSettings.shared.outputDirectory` med en egen "Verifiera"-knapp — även
+  om den sessionen ännu inte hunnit synkas till historikregistret.
+  **`DashboardView.swift` rörs INTE** (en annan agent äger den filen enligt
+  `agent-rules.md`) — en naturlig genväg vore annars en knapp i dashboardens
+  eget verktygsfält bredvid "Historik"; den som äger `DashboardView` kan
+  lägga till den när som helst genom att öppna `SessionVerifyView` för
+  `AppSettings.shared.outputDirectory`, exakt som `SessionHistoryView`s nya
+  "Verifiera aktuell session"-fält redan gör.
+
+### 3. CLI
+
+`photoflow-cli verify --output <mapp> [--json]` kör samma `SessionVerifier`
+headless och skriver rapporten till stdout (text eller JSON), med exit-kod
+1 om `errorCount > 0` (annars 0). `scripts/smoke-run.sh` anropar den mot sin
+egen `$OUTPUT_DIR` på slutet, så rökprovet nu verifierar sitt eget resultat
+med exakt samma kontroller som en riktig session skulle få.
+
+### 4. Tester
+
+`PhotoFlow/Tests/SessionVerifierTests.swift`, 10 `@Test`: bygger en
+fullständigt korrekt syntetisk session (samma filformat som
+`Services/Pipeline/*`/`AddressFolderLayout`/`BracketAnalyzer` faktiskt
+producerar) och verifierar noll fel, samt sju separata felscenarier — bruten
+symlänk (originalet borttaget), saknad preview, HDR-fil kvarglömd i `hdr/`,
+manifest som påstår fler bearbetade filer än vad som finns, NEF utan
+XMP-sidecar, gallring som stämmer med "radera"-läget (inget fel), och
+gallringsbeslut som INTE går att förena med något enda konsekvent läge
+(fel) — plus att en obefintlig outputmapp och en avbruten `Task` hanteras
+utan att krascha. Full svit: 236 gröna tester (upp från 235 innan den här
+filen; själva `SessionVerifier.swift` lades till samtidigt som ett annat
+pågående arbete i samma repo höjde sviten från 216 till 235).
+
+### 5. Skarpa körningar (READ-ONLY) — och vad de hittade
+
+Kört mot tre riktiga, tidigare bearbetade sessioner utan att skriva något i
+dem (`photoflow-cli verify --output <mapp>`, aldrig `run`):
+
+**`/Users/fredrik/Desktop/ptohotagraphy-test/Exempelgatan 7/processed`**
+(142 bilder): `bracket_groups.json`/`dng/`/`previews/` finns och stämmer,
+men INGA adressmappar existerar alls — sessionen kördes tydligen aldrig
+igenom "Sortera filer" (eller kalendermatchning/sortering avbröts). 3 fel
+(alla 142 bilder saknar NEF/DNG/preview i en adressmapp), annars rent.
+Genuint intressant: en tidigare session som blev liggande halvfärdig utan
+att någon märkte det, precis den typen av "tyst luckhål" funktionen ska
+fånga.
+
+**`/Users/fredrik/Desktop/lint/OUTPUT`** (1259 bilder, flera adresser):
+Första körningen (innan `AddressFileEntry` hanterade både symlänkar OCH
+vanliga filer, se nedan) rapporterade FELAKTIGT "1259 av 1259 saknar
+NEF-symlänk" — grundorsaken var att hela adressträdet bestod av VANLIGA
+filer, inte symlänkar (verifierat med `file`/`ls -la`: `-rwx------`, ingen
+`l`). Efter fixen (täckningskontrollen räknar en vanlig fil med rätt namn
+som lika giltig som en symlänk — det som spelar roll för mäklaren är att
+bildfilen finns där, inte mekanismen) blev täckningen 100 % OK. KVAR:
+**1259 brutna symlänkar** i DNG-adressmapparna — `readlink` visar att de
+pekar på `/Users/fredrik/Desktop/OUTPUT/dng/...` (sessionens ORSPRUNGLIGA
+plats innan mappen döptes om/flyttades till `Desktop/lint/OUTPUT`).
+`createSymbolicLink` skriver ABSOLUTA sökvägar — att flytta/arkivera en hel
+sessionsmapp bryter alltså tyst alla dess interna DNG-symlänkar, även när
+originalfilen (`dng/DSC_xxxx.dng`) ligger kvar rätt bredvid i SAMMA
+flyttade mapp. Detta är troligen den mest praktiskt användbara upptäckten
+under hela fasen: en användare som arkiverar/kopierar en färdig session
+(exakt vad `lint`-mappnamnet antyder att någon gjorde) kan sluta med en
+session som SER hel ut i Finder (alla filnamn finns) men vars DNG-länkar i
+adressmapparna är trasiga. **Möjlig framtida förbättring** (inte gjord i
+denna fas, utanför scope): skriva RELATIVA symlänkar i
+`exportToAddressFolders` för DNG (adressmapp -> `../dng/x.dng` eller
+liknande) skulle göra sessionen flyttningssäker; NEF-symlänkar mot
+originalkortet måste dock förbli absoluta eftersom de pekar utanför
+outputmappen. 4 varningar (manifest saknas — session från före Fas 6;
+adress/GPS saknas i 10/10 stickprov; NEF saknar sidecar i 10/10 stickprov)
+tyder på att metadata-steget aldrig kördes klart för den här sessionen
+heller.
+
+**`/Users/fredrik/Desktop/lint/untitled folder 3`** (237 bilder): den
+RIKTIGASTE bekräftelsen av ursprungsbuggen — **64 HDR-filer kvarglömda i
+`hdr/`** (32 grupper × TIFF+JPEG), exakt det scenario som startade den här
+fasen. Adressmappen ("Lindvägen 12, Tyresö") saknar helt TITTBILDER/ÖVRIGA-
+undermappar (en äldre/annan layout, filerna ligger direkt i adressmappen) —
+237/237 saknar NEF-i-ÖVRIGA och preview-i-TITTBILDER, 124/237 saknar
+DNG-i-adressmapp (resten hittas eftersom DNG-rollen är den suffixlösa
+mappen, som här råkar vara HELA adressmappen). 109 brutna symlänkar och 816
+föräldralösa filer i `dng`/`previews` (troligen från flera olika körningar
+mot samma outputmapp med olika indata över tid). Gallringen stämde dock:
+"avvisade bilder raderade" matchade `cullAction="radera"` rent.
+
+Sammanfattning: samtliga tre skarpa körningar hittade RIKTIGA, tidigare
+oupptäckta problem i redan "klara" sessioner — vilket är precis vad
+funktionen är till för.
+
+### Vad som INTE gjordes / kända avgränsningar
+
+- Ingen automatisk reparation — verifieringen är strikt läsande, ger bara
+  rekommendationer ("Kör om steget X").
+- Metadata-/rating-kontrollerna är STICKPROV (max 10 filer), inte en
+  fullständig genomgång — dokumenterat i varje sådant fynds `detail`-text.
+- Gallringskontrollen härleder `cullAction`-läget från filernas FAKTISKA
+  tillstånd på disk (inte från appens nuvarande, live `AppSettings.shared.
+  cullAction`), eftersom en verifiering ofta körs mot en session som
+  processades med en ANNAN inställning än den som råkar gälla nu.
+- Ingen genväg i `DashboardView`s eget verktygsfält (se UI-avsnittet ovan)
+  — filen ägs av en annan agent i den här fasen.
+- DNG-symlänkars känslighet för att hela sessionsmappen flyttas/arkiveras
+  (se den skarpa körningen mot `lint/OUTPUT` ovan) är ett fynd, inte något
+  som fixats i den här fasen — det ligger i `exportToAddressFolders`
+  (`PipelineRunner+SortFolders.swift`), utanför uppdragets "nya filer"-arena.
