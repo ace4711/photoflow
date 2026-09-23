@@ -30,8 +30,9 @@ class AppSettings: ObservableObject {
     /// själva OS-behörigheten begärs separat, första gången pipeline-läget
     /// används (se `NotificationService.requestAuthorizationIfNeeded`).
     @AppStorage("notificationsEnabled") var notificationsEnabled: Bool = true
-    @AppStorage("previewQuality") var previewQuality: Int = 85
-    @AppStorage("previewMaxDimension") var previewMaxDimension: Int = 2400
+    // previewQuality/previewMaxDimension är borttagna: preview-steget kopierar
+    // kamerans inbäddade JPEG rakt av (exiftool -JpgFromRaw), utan omkodning,
+    // så inställningarna lästes aldrig av någon kod.
     @AppStorage("maxTimeGap") var maxTimeGap: Int = 15
     @AppStorage("minBracketSize") var minBracketSize: Int = 3
     @AppStorage("hdrMergeEnabled") var hdrMergeEnabled: Bool = true

@@ -76,7 +76,7 @@ extension DashboardStep {
                     "Ingen egen skalning/komprimering — det är exakt kamerans inbäddade preview, redan rätt roterad.",
                     "Hoppar över per fil: en previews/<namn>.jpg finns redan för den NEF-filen.",
                     "Fingerprintas (filnamn+storlek) i sessionsmanifestet mest för spårbarhet — själva kontrollen är per fil.",
-                    "Inga inställningar styr innehållet: \"Previews\"-sektionen (JPEG-kvalitet/Max dimension) används inte av det här steget."
+                    "Inga inställningar styr steget — kvalitet och storlek bestäms av kameran, inte av appen."
                 ],
                 settingsTab: nil
             )

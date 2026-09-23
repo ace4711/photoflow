@@ -304,27 +304,10 @@ struct PipelineTab: View {
                     .foregroundColor(.secondary)
             }
 
-            Section("Previews") {
-                HStack {
-                    Text("JPEG-kvalitet")
-                    Spacer()
-                    TextField("", value: $settings.previewQuality, format: .number)
-                        .frame(width: 60)
-                        .textFieldStyle(.roundedBorder)
-                    Text("(1-100)")
-                        .foregroundColor(.secondary)
-                }
-
-                HStack {
-                    Text("Max dimension")
-                    Spacer()
-                    TextField("", value: $settings.previewMaxDimension, format: .number)
-                        .frame(width: 60)
-                        .textFieldStyle(.roundedBorder)
-                    Text("pixlar")
-                        .foregroundColor(.secondary)
-                }
-            }
+            // "Previews"-sektionen (JPEG-kvalitet, Max dimension) är borttagen:
+            // preview-steget extraherar kamerans inbäddade JPEG med exiftool
+            // rakt av, utan omkodning eller skalning, så reglagen läste aldrig
+            // av någon kod. De såg ut att styra kvaliteten men gjorde inget.
         }
         .formStyle(.grouped)
     }
