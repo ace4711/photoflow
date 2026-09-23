@@ -4114,3 +4114,183 @@ riktiga preferensen omedelbart, ingen OK/Apply-knapp.
 - Testade inte `LrDialogs.confirm`s exakta knapptext-till-returvärde-mappning
   mot en riktig Lightroom-instans (antar `"ok"`/`"cancel"` baserat på
   etablerad SDK-kunskap, inte hittat i de tillgängliga bytekod-filerna).
+
+## Prestanda vid stora sessioner
+
+Uppgift: gallringen kändes seg i skarpa sessioner på upp till ~2100 bilder.
+Mätt först (mot 2000 syntetiska `PhotoItem` i ett `PipelineState`), sedan
+åtgärdat det mätningen faktiskt pekade ut, sedan mätt igen.
+
+### Mätmetod
+
+Två mätvägar, av samma anledning som texten längre upp om samtidiga agenter:
+`PhotoFlow.xcodeproj`/`project.yml` ägs och regenererades aktivt av
+photoflow-cli-arbetet under den här fasen, så nya testfiler kunde inte läggas
+till (kräver `xcodegen generate`, förbjudet enligt agent-rules.md). I stället:
+
+1. Ett fristående mätprogram (`swift perf_bench.swift`, ingen Xcode-build)
+   som modellerar EXAKT samma algoritmer som `PipelineState` hade FÖRE denna
+   fas — didSet som alltid bygger om id→index-dictionaryt, `setDecision` som
+   skriver `accepted`/`rejected` som två separata muteringar, osv. — jämfört
+   sida vid sida med samma algoritmer EFTER fixen, i samma körning.
+2. Riktiga mätningar mot den FAKTISKA `PipelineState`-koden, tillagda som
+   nya `@Test`-metoder i den redan existerande `PhotoFlow/Tests/
+   PipelineStateCullDecisionsTests.swift` (ingen ny fil behövdes). Körda dels
+   mot den oförändrade koden (tillfälligt `git checkout` av mina egna
+   ändringar, sedan återställda från en backup i scratchpad) för äkta
+   "före"-siffror, dels mot den optimerade koden för "efter".
+
+### Före → efter (2000 bilder)
+
+| Mätpunkt | Före | Efter | Faktor |
+|---|---|---|---|
+| `setDecision` × 2000 (riktig `PipelineState`, hela sessionen gallrad) | **4.06 s** | **0.20 s** | ~20× |
+| `setDecision` × 2000 (isolerad algoritmmodell, scratchpad) | 2.52 s | 0.073 s | ~35× |
+| De tre räknarna (`allPhotos.filter{}.count` ×3) × 200 omritningar | 0.109–0.236 s | ~0.000016 s (cachad läsning) | ~7000× |
+| `saveCullDecisions()` × 50 snabba anrop (riktig funktion, inkl. `syncManifest()`) | **0.161 s** | **0.07–0.12 s** | ~1.5–2× |
+| `saveCullDecisions()` × 50 (isolerad: bara dict-bygge+JSON+skrivning, ingen `syncManifest`) | 0.046 s | 0.00088 s (1 skrivning i stället för 50) | ~50× |
+| Filmremsans filter+sortering (`filteredIndexedPhotos`-motsvarighet) | 0.007 s | 0.007 s (oförändrad — se nedan) | 1× |
+
+Siffrorna för `setDecision`/räknarna är de som motiverade ändringen: **root
+cause var att `allPhotos`s `didSet` byggde om HELA `photoIndexByID`-
+dictionaryt (O(n)) på varje enskild fältmutation** — och `setDecision` gjorde
+det två gånger per anrop (en för `accepted`, en för `rejected`). Över en hel
+2000-bilderssession (ett anrop per accept/avvisa) blev det en O(n²)-kostnad:
+uppmätt till 4.06 s för att gallra alla 2000 bilder i följd, bara i
+själva bokföringen — inte bildladdning, inte rendering.
+
+`saveCullDecisions()`s förbättring är ärligt sett måttlig i absoluta tal
+(0.161 s → ~0.1 s för 50 snabba anrop), för `syncManifest()` (som anropas
+synkront i slutet av varje `saveCullDecisions()`-anrop, oförändrat i denna
+fas) gör sina egna, session-storleks-oberoende diskskrivningar
+(`photoflow_session.json` + historikregistret) — det dominerar kostnaden vid
+N=2000 lika mycket som vid N=200. Det debouncen faktiskt tar bort är den DEL
+av kostnaden som VÄXER med sessionsstorleken (bygga+serialisera hela
+`cull_decisions.json`-ordboken) — isolerat (utan `syncManifest`) är den
+vinsten ~50×, och växer med fler bilder i sessionen. Se "Vad som INTE var
+värt att ändra" för varför `syncManifest()` själv lämnades orörd.
+
+### Vad som ändrades
+
+- **`PipelineState.allPhotos`s `didSet`**: bygger nu bara om
+  `photoIndexByID` OCH de nya cachade räknarna (`acceptedCount`/
+  `rejectedCount`/`unreviewedCount`) när `allPhotos.count` faktiskt ändras
+  (bulk-laddning av en session, `reset()`, `clearAllCullDecisions()`) — inte
+  när ett enskilt beslut ändras på en redan existerande bild. Verifierat
+  (grep) att ingen annan kod omordnar `allPhotos` på plats med oförändrat
+  antal; dokumenterat tydligt i koden som en invariant framtida ändringar
+  måste respektera.
+- **`setDecision`**: skriver `accepted`+`rejected` i EN array-tilldelning
+  (i stället för två) och uppdaterar `acceptedCount`/`rejectedCount`
+  inkrementellt (+1/-1), inklusive en no-op-guard för upprepade identiska
+  beslut.
+- **Cachade räknare** (`PipelineState.acceptedCount`/`rejectedCount`/
+  `unreviewedCount`) ersätter `allPhotos.filter { $0.accepted }.count`-
+  mönstret i `PreviewCullView` (header + fullskärm), `DashboardView`s
+  granskningsläge, `StepCardView` (via `CullStats`, se nedan) och
+  `syncManifest()`s `cullSummary`-uträkning.
+- **`StepCardView`**: tar nu emot en `CullStats?` (tre färdiguträknade
+  `Int` + en `hasUnreviewed`-bool) i stället för hela `pipeline.allPhotos`
+  (upp till ~2100 `PhotoItem`) — kortet gjorde tre-fyra `.filter`/`.contains`-
+  genomlöpningar i `body` tidigare, körda vid VARJE dashboard-omritning
+  (dvs. vid varje enskilt gallringsbeslut, eftersom `allPhotos` är
+  `@Published` och SwiftUI inte finfördelar `objectWillChange` per fält).
+- **`clearAllCullDecisions()`** (ny metod på `PipelineState`): en enda
+  array-tilldelning (`allPhotos.map { ... }`) i stället för
+  `DashboardView`s gamla per-index-loop, och nollställer de cachade
+  räknarna direkt samt avbryter en ev. väntande debounced skrivning (annars
+  hade den kunnat skriva tillbaka de precis raderade besluten till disk).
+- **`saveCullDecisions()`**: debouncar (1 s) den faktiska
+  `cull_decisions.json`-skrivningen och kör bygget/serialiseringen/
+  skrivningen på en `Task.detached`-bakgrundstask. Garantin att inget beslut
+  går förlorat kommer INTE från att timern hinner löpa ut, utan från en ny
+  **`flushCullDecisions()`** (synkron, oavkortad) som anropas vid:
+  `reset()` (pipelinen laddar om en session), `.onDisappear` i
+  `PreviewCullView`/`BracketReviewView` (vyn stängs), innan
+  `finishCullingAction()` körs i `performFinishCulling()` ("gallring klar"),
+  och `NSApplication.willTerminateNotification` (appen avslutas) — registrerad
+  i `PipelineState.init()` med `queue: .main` och en icke-isolerad
+  ytterklosur som hoppar till MainActor inuti, enligt Swift 6-mönstret i
+  agent-rules.md.
+- **Filmremsan i `PreviewCullView`**: `HStack` → `LazyHStack`. Med upp till
+  ~2100 bilder byggde en vanlig `HStack` alla miniatyrkort direkt, i stället
+  för bara de synliga ± en liten buffert. Förhämtningen från Fas 5 (±3
+  grannar) är indexbaserad och helt fristående från SwiftUIs vy-livscykel,
+  så den fortsätter fungera oförändrat.
+- `acceptPhoto()`/`rejectPhoto()` i `PreviewCullView` går nu via
+  `setDecision(photoID:accepted:rejected:)` i stället för att mutera
+  `pipeline.allPhotos[index]` direkt — annars hade de cachade räknarna inte
+  uppdaterats (samma bugklass som `clearAllReviewData` hade innan den gick
+  via `clearAllCullDecisions()`).
+
+### Vad som INTE var värt att ändra
+
+- **`BracketReviewView`s räknarmönster**: `selectedCount(in: group)` räknar
+  bara bilderna i EN bracket-/singelgrupp (typiskt 1–8 bilder), inte hela
+  `allPhotos`. Ingen O(n)-kostnad att åtgärda där.
+- **`ImageCache`s `totalCostLimit`**: kontrollerad mot en 2000-bilders
+  session. Miniatyrnivån (128 MB/4000 poster, ~200 px) räcker till över 1000
+  samtidiga miniatyrer även om varje enskild session bara behöver ett par
+  dussin (synliga + ±3 förhämtade) samtidigt tack vare `LazyHStack`.
+  Fullstorleksnivån (512 MB/200 poster, upp till 2400 px) rymmer omkring 30+
+  bilder samtidigt mot ett faktiskt behov på ~7 (nuvarande bild + ±3
+  grannar). Ingen ändring gjord — gränserna var redan rimliga, att sänka
+  eller höja dem hade inte synts i en riktig session.
+- **Filmremsans filter+sortering** (`filteredIndexedPhotos`): 0.007 s för
+  2000 bilder, både före och efter — algoritmen (ett `filter` + en
+  `sorted`) ändrades inte, bara SwiftUI-renderingen av resultatet
+  (HStack → LazyHStack). Att t.ex. cacha den sorterade listan hade lagt
+  till komplexitet för en kostnad som redan är omärkbar.
+- **`syncManifest()`s egna diskskrivningar** (`photoflow_session.json` +
+  `SessionHistoryStore`): fortfarande synkrona och oförändrat frekventa
+  (anropas fortfarande från varje `saveCullDecisions()`). De skalar INTE med
+  sessionsstorleken (manifestet är litet oavsett 200 eller 2000 bilder), så
+  de var inte vad "seg vid stora sessioner" faktiskt syftade på — att
+  debounca även dem hade brett ut ändringen till kod som `updateStep`/
+  `completeStep` också beror på, med större risk för regressioner i
+  sessionshistorik/dashboard-status, för en vinst som inte växer med
+  bildantalet. Lämnades orört.
+- **`PhotoFlowApp.swift`/`Intents/SessionStatusIntent.swift`**: har också
+  ett `allPhotos.filter { !$0.accepted && !$0.rejected }.count`-mönster
+  (menyradsetiketten resp. ett App Intent-statussvar). Låg frekvens (inte
+  per tangenttryck under gallring) och utanför den här fasens arena
+  (`Views`/`Models`/`ImageCache`) — sett men inte ändrat.
+- **`PreviewCullView.duplicateGroup(for:)`** (`allPhotos.filter {
+  $0.duplicateGroupID == gid }`): körs en gång per bildbyte (inte per
+  filmremsetumnagel) för att visa dubblett-/skärpevarningar för AKTUELLA
+  bilden — en enda O(n)-genomlöpning per navigering, samma storleksordning
+  som den gamla treräknarkostnaden isolerat (~0.1–0.2 ms för 2000 bilder).
+  Märkbart inte, och att cacha en `duplicateGroupID -> [PhotoItem]`-karta
+  hade krävt samma typ av didSet-bokföring som räknarna redan fick — inte
+  motiverat av mätningen.
+
+### Vad användaren bör känna av i praktiken
+
+- Att bläddra/gallra snabbt genom en 2000+-bilderssession ska kännas
+  studsfritt igen — den gamla O(n²)-bokföringen gjorde varje efterföljande
+  accept/avvisa något dyrare än det förra under en lång session (märkbart
+  runt några hundra bilder in, tydligt eftersläpande mot slutet av 2000).
+- Filmremsan scrollar/byggs snabbare vid uppstart av gallringsvyn med en
+  stor session (LazyHStack).
+- Gallringsbeslut sparas fortfarande "direkt" ur användarens perspektiv
+  (debounce på 1 s är omärkbart vid normal användning) men skriver disken
+  betydligt mer sällan under en snabb serie tangenttryck — och är
+  ALDRIG i riskzonen för att gå förlorade: de skrivs garanterat vid
+  gallring klar, när granskningsvyn stängs, när en session laddas om, och
+  när appen avslutas.
+
+### Tester
+
+Nya `@Test`-metoder i `PhotoFlow/Tests/PipelineStateCullDecisionsTests.swift`
+(ingen ny fil — se mätmetod-avsnittet för varför): räknarna verifieras mot
+`allPhotos` efter enskilda beslut, en massändring (motsvarande "Föreslå
+gallring"), ångra, `clearAllCullDecisions()` och en simulerad
+sessionsomladdning (`reset()` + ny `allPhotos`-tilldelning); debounce-
+garantin testas explicit (`flushCullDecisions()` innan timern hinner löpa
+ut, och att `clearAllCullDecisions()` avbryter en väntande skrivning så den
+inte kan återuppstå på disk). Plus fyra `PERF`-tester som körs som vanliga
+tester (generösa tidsgränser, bara för att fånga en framtida
+O(n²)-regression) men vars utskrivna siffror är de som redovisas ovan.
+Full svit: 236 gröna tester efter denna fas (var 216 vid fasens start,
+plus tester från samtidigt pågående arbete i samma testkörning).
+
