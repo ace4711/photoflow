@@ -18,7 +18,12 @@ enum DashboardStep: Int, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .watchSources: return "Bevaka kallor"
-        case .copyToInput: return "Kopiera filer"
+        // "Hämta" i stället för "Kopiera": steget kopierar bara i SD-korts-
+        // flödet (rsync i RunnerWrapper.copyFromSDCardAndStart). Väljer man
+        // mapp manuellt räknar det bara filerna som redan ligger där.
+        // (Enum-caset och manifestKey heter fortfarande copyToInput, så
+        // sparade sessioner fortsätter matcha.)
+        case .copyToInput: return "Hämta filer"
         case .convertToDNG: return "Konvertera DNG"
         case .generatePreviews: return "Skapa previews"
         case .findCalendarInfo: return "Hitta bokning"

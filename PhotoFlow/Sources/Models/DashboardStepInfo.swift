@@ -45,12 +45,14 @@ extension DashboardStep {
 
         case .copyToInput:
             return StepInfo(
-                summary: "Räknar de NEF-filer som redan ligger i vald inputmapp — själva \"kopieringen\" är att peka ut mappen.",
+                summary: "Hämtar bilderna till inputmappen: kopierar från SD-kort när bevakningen hittar ett, annars räknar det bara filerna som redan ligger där.",
                 details: [
-                    "Gör ingen egen filkopiering: användaren (eller Bevaka källor) har redan lagt filerna i inputmappen.",
+                    "Från SD-kort: rsync kopierar .NEF från kortets DCIM till inputmappen, med löpande antal i kortet.",
+                    "Manuellt vald mapp: ingen kopiering sker — filerna ligger redan på plats och räknas bara.",
                     "Läser: alla .NEF-filer i inputmappen, rekursivt (utom outputmappen och interna pipeline-mappar).",
-                    "Markeras klar direkt med antalet hittade NEF-filer — inga egna hoppa-över-regler.",
-                    "Styrs av: Mappar → Inputmapp (NEF-filer) / Outputmapp (bearbetade filer)."
+                    "Markeras klar med antalet hittade NEF-filer — inga egna hoppa-över-regler.",
+                    "Styrs av: Mappar → Inputmapp (NEF-filer) / Outputmapp (bearbetade filer).",
+                    "Fel: rsync avslutas med felkod → steget markeras rött och pipelinen startar inte."
                 ],
                 settingsTab: 0
             )
