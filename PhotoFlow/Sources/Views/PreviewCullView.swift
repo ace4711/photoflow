@@ -113,9 +113,13 @@ struct PreviewCullView: View {
         return pipeline.allPhotos[pipeline.currentCullIndex]
     }
 
-    var acceptedCount: Int { pipeline.allPhotos.filter { $0.accepted }.count }
-    var rejectedCount: Int { pipeline.allPhotos.filter { $0.rejected }.count }
-    var unreviewedCount: Int { pipeline.allPhotos.filter { !$0.accepted && !$0.rejected }.count }
+    // Fas 10 (prestanda vid stora sessioner): läser nu PipelineState's cachade
+    // O(1)-räknare i stället för tre `allPhotos.filter { ... }.count`
+    // genomlöpningar — de kördes tidigare på VARJE omritning (header + i
+    // fullskärm), dvs. vid varje enskilt accept/avvisa i en 2000-bilderssession.
+    var acceptedCount: Int { pipeline.acceptedCount }
+    var rejectedCount: Int { pipeline.rejectedCount }
+    var unreviewedCount: Int { pipeline.unreviewedCount }
 
     var body: some View {
         ZStack {
@@ -182,6 +186,14 @@ struct PreviewCullView: View {
         .overlay(alignment: .top) {
             suggestionBanner
                 .padding(.top, 12)
+        }
+        .onDisappear {
+            // Fas 10: garanterar att gallringsbeslut alltid finns på disk även
+            // om vyn stängs (tillbaka till dashboarden) mitt i den debouncade
+            // 1s-fönstret från `saveCullDecisions()` — se
+            // `PipelineState.flushCullDecisions()`s doc-kommentar för hela
+            // listan av garantitillfällen.
+            pipeline.flushCullDecisions()
         }
         .confirmationDialog(
             "Radera \(rejectedCount) gallrade bilder permanent?",
@@ -513,7 +525,15 @@ struct PreviewCullView: View {
     private var filmstrip: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
+                // Fas 10: `LazyHStack` i stället för `HStack` — med upp till
+                // ~2100 bilder i en session byggde en vanlig `HStack` alla
+                // miniatyrkort direkt (även de långt utanför synligt område),
+                // i stället för bara de faktiskt synliga ± en liten buffert.
+                // Förhämtningen (±3 grannar, se `prefetchNeighbors` nedan) är
+                // helt fristående från SwiftUIs vy-livscykel (den jobbar direkt
+                // mot `ImageCache` via index, inte via `onAppear` på
+                // miniatyrvyerna) och påverkas alltså inte av bytet.
+                LazyHStack(spacing: 6) {
                     ForEach(filteredIndexedPhotos, id: \.index) { entry in
                         filmstripThumb(photo: entry.photo, index: entry.index)
                             .id(entry.index)
@@ -927,8 +947,10 @@ struct PreviewCullView: View {
         guard pipeline.currentCullIndex < pipeline.allPhotos.count else { return }
         let photo = pipeline.allPhotos[pipeline.currentCullIndex]
         pushUndo(UndoAction(entries: [(photo.id, photo.accepted, photo.rejected)]))
-        pipeline.allPhotos[pipeline.currentCullIndex].accepted = true
-        pipeline.allPhotos[pipeline.currentCullIndex].rejected = false
+        // Fas 10: går via `setDecision` (i stället för att mutera `allPhotos`
+        // direkt via index) så PipelineState's cachade `acceptedCount`/
+        // `rejectedCount` uppdateras inkrementellt — se `setDecision`s doc.
+        pipeline.setDecision(photoID: photo.id, accepted: true, rejected: false)
         audio.playAccept()
         pipeline.saveCullDecisions()
         navigate(1)
@@ -938,8 +960,7 @@ struct PreviewCullView: View {
         guard pipeline.currentCullIndex < pipeline.allPhotos.count else { return }
         let photo = pipeline.allPhotos[pipeline.currentCullIndex]
         pushUndo(UndoAction(entries: [(photo.id, photo.accepted, photo.rejected)]))
-        pipeline.allPhotos[pipeline.currentCullIndex].accepted = false
-        pipeline.allPhotos[pipeline.currentCullIndex].rejected = true
+        pipeline.setDecision(photoID: photo.id, accepted: false, rejected: true)
         audio.playReject()
         pipeline.saveCullDecisions()
         navigate(1)
@@ -957,8 +978,15 @@ struct PreviewCullView: View {
     }
 
     private func performFinishCulling() {
-        let accepted = pipeline.allPhotos.filter { $0.accepted }.count
-        let rejected = pipeline.allPhotos.filter { $0.rejected }.count
+        // Fas 10: garanterar att cull_decisions.json speglar det ALLRA sista
+        // beslutet innan finishCullingAction() (radera/flytta/skriv XMP) och
+        // "Gallring klar"-statusen kör — annars skulle den sista snabba
+        // accept/avvisa-åtgärden kunna hamna innanför den debouncade 1s-
+        // fönstret från `saveCullDecisions()` och riskera att gå förlorad om
+        // appen stängs direkt efter.
+        pipeline.flushCullDecisions()
+        let accepted = pipeline.acceptedCount
+        let rejected = pipeline.rejectedCount
 
         pipeline.statusMessage = switch AppSettings.shared.cullAction {
         case "radera": "Tar bort \(rejected) gallrade filer..."

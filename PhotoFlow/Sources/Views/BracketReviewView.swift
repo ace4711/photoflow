@@ -78,6 +78,11 @@ struct BracketReviewView: View {
             )
             prefetchCurrentGroup()
         }
+        .onDisappear {
+            // Fas 10: samma garanti som PreviewCullView — se
+            // `PipelineState.flushCullDecisions()`s doc-kommentar.
+            pipeline.flushCullDecisions()
+        }
         .onChange(of: selectedGroupIndex) { _, _ in prefetchCurrentGroup() }
         .focusable()
         .focused($isFocused)
