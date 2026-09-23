@@ -162,30 +162,28 @@ extension PipelineRunner {
             let extrasDestDir = AddressFolderLayout.extrasDir(in: outputDir, folderName: folderName)
             var linkedFiles = 0
 
-            // Symlink preview JPEG → TITTBILDER
+            // Symlink preview JPEG → TITTBILDER. Relative destination (target
+            // lies inside outputDir/previews) — see `FileSafety.createLink`.
             if let previewURL = photo.previewURL, fm.fileExists(atPath: previewURL.path) {
                 let dest = previewDestDir.appendingPathComponent(previewURL.lastPathComponent)
-                if !fm.fileExists(atPath: dest.path) {
-                    try? fm.createSymbolicLink(at: dest, withDestinationURL: previewURL)
-                }
+                try? FileSafety.createLink(at: dest, to: previewURL, outputDir: outputDir)
                 linkedFiles += 1
             }
 
-            // Symlink DNG → address folder
+            // Symlink DNG → address folder. Relative destination (target lies
+            // inside outputDir/dng).
             if let dngURL = photo.dngURL, fm.fileExists(atPath: dngURL.path) {
                 let dest = dngDestDir.appendingPathComponent(dngURL.lastPathComponent)
-                if !fm.fileExists(atPath: dest.path) {
-                    try? fm.createSymbolicLink(at: dest, withDestinationURL: dngURL)
-                }
+                try? FileSafety.createLink(at: dest, to: dngURL, outputDir: outputDir)
                 linkedFiles += 1
             }
 
-            // Symlink original NEF → ÖVRIGA
+            // Symlink original NEF → ÖVRIGA. Absolute destination (the NEF
+            // lives on the user's input folder/SD card, outside outputDir —
+            // a relative path there would just be more fragile).
             if fm.fileExists(atPath: photo.nefURL.path) {
                 let dest = extrasDestDir.appendingPathComponent(photo.nefURL.lastPathComponent)
-                if !fm.fileExists(atPath: dest.path) {
-                    try? fm.createSymbolicLink(at: dest, withDestinationURL: photo.nefURL)
-                }
+                try? FileSafety.createLink(at: dest, to: photo.nefURL, outputDir: outputDir)
                 linkedFiles += 1
             }
 
@@ -330,7 +328,13 @@ extension PipelineRunner {
     /// recursively so subfolders under the input directory work) and DNG (from
     /// the `dng/` staging folder) files. Matches the old embedded Python
     /// organize script's behavior exactly, minus that bug.
-    nonisolated static func organizeGroupsIntoFolders(groups: [BracketGroupResult], nefLookup: [String: URL], dngDir: URL, groupsDir: URL) {
+    ///
+    /// `outputDir` is the session's output folder (parent of `dngDir`/
+    /// `groupsDir`) — passed through to `FileSafety.createLink` so the DNG
+    /// symlink (always inside `outputDir`) gets a relative destination while
+    /// the NEF symlink (on the input folder/SD card, outside `outputDir`)
+    /// keeps an absolute one. See `FileSafety.createLink`'s doc comment.
+    nonisolated static func organizeGroupsIntoFolders(groups: [BracketGroupResult], nefLookup: [String: URL], dngDir: URL, groupsDir: URL, outputDir: URL) {
         let fm = FileManager.default
         for group in groups {
             let folderName = group.isBracket
@@ -342,16 +346,14 @@ extension PipelineRunner {
             for filename in group.files {
                 if let nefURL = nefLookup[filename] {
                     let dst = groupFolder.appendingPathComponent(filename)
-                    if !fm.fileExists(atPath: dst.path) {
-                        try? fm.createSymbolicLink(at: dst, withDestinationURL: nefURL)
-                    }
+                    try? FileSafety.createLink(at: dst, to: nefURL, outputDir: outputDir)
                 }
 
                 let baseName = filename.contains(".") ? String(filename[..<filename.lastIndex(of: ".")!]) : filename
                 let dngSrc = dngDir.appendingPathComponent("\(baseName).dng")
                 let dngDst = groupFolder.appendingPathComponent("\(baseName).dng")
-                if fm.fileExists(atPath: dngSrc.path) && !fm.fileExists(atPath: dngDst.path) {
-                    try? fm.createSymbolicLink(at: dngDst, withDestinationURL: dngSrc)
+                if fm.fileExists(atPath: dngSrc.path) {
+                    try? FileSafety.createLink(at: dngDst, to: dngSrc, outputDir: outputDir)
                 }
             }
         }

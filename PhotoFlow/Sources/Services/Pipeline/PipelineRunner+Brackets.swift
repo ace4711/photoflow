@@ -125,7 +125,8 @@ extension PipelineRunner {
             groups: analysis.groups,
             nefLookup: nefLookup,
             dngDir: outputDir.appendingPathComponent("dng"),
-            groupsDir: groupsDir
+            groupsDir: groupsDir,
+            outputDir: outputDir
         )
         pipelineLog("  bracket: grupperna organiserade i \(groupsDir.lastPathComponent)/")
 

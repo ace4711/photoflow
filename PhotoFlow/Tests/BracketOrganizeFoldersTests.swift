@@ -32,14 +32,22 @@ struct BracketOrganizeFoldersTests {
         )
     }
 
-    @Test("Bracket-mapp får rätt namn och innehåller symlänkar till NEF och DNG i en undermapp")
+    @Test("Bracket-mapp får rätt namn och innehåller symlänkar till NEF (absolut) och DNG (relativ) i en undermapp")
     func bracketFolder_symlinksNEFFromSubfolder() throws {
+        // NEF lives on a separate "input"/SD-card root, entirely OUTSIDE the
+        // output tree — exactly like a real session, and the case that
+        // determines the NEF symlink must stay absolute (see
+        // `FileSafety.createLink`). `root` below plays the OUTPUT tree.
+        let inputRoot = makeTempDir()
         let root = makeTempDir()
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer {
+            try? FileManager.default.removeItem(at: inputRoot)
+            try? FileManager.default.removeItem(at: root)
+        }
 
         // NEF lives under a subfolder, like a real SD card's DCIM layout —
         // this is exactly the case the old `source_dir/filename` path broke on.
-        let subfolder = root.appendingPathComponent("101NCZ_8")
+        let subfolder = inputRoot.appendingPathComponent("101NCZ_8")
         try FileManager.default.createDirectory(at: subfolder, withIntermediateDirectories: true)
         let nefURL = subfolder.appendingPathComponent("DSC_1807.NEF")
         try Data("fake nef".utf8).write(to: nefURL)
@@ -55,7 +63,7 @@ struct BracketOrganizeFoldersTests {
         let group = makeGroup(id: 1, isBracket: true, files: ["DSC_1807.NEF"])
         PipelineRunner.organizeGroupsIntoFolders(
             groups: [group], nefLookup: [nefURL.lastPathComponent: nefURL],
-            dngDir: dngDir, groupsDir: groupsDir
+            dngDir: dngDir, groupsDir: groupsDir, outputDir: root
         )
 
         let expectedFolder = groupsDir.appendingPathComponent("bracket_001_HDR_1exp")
@@ -63,10 +71,14 @@ struct BracketOrganizeFoldersTests {
 
         let nefLink = expectedFolder.appendingPathComponent("DSC_1807.NEF")
         let dngLink = expectedFolder.appendingPathComponent("DSC_1807.dng")
+        // `fileExists` follows the symlink — both must resolve to a real file.
         #expect(FileManager.default.fileExists(atPath: nefLink.path))
         #expect(FileManager.default.fileExists(atPath: dngLink.path))
+        // NEF target is outside `root` (the output tree) → absolute destination.
         #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: nefLink.path)) == nefURL.path)
-        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: dngLink.path)) == dngURL.path)
+        // DNG target is inside `root` → relative destination, so the group
+        // folder stays valid if `root` is moved/archived as a whole.
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: dngLink.path)) == "../../dng/DSC_1807.dng")
     }
 
     @Test("Single-mapp får rätt namn (single_NNN_Nimg)")
@@ -81,7 +93,7 @@ struct BracketOrganizeFoldersTests {
 
         let group = makeGroup(id: 7, isBracket: false, files: ["DSC_0001.NEF", "DSC_0002.NEF"])
         PipelineRunner.organizeGroupsIntoFolders(
-            groups: [group], nefLookup: [:], dngDir: dngDir, groupsDir: groupsDir
+            groups: [group], nefLookup: [:], dngDir: dngDir, groupsDir: groupsDir, outputDir: root
         )
 
         let expectedFolder = groupsDir.appendingPathComponent("single_007_2img")
@@ -100,7 +112,7 @@ struct BracketOrganizeFoldersTests {
 
         let group = makeGroup(id: 2, isBracket: false, files: ["DSC_9999.NEF"])
         PipelineRunner.organizeGroupsIntoFolders(
-            groups: [group], nefLookup: [:], dngDir: dngDir, groupsDir: groupsDir
+            groups: [group], nefLookup: [:], dngDir: dngDir, groupsDir: groupsDir, outputDir: root
         )
 
         let expectedFolder = groupsDir.appendingPathComponent("single_002_1img")

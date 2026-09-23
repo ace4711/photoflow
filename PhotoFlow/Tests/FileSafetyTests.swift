@@ -88,4 +88,115 @@ struct FileSafetyTests {
         #expect(FileSafety.isCullManaged(sidecar))
         #expect(!FileSafety.isCullManaged(foreign))
     }
+
+    // MARK: - createLink
+
+    @Test("Mål inuti outputDir får en relativ länk som fortfarande löser rätt EFTER att hela outputmappen flyttats")
+    func createLink_targetInsideOutputDir_survivesMovingWholeOutputFolder() throws {
+        // Bygger en hel "session" (adressmapp + dng-staging) under en
+        // parent-mapp, precis som `exportToAddressFolders` gör, sedan flyttar
+        // HELA parent-mappen — exakt scenariot från den skarpa körningen mot
+        // `/Users/fredrik/Desktop/lint/OUTPUT` (se FORBATTRINGAR.md).
+        let parent = tempDir()
+        let output = parent.appendingPathComponent("OUTPUT")
+        let dngDir = output.appendingPathComponent("dng")
+        let addressDir = output.appendingPathComponent("Testgatan 1")
+        try FileManager.default.createDirectory(at: dngDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: addressDir, withIntermediateDirectories: true)
+
+        let dngFile = dngDir.appendingPathComponent("DSC_0001.dng")
+        FileManager.default.createFile(atPath: dngFile.path, contents: Data("dng".utf8))
+        let link = addressDir.appendingPathComponent("DSC_0001.dng")
+
+        try FileSafety.createLink(at: link, to: dngFile, outputDir: output)
+
+        let destination = try #require(try? FileManager.default.destinationOfSymbolicLink(atPath: link.path))
+        #expect(!destination.hasPrefix("/"), "målet ligger inuti outputDir — länken ska vara relativ, inte absolut")
+        #expect(destination == "../dng/DSC_0001.dng")
+
+        // Flytta HELA outputmappen (och därmed dng/ och adressmappen
+        // tillsammans) till en ny plats.
+        let movedOutput = parent.appendingPathComponent("OUTPUT-arkiverad")
+        try FileManager.default.moveItem(at: output, to: movedOutput)
+
+        let movedLink = movedOutput.appendingPathComponent("Testgatan 1/DSC_0001.dng")
+        #expect(FileManager.default.fileExists(atPath: movedLink.path), "länken ska fortfarande peka på rätt fil efter flytten")
+        let resolvedContent = try Data(contentsOf: movedLink)
+        #expect(resolvedContent == Data("dng".utf8))
+    }
+
+    @Test("Mål utanför outputDir (original-NEF på SD-kortet) får en absolut länk")
+    func createLink_targetOutsideOutputDir_getsAbsoluteLink() throws {
+        let output = tempDir()
+        let sdCard = FileManager.default.temporaryDirectory.appendingPathComponent("FileSafetyTests-sdcard-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: sdCard, withIntermediateDirectories: true)
+        let nefFile = sdCard.appendingPathComponent("DSC_0001.NEF")
+        FileManager.default.createFile(atPath: nefFile.path, contents: Data("nef".utf8))
+
+        let extrasDir = output.appendingPathComponent("Testgatan 1 ÖVRIGA")
+        try FileManager.default.createDirectory(at: extrasDir, withIntermediateDirectories: true)
+        let link = extrasDir.appendingPathComponent("DSC_0001.NEF")
+
+        try FileSafety.createLink(at: link, to: nefFile, outputDir: output)
+
+        let destination = try #require(try? FileManager.default.destinationOfSymbolicLink(atPath: link.path))
+        #expect(destination == nefFile.standardizedFileURL.path)
+    }
+
+    @Test("createLink är idempotent: att kalla den två gånger med samma mål ändrar ingenting")
+    func createLink_isIdempotent() throws {
+        let output = tempDir()
+        let dngDir = output.appendingPathComponent("dng")
+        try FileManager.default.createDirectory(at: dngDir, withIntermediateDirectories: true)
+        let dngFile = dngDir.appendingPathComponent("DSC_0001.dng")
+        FileManager.default.createFile(atPath: dngFile.path, contents: Data("dng".utf8))
+        let addressDir = output.appendingPathComponent("Testgatan 1")
+        try FileManager.default.createDirectory(at: addressDir, withIntermediateDirectories: true)
+        let link = addressDir.appendingPathComponent("DSC_0001.dng")
+
+        try FileSafety.createLink(at: link, to: dngFile, outputDir: output)
+        // Andra anropet ska inte kasta (t.ex. "file already exists") eller
+        // ändra länken.
+        try FileSafety.createLink(at: link, to: dngFile, outputDir: output)
+
+        let destination = try #require(try? FileManager.default.destinationOfSymbolicLink(atPath: link.path))
+        #expect(destination == "../dng/DSC_0001.dng")
+    }
+
+    @Test("assertInsideOutput godkänner både relativa och absoluta länkar som createLink skapar")
+    func assertInsideOutput_acceptsLinksCreatedByCreateLink() throws {
+        // Gallringens säkerhetsspärr kontrollerar VÄGEN till länken (var den
+        // LIGGER), inte vart den PEKAR — se `FileSafety.assertInsideOutput`s
+        // kommentar. Den kontrollen får inte sluta känna igen länkar som
+        // `createLink` skapar, oavsett om destinationen blev relativ eller
+        // absolut.
+        let output = tempDir()
+        let dngDir = output.appendingPathComponent("dng")
+        try FileManager.default.createDirectory(at: dngDir, withIntermediateDirectories: true)
+        let dngFile = dngDir.appendingPathComponent("DSC_0001.dng")
+        FileManager.default.createFile(atPath: dngFile.path, contents: Data("dng".utf8))
+
+        let sdCard = FileManager.default.temporaryDirectory.appendingPathComponent("FileSafetyTests-sdcard-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: sdCard, withIntermediateDirectories: true)
+        let nefFile = sdCard.appendingPathComponent("DSC_0001.NEF")
+        FileManager.default.createFile(atPath: nefFile.path, contents: Data("nef".utf8))
+
+        let addressDir = output.appendingPathComponent("Testgatan 1")
+        let extrasDir = output.appendingPathComponent("Testgatan 1 ÖVRIGA")
+        try FileManager.default.createDirectory(at: addressDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: extrasDir, withIntermediateDirectories: true)
+
+        let relativeLink = addressDir.appendingPathComponent("DSC_0001.dng")
+        let absoluteLink = extrasDir.appendingPathComponent("DSC_0001.NEF")
+        try FileSafety.createLink(at: relativeLink, to: dngFile, outputDir: output)
+        try FileSafety.createLink(at: absoluteLink, to: nefFile, outputDir: output)
+
+        // Bägge länkarna (vägen TILL dem, inte var de pekar) ska godkännas.
+        try FileSafety.assertInsideOutput(relativeLink, outputDir: output)
+        try FileSafety.assertInsideOutput(absoluteLink, outputDir: output)
+        #expect(FileSafety.isSymlink(relativeLink))
+        #expect(FileSafety.isSymlink(absoluteLink))
+        #expect(FileSafety.isCullManaged(relativeLink))
+        #expect(FileSafety.isCullManaged(absoluteLink))
+    }
 }
