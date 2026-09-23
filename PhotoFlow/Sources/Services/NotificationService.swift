@@ -36,8 +36,20 @@ final class NotificationService: NSObject, ObservableObject {
     /// granskningsvyn.
     var onReviewNowRequested: (() -> Void)?
 
+    /// `UNUserNotificationCenter.current()` kraschar (`NSInternalInconsistencyException:
+    /// bundleProxyForCurrentProcess is nil`) i en process som inte är en riktig
+    /// .app-bundle med `CFBundleIdentifier` — verifierat med ett fristående
+    /// Swift-skript. `photoflow-cli` (Rök-test via CLI, se FORBATTRINGAR.md) är en
+    /// sådan process: en ren körbar binär utan Info.plist. Den körs headless och
+    /// har ingen Notification Center-mottagare ändå, så systemnotiser stängs av
+    /// helt i det läget i stället för att krascha.
+    private nonisolated static var isRunningInAppBundle: Bool {
+        Bundle.main.bundleIdentifier != nil
+    }
+
     private override init() {
         super.init()
+        guard Self.isRunningInAppBundle else { return }
         UNUserNotificationCenter.current().delegate = self
         registerCategories()
     }
@@ -65,6 +77,7 @@ final class NotificationService: NSObject, ObservableObject {
     /// Begär notisbehörighet, men bara första gången per app-körning och bara
     /// när pipeline-läget faktiskt används (se klasskommentaren).
     func requestAuthorizationIfNeeded() {
+        guard Self.isRunningInAppBundle else { return }
         guard !didRequestAuthorization else { return }
         didRequestAuthorization = true
         // Blocket måste vara nonisolated: UserNotifications svarar på en
@@ -80,6 +93,7 @@ final class NotificationService: NSObject, ObservableObject {
     }
 
     private func send(title: String, body: String, folderURL: URL? = nil, actionable: Bool = false) {
+        guard Self.isRunningInAppBundle else { return }
         guard settings.notificationsEnabled else { return }
         // Lat behörighetsbegäran: det första FAKTISKA notistillfället är i
         // praktiken alltid pipelinens "nya filer hittade"-notis, dvs. första

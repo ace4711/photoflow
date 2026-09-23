@@ -167,6 +167,57 @@ targets:
     dependencies:
       - target: PhotoFlow
 
+  # Slutgranskning ("Rök-test via CLI", se FORBATTRINGAR.md): ett headless
+  # körbart mål för att köra hela pipelinen (NEF -> DNG -> previews -> HDR ->
+  # AI-taggning -> adressmappar -> metadata) utan GUI/testvärd, för att komma
+  # runt att den numera borttagna `PipelineSmokeTest` (Tests/) hängde i
+  # `Process.waitUntilExit()` under `xcodebuild test` när Adobe DNG Converter
+  # startades som barnprocess till testvärden (se FORBATTRINGAR.md,
+  # "Rök-test via CLI", för den fulla analysen och mätningarna som bevisar
+  # att `photoflow-cli` inte har samma problem).
+  #
+  # Val: återanvänder `Sources/Services` + `Sources/Models` + `Sources/Shared`
+  # rakt av via `sources` (samma filer kompileras in i BÅDA target — PhotoFlow
+  # och photoflow-cli — som två separata moduler), i stället för att bryta ut
+  # dem till ett delat ramverksmål. Ett ramverk hade krävt att i princip alla
+  # typer/medlemmar däri (PipelineRunner, PipelineState, AppSettings,
+  # BracketGroup, ~15 tjänster m.fl.) fick `internal`-åtkomst höjd till
+  # `public` för att vara synliga från ett annat modul (App-målet, som
+  # fortfarande behöver Views/Intents mot dem) — en stor spridd omskrivning
+  # för ett verktyg vars enda syfte är verifiering. Källfilsdelning har
+  # nackdelen att filerna kompileras två gånger (längre byggtid, två
+  # binärer att hålla i synk om `project.yml` glöms bort), men kräver noll
+  # ändringar i själva pipeline-koden. `Sources/Views`, `Sources/Intents` och
+  # `Sources/PhotoFlowApp.swift` (SwiftUI-appen, @main) utesluts helt —
+  # verifierat (grep) att inget i Services/Models/Shared refererar till någon
+  # typ därifrån.
+  photoflow-cli:
+    type: tool
+    platform: macOS
+    sources:
+      # DependencyManager.swift utesluts: den refererar `DependencyCheck`/
+      # `DependencyImportance`, som (lite oväntat) är definierade i
+      # `Sources/Views/SettingsView.swift` — inte en pipeline-beroende typ,
+      # bara appens "Inställningar → beroenden"-panel. Pipelinen anropar
+      # aldrig `DependencyManager` (verifierat: inga träffar utanför
+      # kommentarer i Services/Models/Shared), så den behövs inte headless.
+      - path: Sources/Services
+        excludes:
+          - "DependencyManager.swift"
+          # ImageCache.swift refererar `ImageLoader` (definierad i
+          # `Sources/Views/LocalImageView.swift`) — bara preview-cachning för
+          # UI-vyerna, aldrig anropad av pipeline-koden (Services/Models/
+          # Shared, verifierat med grep).
+          - "ImageCache.swift"
+      - Sources/Models
+      - Sources/Shared
+      - SourcesCLI
+    settings:
+      base:
+        PRODUCT_NAME: photoflow-cli
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGNING_REQUIRED: NO
+
 schemes:
   PhotoFlow:
     build:
@@ -180,5 +231,18 @@ schemes:
     build:
       targets:
         PhotoFlowField: all
+    run:
+      config: Debug
+  # Explicit (delad, incheckad) scheme i stället för att lita på Xcodes
+  # implicita "autocreated scheme" för ensamma mål — den lagras bara i
+  # xcuserdata (gitignorad, maskinlokal), så `xcodebuild -scheme
+  # photoflow-cli build` skulle annars kunna bete sig annorlunda (eller
+  # kräva att någon öppnat projektet i Xcode.app minst en gång) på en
+  # helt färsk `git clone`. Se `scripts/smoke-run.sh`, som beror på att
+  # det här schemat alltid finns.
+  photoflow-cli:
+    build:
+      targets:
+        photoflow-cli: all
     run:
       config: Debug

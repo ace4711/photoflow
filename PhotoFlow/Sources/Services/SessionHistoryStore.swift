@@ -43,8 +43,7 @@ enum SessionHistoryStore {
     /// the actual "Historik" list. `XCTestConfigurationFilePath` is set by
     /// Xcode/`xcodebuild` on the hosted test process regardless of whether
     /// the tests themselves use XCTest or Swift Testing (this project's test
-    /// target is `TEST_HOST`ed inside PhotoFlow.app either way — see
-    /// `PipelineSmokeTest.swift`'s doc comment on the same TEST_HOST setup).
+    /// target is `TEST_HOST`ed inside PhotoFlow.app either way).
     static let defaultRegistryURL: URL = {
         let dir: URL
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {

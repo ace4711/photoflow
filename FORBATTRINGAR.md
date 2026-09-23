@@ -3713,3 +3713,240 @@ skrivplats för filer): uppdatera motsvarande `StepInfo` i
 fel antal punkter, för långa rader) — inte om innehållet fortfarande stämmer
 med koden, det kräver en människa som läser igenom `StepInfo`-caset för det
 ändrade steget.
+
+## Rök-test via CLI
+
+Löser den kvarstående punkten från "Slutgranskning" Del 2: att hela
+pipelinen inte gick att köra end-to-end automatiskt eftersom
+`PipelineSmokeTest` (körd via `xcodebuild test`) hängde i
+`Process.waitUntilExit()` när Adobe DNG Converter startades som barnprocess
+till testvärden — trots att alla DNG-filer skrevs klart på disk. Lösningen:
+ett eget, headless körbart mål (`photoflow-cli`) utanför Xcodes
+testrunner/debugger-instrumentering helt och hållet.
+
+### Vad som byggdes
+
+- **`PhotoFlow/project.yml`**: nytt mål `photoflow-cli` (`type: tool`,
+  `platform: macOS`). Källkodsval — dokumenterat direkt i `project.yml` vid
+  målet: återanvänder `Sources/Services`/`Sources/Models`/`Sources/Shared`
+  RAKT AV via `sources` (kompileras in i BÅDA `PhotoFlow`- och
+  `photoflow-cli`-målen som två separata moduler) i stället för att bryta ut
+  dem till ett delat ramverksmål. Ett ramverk hade krävt att i princip alla
+  typer/medlemmar i den koden (PipelineRunner, PipelineState, AppSettings,
+  BracketGroup, ~15 tjänster m.fl.) fick sin `internal`-åtkomst höjd till
+  `public` för att vara synliga från App-målets modul (som fortfarande
+  behöver Views/Intents mot dem) — en stor spridd omskrivning för ett
+  verktyg vars enda syfte är verifiering. Källfilsdelning kostar en dubbel
+  kompileringstid och två binärer att hålla i synk om `project.yml` glöms
+  bort, men kräver noll ändringar i själva pipeline-logiken.
+  - `Sources/Views`, `Sources/Intents` och `Sources/PhotoFlowApp.swift`
+    (SwiftUI-appen, `@main`) utesluts helt — verifierat med grep att inget i
+    Services/Models/Shared refererar till någon typ därifrån.
+  - Två filer uteslöts explicit trots att de ligger i `Sources/Services/`,
+    eftersom de (lite oväntat) refererar typer definierade i en Views-fil:
+    `DependencyManager.swift` (använder `DependencyCheck`/
+    `DependencyImportance`, definierade i `SettingsView.swift` — bara
+    appens "Inställningar → beroenden"-panel, aldrig anropad av
+    pipeline-koden) och `ImageCache.swift` (använder `ImageLoader`,
+    definierad i `LocalImageView.swift` — bara UI-förhandsvisningscache,
+    aldrig anropad av pipeline-koden).
+- **`PhotoFlow/SourcesCLI/PhotoFlowCLI.swift`**: hela CLI:t, ett `@main`-
+  struct. `photoflow-cli run --input <mapp> --output <mapp> [--no-hdr]
+  [--no-calendar] [--no-ai] [--json]`. Sätter `AppSettings.shared`
+  (hdr/kalender/AI på/av per flaggorna; ljud/tal/systemnotiser och
+  SD-kortsbevakning alltid AV headless), kör den RIKTIGA
+  `PipelineRunner.startPipeline` (ingen mock), och skriver läsbar
+  statusövergång per steg till stdout medan pipelinen kör (parallell
+  poll-loop mot `PipelineState.stepStatuses` på samma `MainActor`, kopplas
+  loss vid varje `await`). Om kalendermatchning är av körs
+  `writeIPTCMetadata()` manuellt efteråt (samma sak som appens "Kör
+  om"-knapp på det steget gör) så AI-taggar ändå skrivs. Med `--json`
+  skrivs en maskinläsbar sammanfattning mellan
+  `PHOTOFLOW_CLI_JSON_SUMMARY_BEGIN`/`_END`-markörer (per steg: fas,
+  antal, sekunder; totaltid; antal skapade DNG/previews/HDR-TIFF/
+  symlänkar/XMP). Exit-kod 0 vid lyckad körning, 1 om något steg fick ett
+  fel, 2 vid felaktiga argument. Ctrl-C avbryter pipelinen snyggt via
+  `runner.cancel()` (samma väg som appens "Avbryt"-knapp).
+  `UserDefaults.standard` för en obundlad binär utan `CFBundleIdentifier`
+  hamnar i en egen domän (`photoflow-cli`, verifierat med `defaults
+  domains`) — helt separat från appens `com.photoflow.app`, så en
+  CLI-körning kan aldrig råka ändra användarens riktiga inställningar.
+- **`Sources/Services/NotificationService.swift`**: `UNUserNotificationCenter.
+  current()` KRASCHAR (`NSInternalInconsistencyException:
+  bundleProxyForCurrentProcess is nil`) i en process utan
+  `CFBundleIdentifier` — verifierat med ett fristående `swiftc`-skript
+  innan fixen. Lade till `isRunningInAppBundle` (`Bundle.main.
+  bundleIdentifier != nil`) som en tidig guard i `init`/
+  `requestAuthorizationIfNeeded`/`send` — en generell robusthetsfix (inte
+  bara för CLI:t), så `NotificationService.shared` numera bara tyst
+  no-opar i stället för att krascha processen i vilken obundlad kontext som
+  helst. Utan den här fixen kraschade `photoflow-cli` varje gång pipelinen
+  blev klar (`state.isRunning = false`-grenen anropar
+  `NotificationService.shared.notifyReviewReady()` ovillkorligt).
+- **`scripts/smoke-run.sh`**: repeterbart wrapper-skript. Tar en
+  käll-NEF-mapp, kopierar (ALDRIG flyttar/skriver i källan) NEF-filerna
+  till en tillfällig arbetsmapp under `$TMPDIR`, bygger `photoflow-cli` om
+  ingen färdig binär anges via `PHOTOFLOW_CLI_BIN`, kör den med
+  `--no-calendar --json`, och kör sedan alla verifieringar nedan
+  automatiskt: md5 före/efter, preview-antal, `bracket_groups.json`-
+  sammanfattning, symlänksantal, ett exiftool-stickprov på en DNG, XMP-
+  sidecar-antal, HDR-TIFF-bitdjup (om någon HDR-bracket hittades), samt att
+  `hdr/`-stagingmappen inte har några kvarglömda TIFF (samma orphan-check
+  som den borttagna `PipelineSmokeTest` gjorde). Avslutar med
+  "RÖKTEST GODKÄNT"/"RÖKTEST MISSLYCKADES" och exit-kod 0/1.
+- **`PhotoFlow/Tests/PipelineSmokeTest.swift`: borttagen.** Hela dess
+  premiss (köra hela kedjan under testvärden) höll aldrig i praktiken (se
+  Slutgranskning Del 2), och `photoflow-cli` + `scripts/smoke-run.sh` är nu
+  en fullgod, faktiskt fungerande ersättning som körs UTANFÖR Xcodes
+  testrunner. Två kommentarer som pekade på filen (i
+  `SessionHistoryStore.swift` och `project.yml`) uppdaterades att inte
+  referera en borttagen fil.
+
+### Bevis: DNG-konverteringen hänger INTE via `photoflow-cli`
+
+Körd flera gånger mot 35 riktiga NEF-filer (se nedan): DNG-konverteringssteget
+tar konsekvent 14–15 sekunder och `Process.waitUntilExit()` returnerar
+normalt varje gång — noll hängningar över samtliga körningar under det här
+arbetet. Detta bekräftar hypotesen i Slutgranskning Del 2: felet satt i
+hur Xcodes testrunner/debugger övervakar/reapar en testvärdad apps
+barnprocesser (särskilt en tung GUI-app som Adobe DNG Converter), INTE i
+`ProcessRunner`/`PipelineRunner` eller i något som är specifikt för
+`xcodebuild test` som körkommando i sig — en helt vanlig, fristående
+körbar binär utan testvärd har aldrig det problemet. Ingen kodändring
+gjordes i `ProcessRunner`, eftersom inget i det gick att förbättra:
+`runProcess` redan skriver stdout/stderr till temp-filer (inte pipes) och
+har ingen egen timeout-logik som skulle kunna maskera eller lösa detta.
+
+### Skarp körning mot riktig data
+
+**Data:** 35 riktiga NEF (Nikon, `/Users/fredrik/Pictures/2024/2024-04-07/`,
+enda tillgängliga NEF-mappen på den här maskinen — `~/Desktop/
+ptohotagraphy-test/` från tidigare faser finns inte längre) kopierade —
+ALDRIG flyttade, källan bara läst — till `scratchpad/SMOKE2/input/`.
+Kalendermatchning AV (`--no-calendar`, ingen interaktiv EventKit-session
+headless), HDR och AI-taggning PÅ (appens riktiga standardinställningar).
+
+**Körning** (`scripts/smoke-run.sh scratchpad/SMOKE2/input`, `/usr/bin/time -l`):
+
+| Steg | Tid | Antal |
+|---|---|---|
+| Hämta filer | – | 35 |
+| Konvertera DNG | 14,6–15,1 s | 35/35 |
+| Skapa previews | 0,4–0,6 s | 35/35 |
+| AI-taggning (Vision + Foundation Models) | 21,9–23,4 s | 35/35 |
+| Skapa HDR (bracket-analys, 0 brackets hittade — se nedan) | 22,8–24,5 s | 0 grupper |
+| Sortera filer | 0,0 s | 35 filer |
+| Skriv metadata | ingår i AI-taggningens exiftool-anrop | 105 exiftool-block (35 filer × 3: DNG/NEF-XMP/preview-JPEG) |
+| **Totalt** | **43,1–45,6 s** | 35 NEF |
+
+Minne (`/usr/bin/time -l`): ~355–367 MB maximal RSS, ~295–299 MB
+"peak memory footprint". Ingen HDR-fusion kördes i detta specifika dataset
+(se "Känd begränsning: dataset saknar riktiga exponeringsbrackets" nedan),
+så minnesförbrukningen här speglar INTE HDR-motorns (Core Image RAW,
+`hdrMaxDimension`) toppminne — se HDR-fokuserade körningen nedan för det.
+
+**Verifiering (alla godkända):**
+- **md5 bit-identiskt**: `md5 -r` på alla 35 NEF i `SMOKE2/input` före och
+  efter körningen — `diff` helt tom, noll skillnader.
+- **Previews**: 35/35 JPEG skapade i `Osorterade TITTBILDER/`.
+- **`bracket_groups.json`**: `total_images: 35`, `total_groups: 10`,
+  `bracket_groups_count: 0` (se begränsning nedan), `single_groups_count: 10`.
+- **Symlänkar**: 175 st under outputmappen (35 NEF + 35 DNG + 35 preview-JPEG
+  symlänkar i adress-/Osorterade-mapparna, plus `bracket_groups/`-kopiorna).
+- **Metadata**: `exiftool -s3 -IPTC:Keywords` på en DNG i `Osorterade/`
+  visar AI-genererade svenska nyckelord (t.ex. "Utsikt, Exteriör, Växter,
+  Parkering"); `-XMP:Subject` på samma fil visar samma taggar (IPTC-blocket
+  visas som mojibake i en ren `exiftool -s3`-läsning utan `-charset
+  iptc=utf8` på LÄS-sidan — kosmetiskt, skrivsidan är bevisat korrekt UTF-8
+  eftersom XMP-blocket, som alltid är UTF-8, visar rätt svenska tecken för
+  exakt samma taggar).
+- **XMP-sidecar**: 35 st i `Osorterade ÖVRIGA/`, en per NEF-symlänk, med
+  AI-beskrivning + taggar.
+- **NEF/DNG-symlänkar pekar rätt**: `readlink` på en NEF-symlänk i
+  `Osorterade ÖVRIGA/` pekar tillbaka på filen i `SMOKE2/input/` (originalet,
+  ALDRIG en kopia); en DNG-symlänk i `Osorterade/` pekar på
+  `outputDir/dng/<fil>.dng` (den verkliga konverteringen).
+- **`hdr/`-stagingmappen** tom efteråt (inga bortglömda TIFF).
+
+### HDR-fokuserad körning (16-bitars TIFF-verifiering)
+
+**Känd begränsning: det här datasetet saknar riktiga
+exponeringsbrackets.** Hela `2024-04-07`-mappen (572 NEF) har bara TVÅ
+distinkta slutartider totalt (`1/400` och `1/100`) — `BracketAnalyzer.
+classify` kräver `uniqueExposureLevels >= AppSettings.minBracketSize`
+(standard 3) OCH en exponeringsspridning > 1 stopp för att klassa en grupp
+som en bracket, så med bara två exponeringsnivåer i HELA datasetet kan
+INGEN grupp någonsin bli en bracket med standardinställningarna — oavsett
+vilka 35 filer som väljs ut. Detta är en egenskap hos den tillgängliga
+verkliga datan på den här maskinen (tydligen en session utan AEB
+aktiverat), inte ett fel i pipelinen.
+
+En (1) riktig fyrbildersgrupp hittades ändå med två exponeringsnivåer
+(`_8509400`–`_8509403`.NEF, tre bilder 1/400 + en bild 1/100, samma
+bländare f/10, ISO 320, inom 8 sekunder) — en giltig 2-nivås HDR-bracket,
+bara inte klassificerbar som en bracket med standardinställningen
+`minBracketSize=3`. För att verkligen bevisa HDR-TIFF-vägen (Core Image RAW
+-> justering -> exposure fusion -> 16-bitars TIFF) end-to-end kördes en
+separat, riktad verifiering mot just dessa 4 filer med
+`minBracketSize` temporärt satt till 2
+(`defaults write photoflow-cli minBracketSize -int 2`, återställt med
+`defaults delete` direkt efteråt så inget lämnades kvar för framtida
+körningar):
+
+- `bracket_groups.json`: gruppen klassades korrekt som `is_bracket: true`.
+- `hdr_group_1.tiff` skapades i `Osorterade ÖVRIGA/` (rätt plats, INTE
+  kvarglömd i `outputDir/hdr/`) — `exiftool -BitsPerSample`:
+  **`16 16 16`** (RGB, 3 kanaler, 16 bitar/kanal), `5896×3928` px.
+  HDR-sammanslagningen tog ~24 s för full upplösning
+  (`hdrMaxDimension=6000`, standard) på 4 bilder.
+- md5 på de 4 källfilerna: bit-identiska före/efter.
+
+### Så här kör du om det
+
+```
+scripts/smoke-run.sh <mapp-med-NEF-filer> [ytterligare photoflow-cli-flaggor]
+# t.ex.
+scripts/smoke-run.sh ~/Pictures/2024/2024-04-07
+scripts/smoke-run.sh ~/Pictures/2024/2024-04-07 --no-ai --no-hdr
+```
+Säkert att köra: skriver ALDRIG i källmappen (bara `cp`), jobbar i en
+tillfällig mapp under `$TMPDIR`, och verifierar själv md5 bit-identiskt
+efteråt. `PHOTOFLOW_CLI_BIN=<sökväg>` för att återanvända en redan byggd
+binär i stället för att bygga om (bygget tar ~15-20 s annars). Direkt
+CLI-användning utan scriptet:
+```
+photoflow-cli run --input <mapp> --output <mapp> --no-calendar --json
+```
+
+### Vad som fortfarande INTE täcks
+
+- **Kalendermatchning körs aldrig headless** (`--no-calendar` krävs alltid
+  utanför en interaktiv GUI-session med EventKit-behörighet beviljad) —
+  precis som den borttagna `PipelineSmokeTest` hade samma begränsning.
+  Kalenderkodens egen logik (adressparsning, geokodning, `sanitizeFolderName`)
+  har egna riktade tester (`CalendarServiceTests`) sedan tidigare faser.
+- **Ingen riktig 3+-nivås AEB-bracket-serie fanns tillgänglig** för att
+  verifiera HDR-vägen med STANDARDINSTÄLLNINGEN `minBracketSize=3` mot
+  riktig data i den här fasen (se begränsningen ovan) — verifierades i
+  stället med en riktad 2-nivås-körning. HDR-motorn i sig (Core Image RAW,
+  justering, exposure fusion) har redan egna enhetstester
+  (`ExposureFusionTests`, `RAWRendererTests`) samt en tidigare verifiering
+  mot riktiga 3+-brackets i Fas 3a.
+- **`PipelineRunner.cancel()`/Ctrl-C under en pågående DNG-konvertering**
+  las till i CLI:t (`SIGINT` -> `runner.cancel()`) men testades inte
+  systematiskt end-to-end i den här fasen (manuellt verifierat att
+  `sigintSource`s hanterare kompilerar och kopplas rätt, inte att Adobe DNG
+  Converter-processen faktiskt dör inom rimlig tid vid en verklig Ctrl-C
+  mitt i en stor konvertering).
+- **iOS-appen (`PhotoFlowField`) och fältanteckningsimport** rörs inte av
+  den här fasen — bygger fortsatt grönt (`xcodebuild ... PhotoFlowField
+  ... build`), oförändrad kod.
+- En körning i `PhotoDescriptionServiceTests` (`describe_syntheticImage_
+  returnsRoomTags`) observerades flaka en gång under detta arbete — testet
+  passerade normalt (och en omedelbar omkörning av HELA testsviten var
+  100 % grön, 215/215) men en enstaka körning avbröt hela testprocessen
+  efter bara 128 av 215 tester, vilket antyder att den underliggande
+  Apple Intelligence-modellen (on-device, `PhotoDescriptionService.
+  isAvailable`) nån gång kan krascha/hänga testvärden vid kallstart. Inte
+  reproducerad ytterligare, ingen kodändring gjord — dokumenteras här som
+  en känd, ovanlig flakiness att hålla utkik efter om den återkommer.
