@@ -277,7 +277,14 @@ enum SessionVerifier {
         let nefBaseNames: [String]
     }
 
-    private static func loadContext(outputDir: URL) -> Context {
+    private static func loadContext(outputDir rawOutputDir: URL) -> Context {
+        // Resolved once here (see `FileSafety.resolvedPath`'s doc comment) so
+        // `dngDir`/`previewDir`/`hdrDir` below share the same symlink-
+        // resolution basis as the `AddressFileEntry.url`s `collectAddressFiles`
+        // gets back from `FileManager` enumeration — needed for
+        // `repairBrokenLinks`'s relative-path arithmetic to come out clean
+        // (reproducible under `/tmp`/`/var`, both symlinks on macOS).
+        let outputDir = FileSafety.resolvedPath(rawOutputDir)
         let fm = FileManager.default
         let dngDir = outputDir.appendingPathComponent("dng")
         let previewDir = outputDir.appendingPathComponent("previews")
@@ -990,5 +997,115 @@ enum SessionVerifier {
             detail: "Manifestet säger \(manifestCount) bearbetade filer, disk har \(actualCount).",
             recommendation: "Kör om steget \"\(stepTitle)\" för att synka om."
         )
+    }
+
+    // MARK: - Reparation av trasiga länkar
+
+    /// En enskild länk som redan skrivits om (eller, i en torrkörning, SKULLE
+    /// skrivas om) av `repairBrokenLinks`.
+    struct LinkRepair: Codable, Sendable, Hashable {
+        var path: String
+        var oldDestination: String
+        var newDestination: String
+    }
+
+    /// En trasig länk `repairBrokenLinks` INTE kunde reparera — rapporteras,
+    /// tystas aldrig (uppdragets krav: "målfilen finns inte längre någonstans"
+    /// ska synas, inte bara tyst hoppas över).
+    struct UnrepairableLink: Codable, Sendable, Hashable {
+        var path: String
+        var oldDestination: String
+        var reason: String
+    }
+
+    struct RepairReport: Codable, Sendable {
+        var dryRun: Bool
+        var repaired: [LinkRepair]
+        var unresolved: [UnrepairableLink]
+
+        /// "12 trasiga länkar skrivs om relativt. 2 kan INTE repareras
+        /// (målfilen hittades inte)." — se `SessionVerifyView`s
+        /// bekräftelsedialog och `photoflow-cli verify --repair-links`.
+        var summaryText: String {
+            let verb = dryRun ? "skulle skrivas om relativt" : "skrivna om relativt"
+            var text = "\(repaired.count) trasiga länkar \(verb)."
+            if !unresolved.isEmpty {
+                text += " \(unresolved.count) kan INTE repareras (målfilen hittades inte) och lämnas orörda."
+            }
+            return text
+        }
+    }
+
+    /// Reparerar symlänkar som `checkSymlinks` (se `verify`, fyndet
+    /// `"symlinks.broken"`) flaggar som trasiga — se FORBATTRINGAR.md,
+    /// "Relativa symlänkar och länkreparation". Sessioner processade INNAN
+    /// `FileSafety.createLink` fanns har ABSOLUTA DNG/preview-symlänkar som
+    /// bryts så fort hela outputmappen flyttas/arkiveras, trots att
+    /// målfilen (`dng/DSC_0001.dng`) ligger kvar bredvid i samma flyttade
+    /// träd — exakt vad den skarpa körningen mot `/Users/fredrik/Desktop/
+    /// lint/OUTPUT` hittade (1259 brutna länkar).
+    ///
+    /// För varje trasig länk letas det efter en fil med SAMMA FILNAMN i
+    /// sessionens egna stagingmappar (`dng/`, `previews/`, `hdr/`); hittas
+    /// en sådan skrivs länken om relativt via samma `FileSafety.
+    /// linkDestination`-logik som `exportToAddressFolders` använder för nya
+    /// länkar. Original-NEF-symlänkar (som pekar UTANFÖR sessionen, mot
+    /// användarens indatamapp/SD-kort) är aldrig kandidater — deras filnamn
+    /// ("DSC_0001.NEF") förekommer per definition aldrig i `dng/`
+    /// (`.dng`-filer) eller `previews/`/`hdr/` (`.jpg`/`.tiff`-filer), så de
+    /// hoppas naturligt över utan att någon separat specialkontroll behövs.
+    /// Raderar ALDRIG något: bara den redan trasiga länken själv tas bort
+    /// (aldrig en riktig fil) innan den nya länken skrivs, och en trasig länk
+    /// utan någon hittad ersättning lämnas helt orörd och rapporteras i
+    /// `unresolved` i stället för att tystas.
+    ///
+    /// `dryRun: true` gör INGA ändringar på disk — bara samma beräkning, så
+    /// UI:t/CLI:t kan visa exakt vad som skulle hända innan användaren
+    /// bekräftar.
+    static func repairBrokenLinks(outputDir: URL, dryRun: Bool) -> RepairReport {
+        let fm = FileManager.default
+        let context = loadContext(outputDir: outputDir)
+        let broken = context.addressFiles.filter { $0.isSymlink && $0.isBroken }
+        // I DEN ordningen: en DNG-symlänks mål kan bara rimligen ligga i
+        // dng/, en preview-symlänks i previews/, osv — men eftersom
+        // matchningen är på FULLSTÄNDIGT filnamn (inklusive ändelse) kan
+        // ingen av dem av misstag matcha fel stagingmapp ändå.
+        let searchDirs = [context.dngDir, context.previewDir, context.hdrDir]
+
+        var repaired: [LinkRepair] = []
+        var unresolved: [UnrepairableLink] = []
+
+        for entry in broken {
+            let filename = entry.url.lastPathComponent
+            let oldDestination = (try? fm.destinationOfSymbolicLink(atPath: entry.url.path)) ?? "?"
+
+            guard let sourceDir = searchDirs.first(where: { fm.fileExists(atPath: $0.appendingPathComponent(filename).path) }) else {
+                unresolved.append(UnrepairableLink(
+                    path: entry.url.path, oldDestination: oldDestination,
+                    reason: "Ingen fil med namnet \"\(filename)\" hittades i dng/, previews/ eller hdr/ — troligen borttagen/aldrig skapad, inte bara flyttad."
+                ))
+                continue
+            }
+
+            let target = sourceDir.appendingPathComponent(filename)
+            // `context.outputDir` (resolved, see `loadContext`), NOT the raw
+            // `outputDir` parameter — `entry.url`/`target` both come from
+            // `context` and share that same resolution basis; mixing in the
+            // unresolved parameter here would make `FileSafety.isInside`
+            // wrongly think an inside-session target is outside it whenever
+            // `outputDir` sits behind a symlink (e.g. under `/tmp`/`/var`).
+            let newDestination = FileSafety.linkDestination(for: target, from: entry.url, outputDir: context.outputDir)
+
+            if !dryRun {
+                // Tar bara bort den REDAN TRASIGA länken (aldrig en riktig
+                // fil — `entry` kommer bara från `broken`, dvs redan
+                // verifierad som en symlänk vars mål inte finns).
+                try? fm.removeItem(at: entry.url)
+                try? fm.createSymbolicLink(atPath: entry.url.path, withDestinationPath: newDestination)
+            }
+            repaired.append(LinkRepair(path: entry.url.path, oldDestination: oldDestination, newDestination: newDestination))
+        }
+
+        return RepairReport(dryRun: dryRun, repaired: repaired, unresolved: unresolved)
     }
 }

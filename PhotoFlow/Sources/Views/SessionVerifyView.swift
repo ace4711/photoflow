@@ -24,6 +24,11 @@ struct SessionVerifyView: View {
     @State private var verifyTask: Task<Void, Never>?
     @State private var copied = false
 
+    /// Torrkörningens resultat, väntande på bekräftelse — se `startRepairPreview`.
+    @State private var pendingRepair: SessionVerifier.RepairReport?
+    /// Meddelande efter en genomförd reparation (eller "inget att reparera").
+    @State private var repairResultMessage: String?
+
     var body: some View {
         NavigationStack {
             Group {
@@ -64,6 +69,9 @@ struct SessionVerifyView: View {
                         }
                     }
                     ToolbarItem(placement: .secondaryAction) {
+                        Button("Reparera länkar", systemImage: "link", action: startRepairPreview)
+                    }
+                    ToolbarItem(placement: .secondaryAction) {
                         Button("Kör igen", systemImage: "arrow.clockwise", action: runVerification)
                     }
                 }
@@ -72,6 +80,24 @@ struct SessionVerifyView: View {
         .frame(minWidth: 640, minHeight: 520)
         .onAppear { runVerification() }
         .onDisappear { verifyTask?.cancel() }
+        .alert(
+            "Reparera trasiga länkar?",
+            isPresented: Binding(get: { pendingRepair != nil }, set: { if !$0 { pendingRepair = nil } }),
+            presenting: pendingRepair
+        ) { pending in
+            Button("Reparera \(pending.repaired.count) länkar") { performRepair(pending) }
+            Button("Avbryt", role: .cancel) { pendingRepair = nil }
+        } message: { pending in
+            Text(repairConfirmationMessage(pending))
+        }
+        .alert(
+            "Länkreparation",
+            isPresented: Binding(get: { repairResultMessage != nil }, set: { if !$0 { repairResultMessage = nil } })
+        ) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(repairResultMessage ?? "")
+        }
     }
 
     @ViewBuilder
@@ -124,6 +150,37 @@ struct SessionVerifyView: View {
                 isRunning = false
             }
         }
+    }
+
+    /// Kör en TORRKÖRNING av reparationen och, om den hittar något att göra,
+    /// visar en bekräftelsedialog med exakt hur många länkar som skulle
+    /// skrivas om (och hur många som INTE går att reparera) innan något
+    /// skrivs till disk — se `SessionVerifier.repairBrokenLinks`.
+    private func startRepairPreview() {
+        let dryRun = SessionVerifier.repairBrokenLinks(outputDir: outputDirectory, dryRun: true)
+        guard !dryRun.repaired.isEmpty || !dryRun.unresolved.isEmpty else {
+            repairResultMessage = "Inga trasiga länkar att reparera."
+            return
+        }
+        pendingRepair = dryRun
+    }
+
+    private func repairConfirmationMessage(_ report: SessionVerifier.RepairReport) -> String {
+        var lines = ["\(report.repaired.count) trasiga länkar skrivs om relativt (målfilen hittad i dng/, previews/ eller hdr/)."]
+        if !report.unresolved.isEmpty {
+            lines.append("\(report.unresolved.count) trasiga länkar kan INTE repareras (målfilen hittades inte) och lämnas orörda.")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Skarp körning: skriver om exakt de länkar bekräftelsedialogen visade,
+    /// sedan kör om hela verifieringen så rapporten (och listan över kvarvarande
+    /// brutna länkar) speglar det nya läget direkt.
+    private func performRepair(_ confirmed: SessionVerifier.RepairReport) {
+        pendingRepair = nil
+        let result = SessionVerifier.repairBrokenLinks(outputDir: outputDirectory, dryRun: false)
+        repairResultMessage = result.summaryText
+        runVerification()
     }
 
     private func copyReport(_ report: SessionVerifier.Report) {

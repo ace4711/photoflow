@@ -47,6 +47,26 @@ enum FileSafety {
         return target == root || target.hasPrefix(rootWithSlash)
     }
 
+    /// Fully resolves symlinks in `url` via `realpath(3)` — unlike `URL.
+    /// resolvingSymlinksInPath()`, which deliberately leaves `/tmp`, `/var`
+    /// and `/etc` unresolved (a documented Foundation special case), this
+    /// matches exactly what `FileManager.contentsOfDirectory`/`enumerator`
+    /// return for child URLs. `SessionVerifier.loadContext` resolves
+    /// `outputDir` through this once so paths built directly from it
+    /// (`dngDir`, `previewDir`, …) share the same resolution basis as the
+    /// `AddressFileEntry.url`s `collectAddressFiles` gets back from
+    /// enumeration — without it, `relativePath`'s shared-prefix walk sees two
+    /// differently-resolved absolute paths for what's really the same tree
+    /// (reproducible under `/tmp`/`/var`, both symlinks on macOS) and falls
+    /// back to a much longer (though still correct) relative path instead of
+    /// the clean `../dng/x.dng` form. Falls back to `url` unchanged if
+    /// `realpath` fails (e.g. the path doesn't exist).
+    nonisolated static func resolvedPath(_ url: URL) -> URL {
+        var buffer = [Int8](repeating: 0, count: Int(PATH_MAX))
+        guard realpath(url.path, &buffer) != nil else { return url }
+        return URL(fileURLWithPath: String(cString: buffer), isDirectory: true)
+    }
+
     /// True when `url` is a filesystem symlink (as opposed to a real file).
     /// Address folders should normally contain only symlinks (NEF/DNG/preview
     /// links created by `exportToAddressFolders`) plus a small set of real

@@ -26,6 +26,16 @@ struct SessionVerifierTests {
         try! data.write(to: url)
     }
 
+    /// `FileSafety.resolvedPath` (`realpath(3)`) needs the WHOLE path to
+    /// resolve, which fails on a broken symlink leaf (its target doesn't
+    /// exist) — this resolves just the parent directory (which does exist)
+    /// and re-appends the leaf name, matching what `FileManager` enumeration
+    /// (and therefore `SessionVerifier`'s reported paths) returns for a
+    /// broken symlink under `/tmp`/`/var` (both symlinks on macOS).
+    private func resolvedLeafPath(_ url: URL) -> String {
+        FileSafety.resolvedPath(url.deletingLastPathComponent()).appendingPathComponent(url.lastPathComponent).path
+    }
+
     private let folderName = "Testgatan 1"
 
     /// Bygger en fullständigt korrekt sessions-outputmapp för EN adress med
@@ -304,6 +314,124 @@ struct SessionVerifierTests {
         let cullFinding = try #require(finding(report, "culling.consistency"))
         #expect(cullFinding.severity == .error)
         #expect(!cullFinding.affectedFiles.isEmpty)
+    }
+
+    // MARK: - Reparation av trasiga länkar
+
+    /// Simulerar exakt bakgrundsbuggen: en gammal session vars adressmapps-
+    /// symlänk skrevs ABSOLUT innan `FileSafety.createLink` fanns, och sedan
+    /// blev trasig för att sessionen flyttades/arkiverades (den absoluta
+    /// destinationen pekar på en plats som inte längre finns) — men
+    /// målfilen (`dng/DSC_0001.dng`) ligger fortfarande kvar bredvid,
+    /// eftersom HELA sessionen (inklusive `dng/`) flyttades tillsammans.
+    private func breakLinkWithStaleAbsoluteDestination(link: URL, staleAbsolutePath: String) throws {
+        try FileManager.default.removeItem(at: link)
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: staleAbsolutePath)
+    }
+
+    @Test("Torrkörning: rapporterar vad som SKULLE repareras utan att skriva något till disk")
+    func repairBrokenLinks_dryRun_reportsWithoutWriting() async throws {
+        let outputDir = tempDir("repair-dry-run")
+        let originalsDir = tempDir("repair-dry-run-originals")
+        buildValidSession(outputDir: outputDir, originalsDir: originalsDir, filenames: ["DSC_0001.NEF", "DSC_0002.NEF"])
+
+        let dngLink = AddressFolderLayout.dngDir(in: outputDir, folderName: folderName).appendingPathComponent("DSC_0001.dng")
+        let staleDestination = "/Users/fredrik/Desktop/OUTPUT/dng/DSC_0001.dng"
+        try breakLinkWithStaleAbsoluteDestination(link: dngLink, staleAbsolutePath: staleDestination)
+
+        let report = SessionVerifier.repairBrokenLinks(outputDir: outputDir, dryRun: true)
+
+        #expect(report.dryRun)
+        #expect(report.repaired.count == 1)
+        #expect(report.unresolved.isEmpty)
+        let fixed = try #require(report.repaired.first)
+        // `.path` compares via `FileSafety.resolvedPath`, not raw equality —
+        // `repairBrokenLinks` returns paths as `FileManager` enumeration hands
+        // them back (fully symlink-resolved), which under `/tmp`/`/var`
+        // (both symlinks on macOS, where `tempDir()` lives) differs textually
+        // from a path built directly with `appendingPathComponent`.
+        #expect(fixed.path == resolvedLeafPath(dngLink))
+        #expect(fixed.oldDestination == staleDestination)
+        #expect(!fixed.newDestination.hasPrefix("/"), "reparerad DNG-länk ska bli relativ")
+        #expect(fixed.newDestination == "../dng/DSC_0001.dng")
+
+        // Torrkörning: länken på disk ska vara OFÖRÄNDRAD (fortfarande trasig).
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: dngLink.path)) == staleDestination)
+        #expect(!FileManager.default.fileExists(atPath: dngLink.path), "länken ska fortfarande vara trasig efter en torrkörning")
+    }
+
+    @Test("Skarp reparation: skriver om länken relativt, och en efterföljande verifiering ser den som hel")
+    func repairBrokenLinks_realRun_fixesLinkAndVerifiesClean() async throws {
+        let outputDir = tempDir("repair-real")
+        let originalsDir = tempDir("repair-real-originals")
+        buildValidSession(outputDir: outputDir, originalsDir: originalsDir, filenames: ["DSC_0001.NEF", "DSC_0002.NEF"])
+
+        let previewLink = AddressFolderLayout.previewDir(in: outputDir, folderName: folderName).appendingPathComponent("DSC_0001.jpg")
+        try breakLinkWithStaleAbsoluteDestination(link: previewLink, staleAbsolutePath: "/some/old/moved/OUTPUT/previews/DSC_0001.jpg")
+
+        // Verifiera att den faktiskt är trasig FÖRE reparationen.
+        let beforeReport = try await SessionVerifier.verify(outputDir: outputDir)
+        #expect(finding(beforeReport, "symlinks.broken")?.severity == .error)
+
+        let repairReport = SessionVerifier.repairBrokenLinks(outputDir: outputDir, dryRun: false)
+        #expect(!repairReport.dryRun)
+        #expect(repairReport.repaired.count == 1)
+        #expect(repairReport.unresolved.isEmpty)
+
+        // Länken ska nu peka rätt (relativt) och gå att läsa igenom.
+        let newDestination = try #require((try? FileManager.default.destinationOfSymbolicLink(atPath: previewLink.path)))
+        #expect(newDestination == "../previews/DSC_0001.jpg")
+        #expect(!newDestination.hasPrefix("/"))
+        #expect(FileManager.default.fileExists(atPath: previewLink.path))
+
+        // Kör om verifieringen: den brutna länken ska vara borta.
+        let afterReport = try await SessionVerifier.verify(outputDir: outputDir)
+        #expect(finding(afterReport, "symlinks.broken")?.severity == .ok)
+    }
+
+    @Test("Målfilen finns inte längre någonstans: rapporteras i unresolved, tystas inte")
+    func repairBrokenLinks_targetMissingEverywhere_isReportedUnresolved() async throws {
+        let outputDir = tempDir("repair-unresolved")
+        let originalsDir = tempDir("repair-unresolved-originals")
+        buildValidSession(outputDir: outputDir, originalsDir: originalsDir, filenames: ["DSC_0001.NEF", "DSC_0002.NEF"])
+
+        // Ta bort BÅDE stagingfilen och skriv om adressmappens länk som trasig
+        // — ingen ersättningsfil finns någonstans i sessionen längre.
+        try FileManager.default.removeItem(at: outputDir.appendingPathComponent("dng/DSC_0002.dng"))
+        let dngLink = AddressFolderLayout.dngDir(in: outputDir, folderName: folderName).appendingPathComponent("DSC_0002.dng")
+        try breakLinkWithStaleAbsoluteDestination(link: dngLink, staleAbsolutePath: "/old/path/DSC_0002.dng")
+
+        let report = SessionVerifier.repairBrokenLinks(outputDir: outputDir, dryRun: false)
+
+        #expect(report.repaired.isEmpty)
+        #expect(report.unresolved.count == 1)
+        let unresolved = try #require(report.unresolved.first)
+        #expect(unresolved.path == resolvedLeafPath(dngLink))
+        #expect(unresolved.reason.contains("DSC_0002.dng"))
+
+        // Länken ska lämnas helt orörd (fortfarande exakt samma trasiga destination).
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: dngLink.path)) == "/old/path/DSC_0002.dng")
+    }
+
+    @Test("Rör aldrig en trasig original-NEF-länk (mål utanför sessionen)")
+    func repairBrokenLinks_neverTouchesOriginalNEFLink() async throws {
+        let outputDir = tempDir("repair-nef-untouched")
+        let originalsDir = tempDir("repair-nef-untouched-originals")
+        buildValidSession(outputDir: outputDir, originalsDir: originalsDir, filenames: ["DSC_0001.NEF", "DSC_0002.NEF"])
+
+        // Precis som `brokenSymlink_isReportedAsError`: ta bort originalet en
+        // NEF-symlänk pekar på. Den ligger UTANFÖR outputDir per definition —
+        // reparationen får aldrig försöka gissa en ersättning för den.
+        try FileManager.default.removeItem(at: originalsDir.appendingPathComponent("DSC_0001.NEF"))
+        let nefLink = AddressFolderLayout.extrasDir(in: outputDir, folderName: folderName).appendingPathComponent("DSC_0001.NEF")
+        let originalDestination = try #require((try? FileManager.default.destinationOfSymbolicLink(atPath: nefLink.path)))
+
+        let report = SessionVerifier.repairBrokenLinks(outputDir: outputDir, dryRun: false)
+
+        #expect(!report.repaired.contains { $0.path == nefLink.path })
+        #expect(!report.unresolved.contains { $0.path == nefLink.path })
+        // Länken (och dess destination) ska vara exakt oförändrad.
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: nefLink.path)) == originalDestination)
     }
 
     // MARK: - Cancellation

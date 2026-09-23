@@ -73,11 +73,20 @@ struct PhotoFlowCLI {
 
         "verify" kör `SessionVerifier` (se FORBATTRINGAR.md, "Verifiera
         session") mot en redan bearbetad outputmapp och skriver rapporten
-        till stdout.
+        till stdout. Med --repair-links skrivs trasiga symlänkar om relativt
+        FÖRE verifieringen körs (se FORBATTRINGAR.md, "Relativa symlänkar
+        och länkreparation") — kombinera med --dry-run för att bara se vad
+        som SKULLE göras, utan att skriva något till disk.
 
         Flaggor (verify):
           --output <mapp>   Outputmapp att verifiera. Krävs.
-          --json            Skriv rapporten som JSON i stället för text.
+          --json            Skriv rapporten (och ev. reparationsresultatet)
+                             som JSON i stället för text.
+          --repair-links    Reparera trasiga symlänkar (dng/preview) mot
+                             sessionens egna dng/, previews/, hdr/ innan
+                             verifieringen körs. Rör aldrig original-NEF.
+          --dry-run         Tillsammans med --repair-links: visa bara vad
+                             som skulle repareras, skriv inget till disk.
 
         Avslutar med exit-kod 0 om alla steg/kontroller lyckades, annars 1.
         Exit-kod 2 vid felaktiga argument.
@@ -289,6 +298,8 @@ struct PhotoFlowCLI {
     private static func verifyCommand(_ args: [String]) async {
         var outputPath: String?
         var jsonOutput = false
+        var repairLinks = false
+        var dryRun = false
 
         var idx = 0
         while idx < args.count {
@@ -300,6 +311,10 @@ struct PhotoFlowCLI {
                 outputPath = args[idx]
             case "--json":
                 jsonOutput = true
+            case "--repair-links":
+                repairLinks = true
+            case "--dry-run":
+                dryRun = true
             case "--help", "-h":
                 printUsage()
                 exit(0)
@@ -311,6 +326,25 @@ struct PhotoFlowCLI {
 
         guard let outputPath else { fail("--output krävs") }
         let outputURL = URL(fileURLWithPath: outputPath).standardizedFileURL
+
+        var repairReport: SessionVerifier.RepairReport?
+        if repairLinks {
+            let result = SessionVerifier.repairBrokenLinks(outputDir: outputURL, dryRun: dryRun)
+            repairReport = result
+            if !jsonOutput {
+                print(dryRun ? "Torrkörning — inget skrivet till disk." : "Reparation genomförd.")
+                print(result.summaryText)
+                for link in result.repaired {
+                    print("  \(link.path)")
+                    print("    gammal destination: \(link.oldDestination)")
+                    print("    ny destination:     \(link.newDestination)")
+                }
+                for link in result.unresolved {
+                    print("  KUNDE INTE REPARERAS: \(link.path) — \(link.reason)")
+                }
+                print("")
+            }
+        }
 
         let report: SessionVerifier.Report
         do {
@@ -324,6 +358,11 @@ struct PhotoFlowCLI {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            if let repairReport, let data = try? encoder.encode(repairReport), let json = String(data: data, encoding: .utf8) {
+                print("PHOTOFLOW_CLI_REPAIR_JSON_BEGIN")
+                print(json)
+                print("PHOTOFLOW_CLI_REPAIR_JSON_END")
+            }
             if let data = try? encoder.encode(report), let json = String(data: data, encoding: .utf8) {
                 print(json)
             }
