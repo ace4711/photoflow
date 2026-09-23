@@ -50,16 +50,10 @@ class AppSettings: ObservableObject {
     @AppStorage("hdrAlignEnabled") var hdrAlignEnabled: Bool = true
     @AppStorage("detailedProgress") var detailedProgress: Bool = true
     @AppStorage("calendarMatchEnabled") var calendarMatchEnabled: Bool = true
-    /// Fas 4: tomt = sök i ALLA kalendrar (se `CalendarService.resolveCalendar`)
-    /// — tidigare hade den här ett hårdkodat personligt standardvärde
-    /// ("Exempelkalender"). Bytt till en `Picker` i SettingsView
-    /// (listar riktiga kalendrar via EventKit) med fritextfältet kvar som
-    /// fallback när åtkomst saknas. `migrateCalendarNameIfNeeded()` (körs en
-    /// gång, se `init`) skriver in det gamla hårdkodade värdet explicit för
-    /// användare som aldrig själva satt något — annars hade den här ändringen
-    /// tyst bytt deras beteende till "alla kalendrar" vid nästa uppstart.
+    /// Tomt = sök i ALLA kalendrar (se `CalendarService.resolveCalendar`).
+    /// Väljs med en `Picker` i SettingsView som listar riktiga kalendrar via
+    /// EventKit, med fritextfältet kvar som fallback när åtkomst saknas.
     @AppStorage("calendarName") var calendarName: String = ""
-    @AppStorage("calendarNameMigratedV1") private var calendarNameMigratedV1: Bool = false
     @AppStorage("aiTaggingEnabled") var aiTaggingEnabled: Bool = true
     /// Fas 3d: genererar svenska bildbeskrivningar (rum, kategori, särdrag,
     /// bildtext) med Apples on-device Foundation Models, för ett urval
@@ -101,30 +95,18 @@ class AppSettings: ObservableObject {
     /// synkroniserad tid via NTP/GPS).
     @AppStorage("fieldNotesClockOffsetSeconds") var fieldNotesClockOffsetSeconds: Double = 0
 
-    /// The pre-Fas-4 hardcoded personal default, kept only as the migration
-    /// target in `migrateCalendarNameIfNeeded`.
-    private static let legacyDefaultCalendarName = "Exempelkalender"
+    init() {}
 
-    init() {
-        migrateCalendarNameIfNeeded()
-    }
-
-    /// Runs once (guarded by `calendarNameMigratedV1`): if the user never
-    /// explicitly saved a `calendarName` (the UserDefaults key is simply
-    /// absent — `@AppStorage`'s Swift-side default doesn't write anything),
-    /// they were implicitly relying on the old hardcoded personal default.
-    /// Write that value in explicitly ONE time so their effective calendar
-    /// selection doesn't silently change to "alla kalendrar" now that the
-    /// compiled-in default is "". A user who explicitly picked "Alla
-    /// kalendrar" (empty) in the new `Picker` after this has already run
-    /// once is unaffected — the flag prevents this from firing again.
-    private func migrateCalendarNameIfNeeded() {
-        guard !calendarNameMigratedV1 else { return }
-        if UserDefaults.standard.object(forKey: "calendarName") == nil {
-            calendarName = Self.legacyDefaultCalendarName
-        }
-        calendarNameMigratedV1 = true
-    }
+    // Migreringen av `calendarName` är borttagen. Den fanns för att bevara ett
+    // hårdkodat personligt kalendernamn som tidigare låg i koden, och som nu är
+    // borta ur både koden och historiken (repot är publikt). Att behålla
+    // migreringen efter den städningen hade bara skrivit in en platshållare som
+    // inte matchar någon riktig kalender.
+    //
+    // Konsekvens: den som aldrig valt kalender söker i ALLA kalendrar, vilket är
+    // ett rimligt standardläge. Välj kalender under Inställningar → Pipeline →
+    // Kalenderintegration. Nyckeln `calendarNameMigratedV1` lämnas kvar i
+    // UserDefaults för dem som redan kört migreringen; den läses inte längre.
 
     var inputDirectory: URL? {
         get {
