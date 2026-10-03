@@ -55,8 +55,7 @@ nonisolated enum ReelSelector {
         /// (Vision flaggade ~36 % av interiörerna, bland annat badrum och kontor).
         var utilityPenalty = 0.15
         var utilityHardMaxQuality = 0.35
-        /// Rumsdiversitet: avdrag i MMR-värdet (λ-viktat) för en bild vars rumstyp redan är
-        /// vald. Med standardvärdena väljs ett andra kök bara om den bästa bilden av ett annat
+        /// Rumsdiversitet: avdrag i MMR-värdet (λ-viktat), per gång rumstypen redan är vald. Med standardvärdena väljs ett andra kök bara om den bästa bilden av ett annat
         /// rum har ungefär 0,57 lägre grundpoäng (0,4 / λ), dvs. är klart oacceptabel.
         var roomRepeatPenalty = 0.4
     }
@@ -345,6 +344,8 @@ nonisolated enum ReelSelector {
             // särdragsplats, som fylls efter övriga platser så att den inte tar avslutningens bild.
             let have = pickedIDs.compactMap { byID[$0]?.room }
             let pickedTypes = Set(pickedIDs.compactMap { roomType(byID[$0]?.room) })
+            var pickedTypeCounts: [String: Int] = [:]
+            for t in pickedIDs.compactMap({ roomType(byID[$0]?.room) }) { pickedTypeCounts[t, default: 0] += 1 }
             if (slot == .livingRoom && have.contains(where: { matches($0, livingKeywords) }))
                 || (slot == .kitchen && have.contains(where: { matches($0, kitchenKeywords) })) {
                 if !deferred.contains(position) { deferred.insert(position); queue.append(position); continue }
@@ -372,7 +373,11 @@ nonisolated enum ReelSelector {
                 var rel = scores[c.id] ?? 0
                 if slot == .closing && isDusk(c) { rel += 0.08 }
                 // Rumsdiversitet: samma rumstyp en gång till får ett kraftigt avdrag.
-                if let t = roomType(c.room), pickedTypes.contains(t) { rel -= weights.roomRepeatPenalty / weights.lambda }
+                // Avdraget växer med antalet gånger typen redan valts, så att flera upprepningar
+                // fördelas över rumstyperna i stället för att den bästa typen tar alla.
+                if let t = roomType(c.room), let n = pickedTypeCounts[t] {
+                    rel -= Double(n) * weights.roomRepeatPenalty / weights.lambda
+                }
                 return weights.lambda * rel - (1 - weights.lambda) * maxSim
             }
             guard let best = tierPool.max(by: { mmr($0) < mmr($1) }) else { break }

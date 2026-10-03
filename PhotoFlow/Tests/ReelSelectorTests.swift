@@ -229,4 +229,20 @@ struct ReelSelectorTests {
         #expect(sel.picks.count == 4)
         #expect(Set(sel.picks.map(\.candidateID)).count == 4)
     }
+
+    @Test("Få rumstyper: upprepningarna fördelas (högst en extra per typ) i stället för att bästa typen tar alla")
+    func repeatsAreSpread() {
+        var list: [ReelCandidate] = []
+        var n = 0
+        func add(_ room: String, _ q: Double) { list.append(cand("d\(n)", room: room, category: "Interiör", q: q, axis: n)); n += 1 }
+        for q in [0.85, 0.84, 0.83, 0.82, 0.81] { add("Kök", q) }
+        for q in [0.78, 0.77, 0.76] { add("Vardagsrum", q) }
+        for q in [0.75, 0.74, 0.73] { add("Badrum", q) }
+        let sel = ReelSelector.select(list)
+        var counts: [String: Int] = [:]
+        for p in sel.picks { counts[ReelSelector.roomType(list.first { $0.id == p.candidateID }?.room) ?? "", default: 0] += 1 }
+        #expect(sel.picks.count == 5)
+        #expect(counts.values.max() == 2, "\(counts)")
+        #expect(counts.count == 3)
+    }
 }
