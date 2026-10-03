@@ -34,6 +34,10 @@ struct SettingsView: View {
                     .tabItem { Label("Ljud & notiser", systemImage: "speaker.wave.2") }
                     .tag(3)
 
+                ObjektfilmTab()
+                    .tabItem { Label("Objektfilm", systemImage: "film") }
+                    .tag(5)
+
                 SystemCheckTab()
                     .tabItem { Label("System", systemImage: "checkmark.shield") }
                     .tag(4)

@@ -9,7 +9,10 @@ struct ReelEditorView: View {
 
     @State private var model = ReelEditorModel()
     @State private var preview = ReelPreviewModel()
+    @State private var share = ReelShareModel()
     @State private var didStart = false
+    @State private var showShareSheet = false
+    @State private var shareLoadedFor: URL?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,6 +25,24 @@ struct ReelEditorView: View {
         .task { startIfNeeded() }
         .onChange(of: model.revisionToken) { _, _ in
             preview.setSpec(model.spec, specDirectory: model.reelDirectory)
+        }
+        .onChange(of: model.phase) { _, phase in
+            // Filmen är laddad: läs in kopplingen till mäklaren och hämta ändringar (en gång per mapp).
+            guard case .ready = phase, let dir = model.reelDirectory, shareLoadedFor != dir else { return }
+            shareLoadedFor = dir
+            share.load(reelDirectory: dir)
+            Task { await share.autoRefresh(into: model) }
+        }
+        .sheet(isPresented: $showShareSheet) {
+            ReelShareSheet(share: share, editor: model) { showShareSheet = false }
+        }
+        .alert(share.conflict?.title ?? "", isPresented: Binding(
+            get: { share.conflict != nil }, set: { if !$0 { share.dismissConflict() } }
+        ), presenting: share.conflict) { _ in
+            Button("Ladda om") { share.resolveConflictByReloading(into: model) }
+            Button("Avbryt", role: .cancel) { share.dismissConflict() }
+        } message: { conflict in
+            Text(conflict.message)
         }
         .onDisappear {
             model.cancelAll()
@@ -93,11 +114,44 @@ struct ReelEditorView: View {
                 .disabled(model.isBusy)
 
                 renderControls
+                shareControls
             }
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.regularMaterial)
+    }
+
+    /// Statusmärke, "Hämta ändringar" och "Skicka till mäklare…".
+    @ViewBuilder
+    private var shareControls: some View {
+        Divider().frame(height: 20)
+        Text(share.badge.label)
+            .font(.caption.bold())
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(badgeColor.opacity(0.18), in: Capsule())
+            .foregroundStyle(badgeColor)
+            .help(share.pendingRemoteRevision.map { "Mäklaren har en nyare version (rev \($0)). Klicka \"Hämta ändringar\"." } ?? "Status hos mäklaren")
+        if share.pendingRemoteRevision != nil {
+            Image(systemName: "arrow.down.circle.fill").foregroundStyle(.orange)
+        }
+        if share.isLinked {
+            Button("Hämta ändringar", systemImage: "arrow.down.circle") {
+                Task { await share.pull(into: model) }
+            }
+            .disabled(model.isBusy || share.isBusy)
+        }
+        Button("Skicka till mäklare…", systemImage: "paperplane") { showShareSheet = true }
+            .disabled(!model.hasFilm || model.isBusy)
+    }
+
+    private var badgeColor: Color {
+        switch share.badge {
+        case .draft: return .secondary
+        case .withAgent: return .blue
+        case .approvedWaiting: return .orange
+        case .rendered: return .green
+        }
     }
 
     @ViewBuilder
@@ -165,6 +219,18 @@ struct ReelEditorView: View {
                 }
                 .padding(8)
                 .background(.orange.opacity(0.12))
+            }
+            if case .failed(let message) = share.phase, !showShareSheet {
+                HStack {
+                    Label(message, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Spacer()
+                    Button("Stäng") { share.dismissFailure() }
+                }
+                .padding(8)
+                .background(.orange.opacity(0.12))
+            } else if let notice = share.notice {
+                Label(notice, systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary)
+                    .padding(.horizontal).padding(.top, 4)
             }
             if let error = model.saveError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
