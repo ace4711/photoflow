@@ -1,13 +1,19 @@
-// Webbredigerare (prototyp) för ReelSpec v1. Mobil först. Ingen backend:
-// reel.json och bilder läses lokalt (mapp/filer/släpp) eller via ?spec=<url>,
-// och "Godkänn" laddar bara ner en uppdaterad reel.json.
+// Webbredigerare för ReelSpec v1. Mobil först. Två lägen:
+//  - Mäklarläge: finns en token i URL-fragmentet (/m#<token>) hämtas filmen från
+//    servern (GET /api/v1/share), ändringar sparas med PUT /api/v1/share/spec
+//    (If-Match) och "Godkänn" anropar POST /api/v1/share/approve.
+//  - Lokalt reservläge utan fragment: reel.json och bilder läses lokalt
+//    (mapp/filer/släpp) eller via ?spec=<url>, och "Godkänn" laddar bara ner
+//    en uppdaterad reel.json.
 
 import { parseReelSpec, ReelSpecError } from "./reelSpec.ts";
 import type { Asset, Clip, ReelSpec } from "./reelSpec.ts";
 import { clipStarts, totalDuration, transition } from "./reelTimeline.ts";
 import { renderFrame } from "./canvasRenderer.ts";
 import type { DrawableImage } from "./canvasRenderer.ts";
-import { approvedCopy } from "./approve.ts";
+import { approvedCopy, editedCopy } from "./approve.ts";
+import { ShareClient, ShareError, STATUS_TEXT, tokenFromHash } from "./shareApi.ts";
+import type { ShareView } from "./shareApi.ts";
 import { matchAssets } from "./assetMatcher.ts";
 import { PRESETS, PRESET_LABELS, planClip } from "./motionPresets.ts";
 import type { Preset } from "./motionPresets.ts";
@@ -26,6 +32,23 @@ let playing = false;
 let playStartedAt = 0;
 let pendingOps: string[] = [];
 let sizeW = 540, sizeH = 960;
+
+/** Mäklarläge (token i fragmentet). `null` i det lokala reservläget. */
+interface ShareState {
+  token: string;
+  client: ShareClient;
+  view: ShareView;
+  /** Revisionen på servern som den lokala specen utgår från. */
+  revision: number;
+  dirty: boolean;
+  /** sha256 → signerade URL:er. */
+  urls: Map<string, { full: string | null; thumb: string | null }>;
+  /** Tillgångar där fullstorleksvarianten (w1600) är inläst. */
+  fullLoaded: Set<string>;
+  poll?: number;
+}
+let share: ShareState | null = null;
+const MAX_CLIP_SECONDS = (): number => (share ? 10 : 15);
 
 const canvas = $<HTMLCanvasElement>("canvas");
 const ctx = canvas.getContext("2d")!;
@@ -81,6 +104,7 @@ function reset(): void {
   for (const i of images.values()) (i as ImageBitmap).close?.();
   images.clear(); thumbs.clear(); fileNames.clear();
   spec = null; selected = 0; time = 0; pendingOps = [];
+  if (share?.poll) clearInterval(share.poll);
 }
 
 // ------------------------------------------------------------------ inläsning
@@ -209,6 +233,7 @@ function logEdit(op: string): void { if (pendingOps[pendingOps.length - 1] !== o
 
 function changed(op: string): void {
   logEdit(op);
+  if (share) { share.dirty = true; updateShareUi(); }
   time = Math.min(time, total());
   selected = Math.min(selected, Math.max(0, spec!.timeline.length - 1));
   renderAll();
@@ -233,7 +258,7 @@ function removeClip(i: number): void {
 function setDuration(i: number, d: number): void {
   if (!spec || !Number.isFinite(d)) return;
   const c = spec.timeline[i];
-  c.duration = Math.round(Math.min(Math.max(d, 0.5), 15) * 10) / 10;
+  c.duration = Math.round(Math.min(Math.max(d, 0.5), MAX_CLIP_SECONDS()) * 10) / 10;
   c.durationLocked = true;
   changed("duration");
 }
@@ -256,10 +281,11 @@ function setPreset(i: number, preset: Preset): void {
   changed("motion");
 }
 
-function addClip(assetId: string): void {
+async function addClip(assetId: string): Promise<void> {
   if (!spec) return;
   const asset = assetOf(assetId);
   if (!asset) return;
+  if (share) await ensureFull(assetId);
   const index = spec.timeline.length;
   const p = planClip({ asset, frameAspect: frameAspect(), preset: "auto", index, count: index + 1 });
   const clip: Clip = { asset: assetId, ...p };
@@ -340,7 +366,7 @@ function renderStrip(): void {
     const dur = el("span", "dur");
     const minus = el("button", "btn small", "−"); minus.setAttribute("aria-label", "Kortare");
     const plus = el("button", "btn small", "+"); plus.setAttribute("aria-label", "Längre");
-    const input = el("input"); input.type = "number"; input.step = "0.1"; input.min = "0.5"; input.max = "15";
+    const input = el("input"); input.type = "number"; input.step = "0.1"; input.min = "0.5"; input.max = String(MAX_CLIP_SECONDS());
     input.inputMode = "decimal"; input.value = clip.duration.toFixed(1); input.setAttribute("aria-label", "Längd i sekunder");
     minus.addEventListener("click", () => setDuration(i, clip.duration - 0.5));
     plus.addEventListener("click", () => setDuration(i, clip.duration + 0.5));
@@ -370,7 +396,7 @@ function renderCandidates(): void {
   for (const a of rest) {
     const c = el("div", "cand");
     const b = el("button", "btn small", "Lägg till");
-    b.addEventListener("click", () => addClip(a.id));
+    b.addEventListener("click", () => void addClip(a.id));
     c.append(thumbEl(a.id), el("div", undefined, a.analysis?.room ?? a.id), b);
     box.append(c);
   }
@@ -409,6 +435,151 @@ function startDrag(e: PointerEvent, li: HTMLElement, grip: HTMLElement, from: nu
   grip.addEventListener("pointercancel", end);
 }
 
+// ------------------------------------------------------------------ mäklarläge
+
+function fatal(text: string): void {
+  reset();
+  $("loader").hidden = true;
+  $("editor").hidden = true;
+  $("reload").hidden = true;
+  message(text, "err");
+}
+
+async function fetchBlob(url: string): Promise<Blob> {
+  const r = await fetch(url, { referrerPolicy: "no-referrer" });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.blob();
+}
+
+/** Läser in fullstorleksvarianten för en bild som hittills bara finns som miniatyr. */
+async function ensureFull(assetId: string): Promise<void> {
+  if (!share || share.fullLoaded.has(assetId)) return;
+  const a = assetOf(assetId);
+  const full = a ? share.urls.get(a.sha256)?.full : null;
+  if (!a || !full) return;
+  try {
+    const bmp = await decode(await fetchBlob(full));
+    (images.get(assetId) as ImageBitmap | undefined)?.close?.();
+    images.set(assetId, bmp);
+    share.fullLoaded.add(assetId);
+  } catch {
+    message("Kunde inte hämta bilden i full storlek. Försök igen.", "err");
+  }
+}
+
+function describeError(e: unknown): string {
+  return e instanceof ShareError ? e.message : `Något gick fel (${(e as Error).message}).`;
+}
+
+function applyView(view: ShareView): void {
+  if (!share) return;
+  share.view = view;
+  updateShareUi();
+}
+
+function updateShareUi(): void {
+  if (!share) return;
+  const v = share.view;
+  const status = share.dirty ? "Osparade ändringar" : STATUS_TEXT[v.object.status];
+  $("badge").textContent = `${v.object.address} · ${status}`;
+  $("badge").title = "";
+  const save = $<HTMLButtonElement>("save");
+  save.hidden = false;
+  save.disabled = !share.dirty;
+  const rendered = v.renders.length > 0;
+  const link = $<HTMLAnchorElement>("archiveLink");
+  link.hidden = !rendered;
+  link.href = `/a#${share.token}`;
+  const approved = v.object.status === "approved" && !share.dirty;
+  const done = v.object.status === "rendered" && !share.dirty;
+  $<HTMLButtonElement>("approve").disabled = approved || done;
+  $("approve").textContent = approved ? "Godkänd, renderas" : done ? "Godkänd och klar" : "Godkänn";
+  if (approved && !share.poll) {
+    share.poll = window.setInterval(() => void pollStatus(), 6000);
+  } else if (!approved && share.poll) {
+    clearInterval(share.poll);
+    share.poll = undefined;
+  }
+}
+
+/** Uppdaterar bara status och renderingar medan filmen renderas (ersätter inte det du redigerar). */
+async function pollStatus(): Promise<void> {
+  if (!share || share.dirty) return;
+  try {
+    const v = await share.client.get();
+    if (v.object.currentRevision !== share.revision) return; // någon har ändrat: låt mäklaren välja att ladda om
+    applyView(v);
+    if (v.object.status === "rendered") message("Filmen är klar och finns i arkivet.");
+  } catch { /* nästa varv */ }
+}
+
+async function loadShare(token: string): Promise<void> {
+  message("Hämtar filmen…");
+  const client = new ShareClient(token);
+  let view: ShareView;
+  try { view = await client.get(); } catch (e) { fatal(describeError(e)); return; }
+  if (!view.spec) { fatal("Fotografen har inte skickat någon film än. Kom tillbaka senare."); return; }
+  let parsed: ReelSpec;
+  try { parsed = parseReelSpec(view.spec); } catch (e) { fatal(e instanceof ReelSpecError ? e.message : "Filmen går inte att läsa."); return; }
+  reset();
+  spec = parsed;
+  const urls = new Map(view.pool.map((p) => [p.sha256, { full: p.url, thumb: p.thumbUrl }]));
+  share = { token, client, view, revision: view.object.currentRevision, dirty: false, urls, fullLoaded: new Set() };
+  $("reload").hidden = true;
+  const onTimeline = new Set(spec.timeline.map((c) => c.asset));
+  const missing: string[] = [];
+  await Promise.all(spec.assets.map(async (a) => {
+    const u = urls.get(a.sha256);
+    const wantFull = onTimeline.has(a.id);
+    const href = wantFull ? (u?.full ?? u?.thumb) : (u?.thumb ?? u?.full);
+    if (!href) { missing.push(a.id); return; }
+    try {
+      await addImage(a.id, await fetchBlob(href), a.analysis?.room ?? a.id);
+      if (wantFull && href === u?.full) share!.fullLoaded.add(a.id);
+    } catch { missing.push(a.id); }
+  }));
+  start(missing, 0);
+  $("loader").hidden = true;
+  $("note").textContent = "Ändringar sparas när du trycker Spara eller Godkänn. Fotografen ser dem direkt.";
+  updateShareUi();
+  if (view.object.status === "rendered") message("Filmen är klar och finns i arkivet.");
+}
+
+async function saveShare(): Promise<boolean> {
+  if (!share || !spec) return false;
+  if (!share.dirty && pendingOps.length === 0) return true;
+  const out = editedCopy(spec, pendingOps, $<HTMLInputElement>("who").value.trim(), isoNow());
+  try {
+    const r = await share.client.saveSpec(out, share.revision);
+    out.revision = r.revision;
+    spec = out;
+    share.revision = r.revision;
+    share.dirty = false;
+    pendingOps = [];
+    share.view = { ...share.view, object: { ...share.view.object, status: r.status as ShareView["object"]["status"], currentRevision: r.revision } };
+    updateShareUi();
+    message("Sparat.");
+    return true;
+  } catch (e) {
+    $("reload").hidden = !(e instanceof ShareError && e.status === 412);
+    message(describeError(e), "err");
+    return false;
+  }
+}
+
+async function approveShare(): Promise<void> {
+  if (!share) return;
+  if (!(await saveShare())) return;
+  try {
+    const r = await share.client.approve(share.revision);
+    message(r.changed ? "Godkänt! Filmen renderas och dyker upp i arkivet." : "Filmen är redan godkänd.");
+    applyView(await share.client.get());
+  } catch (e) {
+    $("reload").hidden = !(e instanceof ShareError && (e.status === 412 || e.code === "revision_mismatch"));
+    message(describeError(e), "err");
+  }
+}
+
 // ------------------------------------------------------------------ godkänn
 
 function sortKeys(v: unknown): unknown {
@@ -422,6 +593,7 @@ function sortKeys(v: unknown): unknown {
 const isoNow = (): string => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 
 function approve(): void {
+  if (share) { void approveShare(); return; }
   if (!spec) return;
   const out = approvedCopy(spec, pendingOps, $<HTMLInputElement>("who").value.trim(), isoNow());
   const blob = new Blob([JSON.stringify(sortKeys(out), null, 2) + "\n"], { type: "application/json" });
@@ -474,12 +646,23 @@ function init(): void {
   $("play").addEventListener("click", () => (playing ? stop() : play()));
   $("scrub").addEventListener("input", () => { stop(); seek((Number($<HTMLInputElement>("scrub").value) / 1000) * total()); });
   $("approve").addEventListener("click", approve);
+  $("save").addEventListener("click", () => void saveShare());
+  $("reload").addEventListener("click", () => { const t = share?.token ?? tokenFromHash(location.hash); if (t) void loadShare(t); });
+  window.addEventListener("hashchange", () => location.reload());
   new ResizeObserver(() => { if (spec) resizeCanvas(); }).observe(canvas);
   document.addEventListener("keydown", (e) => {
     if (e.code === "Space" && spec && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLButtonElement)) {
       e.preventDefault(); playing ? stop() : play();
     }
   });
+
+  const token = tokenFromHash(location.hash);
+  if (token) {
+    $("loader").hidden = true;
+    void loadShare(token);
+    return;
+  }
+  if (location.hash.length > 1) message("Länken ser inte komplett ut. Be fotografen skicka den igen.", "err");
 
   const url = new URLSearchParams(location.search).get("spec");
   if (url) { $<HTMLInputElement>("urlInput").value = url; void loadFromUrl(url); }

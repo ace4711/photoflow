@@ -10,10 +10,11 @@
 <body>
   <header class="top">
     <h1>Objektfilm</h1>
-    <span class="badge" title="Ingen backend: inget sparas på någon server.">Lokal prototyp</span>
+    <span id="badge" class="badge" title="Ingen server: inget sparas på någon server.">Lokal prototyp</span>
   </header>
 
   <p id="msg" class="msg" role="status" hidden></p>
+  <button id="reload" class="btn" hidden>Ladda om</button>
 
   <main>
     <section id="loader" class="card">
@@ -52,9 +53,13 @@
         </div>
 
         <div class="card approve">
-          <p class="note"><strong>Lokal prototyp.</strong> Knappen sparar ingenting på en server och skickar inget till fotografen. Den laddar bara ner en uppdaterad <code>reel.json</code> (revision +1, status &quot;approved&quot;).</p>
+          <p id="note" class="note"><strong>Lokal prototyp.</strong> Knappen sparar ingenting på en server och skickar inget till fotografen. Den laddar bara ner en uppdaterad <code>reel.json</code> (revision +1, status &quot;approved&quot;).</p>
           <label class="field">Ditt namn (valfritt)<input id="who" type="text" autocomplete="name"></label>
-          <button id="approve" class="btn primary">Godkänn och ladda ner</button>
+          <div class="row">
+            <button id="save" class="btn" hidden>Spara ändringar</button>
+            <button id="approve" class="btn primary">Godkänn och ladda ner</button>
+          </div>
+          <a id="archiveLink" class="btn" hidden>Öppna arkivet</a>
         </div>
       </div>
     </section>

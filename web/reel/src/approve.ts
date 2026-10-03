@@ -16,3 +16,15 @@ export function approvedCopy(src: ReelSpec, ops: string[], name: string, at: str
   out.provenance.edits = edits;
   return out;
 }
+
+/** Kopia med mäklarens ändringar loggade i provenance.edits men utan att röra revision och status (servern räknar upp dem). */
+export function editedCopy(src: ReelSpec, ops: string[], name: string, at: string): ReelSpec {
+  const out = structuredClone(src);
+  out.updatedAt = at;
+  out.updatedBy = name ? { role: "agent", name } : { role: "agent" };
+  out.provenance ??= { generator: "okänd" };
+  const edits = out.provenance.edits ?? [];
+  for (const op of ops) edits.push({ at, by: "agent", op });
+  out.provenance.edits = edits;
+  return out;
+}

@@ -1,6 +1,16 @@
-# Objektfilm på webben (prototyp, delsteg 2a)
+# Objektfilm på webben (delsteg 2a och 2b)
 
-Plattformsoberoende webbdel för ReelSpec v1: tidslinjematematik, canvasrenderare och en mobilvänlig redigerare. **Ingen backend**: allt körs lokalt i webbläsaren och "Godkänn" laddar bara ner en uppdaterad `reel.json`.
+Plattformsoberoende webbdel för ReelSpec v1: tidslinjematematik, canvasrenderare och en mobilvänlig redigerare. Den serveras av `server/` (se `server/README.md`) på `/m` (mäklarredigeraren) och `/a` (arkivet). Utan token i adressen fungerar redigeraren som förut helt lokalt: inget laddas upp och "Godkänn" laddar bara ner en uppdaterad `reel.json`.
+
+## Mäklarläge (2b)
+
+`/m#<token>`: token ligger i URL-fragmentet, som webbläsaren aldrig skickar till servern. `src/shareApi.ts` läser det och skickar `Authorization: Link <token>`.
+
+- Läser `GET /api/v1/share` (spec med signerade bild-URL:er, pool, status, renderingar). Bilder på tidslinjen hämtas som w1600, övriga som w480 (full storlek hämtas först när bilden läggs till).
+- **Spara** (`PUT /api/v1/share/spec` med `If-Match`) och **Godkänn** (sparar först, sedan `POST /api/v1/share/approve`). Vid 412 visas "Fotografen har ändrat, ladda om." med en knapp som läser in allt på nytt. Längder är begränsade till 0,5–10 s i mäklarläge.
+- Medan filmen renderas pollar sidan status och visar länken till arkivet när den är klar.
+- `src/archive.ts` (`/a#<token>`): spelar upp renderingarna. **Dela** använder Web Share med fil när `navigator.canShare({files})` stöds (iOS Safari), annars laddas filen ner.
+- Allt är samma ursprung och inga inline-skript eller inline-stilar (CSP `script-src 'self'; style-src 'self'`).
 
 ## Hur det hänger ihop med Swift-sidan
 
@@ -27,7 +37,7 @@ Från repots rot: `node --test "web/reel/test/*.test.ts"`. (Node 25 accepterar i
 ```sh
 cd web/reel
 npm install     # bara esbuild
-npm run build   # skriver dist/ (index.html, styles.css, editor.js)
+npm run build   # skriver dist/ (index.html, archive.html, styles.css, editor.js, archive.js)
 ```
 
 Servera `dist/` med valfri statisk server, t.ex. `python3 -m http.server -d dist 8080`, eller `npm run serve` (esbuild `--servedir`, bygger om vid ändring). Öppna sedan `http://localhost:8080/`.
