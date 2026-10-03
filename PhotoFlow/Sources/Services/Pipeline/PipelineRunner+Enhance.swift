@@ -19,6 +19,14 @@ extension PipelineRunner {
         var kind: Kind
         var source: URL
         var label: String
+        /// Bilden är taggad som exteriör: bara då rätas horisonten (se `EnhancementEngine`).
+        var isExterior: Bool = false
+    }
+
+    /// Exteriör enligt AI-taggarna (Vision): taggen "Exteriör" och ingen "Interiör".
+    static func isExterior(_ photos: [PhotoItem]) -> Bool {
+        let tags = Set(photos.flatMap(\.aiTags))
+        return tags.contains("Exteriör") && !tags.contains("Interiör")
     }
 
     /// Vilka bilder som ska förbättras, och hur många som hoppas över (avvisade
@@ -33,14 +41,17 @@ extension PipelineRunner {
             if group.isBracket {
                 if !photos.isEmpty, photos.allSatisfy(\.rejected) { rejected += 1; continue }
                 guard let tiff = hdrFiles[group.id]?.tiff, fm.fileExists(atPath: tiff.path) else { noSource += 1; continue }
-                jobs.append(EnhanceJob(key: "hdr_group_\(group.id)", kind: .hdr, source: tiff, label: "HDR grupp \(group.id)"))
+                jobs.append(EnhanceJob(key: "hdr_group_\(group.id)", kind: .hdr, source: tiff, label: "HDR grupp \(group.id)",
+                                      isExterior: Self.isExterior(photos)))
             } else {
                 for photo in photos {
                     if photo.rejected { rejected += 1; continue }
                     if let dng = photo.dngURL, fm.fileExists(atPath: dng.path) {
-                        jobs.append(EnhanceJob(key: photo.displayName, kind: .dng, source: dng, label: photo.displayName))
+                        jobs.append(EnhanceJob(key: photo.displayName, kind: .dng, source: dng, label: photo.displayName,
+                                          isExterior: Self.isExterior([photo])))
                     } else if let preview = photo.previewURL, fm.fileExists(atPath: preview.path) {
-                        jobs.append(EnhanceJob(key: photo.displayName, kind: .preview, source: preview, label: photo.displayName))
+                        jobs.append(EnhanceJob(key: photo.displayName, kind: .preview, source: preview, label: photo.displayName,
+                                          isExterior: Self.isExterior([photo])))
                     } else {
                         noSource += 1
                     }
@@ -61,6 +72,7 @@ extension PipelineRunner {
             "engine": "\(EnhancementEngine.version)",
             "mtime": "\(Int(mtime))",
             "kind": job.kind.rawValue,
+            "straighten": "\(job.isExterior)",
             "maxDimension": job.kind == .dng ? "\(settings.hdrMaxDimension)" : "-",
             "hdrSharpen": job.kind == .hdr ? "\(settings.hdrSharpenEnabled)" : "-"
         ])
@@ -136,49 +148,78 @@ extension PipelineRunner {
         try fm.createDirectory(at: stagingDir, withIntermediateDirectories: true)
 
         var done = 0, failed = 0
-        for (idx, job) in pending.enumerated() {
-            try await checkCancellationAndWaitIfPaused()
-            state.statusMessage = "Förbättrar \(job.label) (\(idx + 1)/\(pending.count))..."
-            state.currentFileIndex = idx
-            state.progress = Double(idx) / Double(pending.count)
-            state.updateStepProgress(.enhancePhotos, processed: idx, total: pending.count)
+        var finished = 0
 
+        func request(for job: EnhanceJob) -> EnhancementEngine.Request {
             let tiff = stagingDir.appendingPathComponent("\(job.key)\(AddressFolderLayout.enhancedFileSuffix).tiff")
             let jpeg = stagingDir.appendingPathComponent("\(job.key)\(AddressFolderLayout.enhancedFileSuffix).jpg")
             let source: EnhancementEngine.Source = job.kind == .dng
                 ? .raw(job.source, maxDimension: settings.hdrMaxDimension)
                 : .image(job.source)
-            let request = EnhancementEngine.Request(
+            return EnhancementEngine.Request(
                 source: source, tiffURL: tiff, jpegURL: jpeg, profile: profile,
                 alreadySharpened: job.kind == .hdr && settings.hdrSharpenEnabled,
-                exifSource: job.source, exiftoolPath: exiftoolPath
+                exifSource: job.source, exiftoolPath: exiftoolPath, allowStraighten: job.isExterior
             )
-            let started = Date()
-            do {
-                let outcome = try await EnhancementEngine.enhance(request)
-                let seconds = Date().timeIntervalSince(started)
-                log.entries[job.key] = EnhancementLog.Entry(
-                    kind: job.kind.rawValue, source: job.source.lastPathComponent,
-                    fingerprint: fingerprints[job.key] ?? "", profileID: profile.id, profile: profile,
-                    analysis: outcome.analysis, autoParameters: outcome.autoParameters, parameters: outcome.parameters,
-                    outputs: [tiff.lastPathComponent, jpeg.lastPathComponent],
-                    width: outcome.width, height: outcome.height, seconds: seconds, date: Date()
-                )
-                log.updatedAt = Date()
-                log.save(to: outputDir)
-                done += 1
-                state.appendStepLog(.enhancePhotos,
-                    "\(job.label) [\(profile.name)]: \(outcome.parameters.summary) — \(StepTiming.formatExact(seconds))",
-                    type: .success)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                failed += 1
-                state.appendStepLog(.enhancePhotos, "\(job.label): misslyckades — \(error.localizedDescription)", type: .error)
-                pipelineLog("  Förbättring \(job.label) misslyckades: \(error.localizedDescription)")
+        }
+
+        // Avkodningen av en 170 MB LZW-TIFF är enkeltrådad (~6 s), så några bilder körs
+        // samtidigt. Tre räcker: minnet är ~0,5 GB per bild.
+        let maxConcurrent = min(3, max(1, ProcessInfo.processInfo.activeProcessorCount / 3))
+        try await withThrowingTaskGroup(of: (Int, Result<EnhancementEngine.Outcome, Error>, Double).self) { @MainActor group in
+            var next = 0
+            var running = 0
+            @MainActor func launchNext() async throws {
+                try await checkCancellationAndWaitIfPaused()
+                let idx = next
+                next += 1
+                running += 1
+                let job = pending[idx]
+                let req = request(for: job)
+                state.statusMessage = "Förbättrar \(job.label) (\(idx + 1)/\(pending.count))..."
+                state.currentFileIndex = idx
+                group.addTask {
+                    let started = Date()
+                    do {
+                        let outcome = try await EnhancementEngine.enhance(req)
+                        return (idx, .success(outcome), Date().timeIntervalSince(started))
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        return (idx, .failure(error), Date().timeIntervalSince(started))
+                    }
+                }
             }
-            state.currentFileIndex = idx + 1
-            state.progress = Double(idx + 1) / Double(pending.count)
+            while next < pending.count && running < maxConcurrent { try await launchNext() }
+            while let (idx, result, seconds) = try await group.next() {
+                running -= 1
+                finished += 1
+                let job = pending[idx]
+                switch result {
+                case .success(let outcome):
+                    let req = request(for: job)
+                    log.entries[job.key] = EnhancementLog.Entry(
+                        kind: job.kind.rawValue, source: job.source.lastPathComponent,
+                        fingerprint: fingerprints[job.key] ?? "", profileID: profile.id, profile: profile,
+                        analysis: outcome.analysis, autoParameters: outcome.autoParameters, parameters: outcome.parameters,
+                        outputs: [req.tiffURL.lastPathComponent, req.jpegURL.lastPathComponent],
+                        width: outcome.width, height: outcome.height, seconds: seconds, date: Date()
+                    )
+                    log.updatedAt = Date()
+                    log.save(to: outputDir)
+                    done += 1
+                    state.appendStepLog(.enhancePhotos,
+                        "\(job.label) [\(profile.name)]: \(outcome.parameters.summary) — \(StepTiming.formatExact(seconds))",
+                        type: .success)
+                case .failure(let error):
+                    failed += 1
+                    state.appendStepLog(.enhancePhotos, "\(job.label): misslyckades — \(error.localizedDescription)", type: .error)
+                    pipelineLog("  Förbättring \(job.label) misslyckades: \(error.localizedDescription)")
+                }
+                state.progress = Double(finished) / Double(pending.count)
+                state.updateStepProgress(.enhancePhotos, processed: finished, total: pending.count)
+                if next < pending.count { try await launchNext() }
+            }
         }
 
         state.progress = 1.0

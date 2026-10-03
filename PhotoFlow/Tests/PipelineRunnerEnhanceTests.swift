@@ -90,6 +90,20 @@ struct PipelineRunnerEnhanceTests {
         #expect(found["hdr_group_4"]?.first?.deletingLastPathComponent().lastPathComponent == "enhanced")
     }
 
+    @Test("Exteriör = taggen Exteriör utan Interiör")
+    func isExterior() {
+        func photo(_ tags: [String]) -> PhotoItem {
+            var p = makePhoto(id: "DSC_0001")
+            p.aiTags = tags
+            return p
+        }
+        #expect(PipelineRunner.isExterior([photo(["Exteriör", "Fasad"])]))
+        #expect(!PipelineRunner.isExterior([photo(["Interiör", "Kök"])]))
+        #expect(!PipelineRunner.isExterior([photo(["Exteriör", "Interiör"])]))
+        #expect(!PipelineRunner.isExterior([photo([])]))
+        #expect(PipelineRunner.isExterior([photo(["Exteriör"]), photo(["Trädgård"])]))
+    }
+
     @Test("Urval: HDR-TIFF per bracket, DNG/förhandsbild per singel; avvisade och saknade källor hoppas över")
     func enhanceJobs_selection() throws {
         let outputDir = tempOutputDir()

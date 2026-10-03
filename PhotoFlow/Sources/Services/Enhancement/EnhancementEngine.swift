@@ -59,7 +59,11 @@ nonisolated struct EnhancementAnalysis: Codable, Sendable, Equatable {
 /// - **S-kurva** ≈ 0,08 plus mer ju plattare histogrammet är (p5…p95 under 0,62).
 /// - **Vibrance** (inte mättnad) högre ju blekare bilden är; **clarity** 0,30.
 /// - **Slutskärpa** låg (0,15) om källan redan skärpts av HDR-steget, annars 0,5.
-/// - **Rätning**: bara om Vision hittar en horisont med lutning 0,3…3°.
+/// - **Rätning**: bara om bilden är taggad som exteriör (`Request.allowStraighten`)
+///   och Vision hittar en horisont med lutning 0,3…3°. I interiörer rapporterar
+///   Vision "horisonter" som egentligen är rummets perspektivlinjer (mätt mot 63
+///   riktiga bilder: 9 fick en vinkel med confidence 1,0, alla felaktiga och
+///   kvantiserade till 1/8°), så där rätas inget automatiskt.
 nonisolated enum EnhancementEngine {
     /// Höjs när algoritmen/renderingen ändras — del av fingerprintet så gamla
     /// förbättringar görs om.
@@ -161,9 +165,12 @@ nonisolated enum EnhancementEngine {
     /// med lutningen `horizon` (Visions vinkel, grader). 0 utanför 0,3…3°:
     /// mindre märks inte, större är troligen ingen horisont eller ett medvetet
     /// snett motiv och rätas inte automatiskt.
+    ///
+    /// Tecknet är uppmätt, inte antaget: en syntetisk horisont roterad +2° (moturs
+    /// i Core Image) ger Vision-vinkeln -2°, så rättningen är Visions vinkel rakt av.
     static func straightenRotation(forHorizon horizon: Double?) -> Double {
         guard let horizon, straightenRange.contains(abs(horizon)) else { return 0 }
-        return -horizon
+        return horizon
     }
 
     /// Faktorn som bilden måste förstoras med efter rotation `degrees` för att
@@ -426,6 +433,8 @@ nonisolated enum EnhancementEngine {
         /// Fil att kopiera EXIF-grunddata från (datum, kamera, exponering).
         var exifSource: URL
         var exiftoolPath: String?
+        /// Tillåt horisonträtning (bara för exteriörbilder, se klassens dokumentation).
+        var allowStraighten: Bool = false
         var jpegMaxDimension: Int = 4000
         var jpegQuality: Double = 0.92
     }
@@ -483,7 +492,7 @@ nonisolated enum EnhancementEngine {
             throw EngineError.renderFailed
         }
         try Task.checkCancellation()
-        let horizon = request.profile.straighten
+        let horizon = (request.profile.straighten && request.allowStraighten)
             ? await measureHorizon(pixels: small.pixels, width: small.width, height: small.height)
             : nil
         let (auto, analysis) = automaticParameters(Input(

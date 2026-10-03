@@ -119,11 +119,11 @@ struct EnhancementEngineTests {
         #expect(EnhancementEngine.straightenRotation(forHorizon: -0.29) == 0)
         #expect(EnhancementEngine.straightenRotation(forHorizon: 3.5) == 0)
         #expect(EnhancementEngine.straightenRotation(forHorizon: 25) == 0)
-        #expect(EnhancementEngine.straightenRotation(forHorizon: 1.5) == -1.5)
-        #expect(EnhancementEngine.straightenRotation(forHorizon: -3.0) == 3.0)
+        #expect(EnhancementEngine.straightenRotation(forHorizon: 1.5) == 1.5)
+        #expect(EnhancementEngine.straightenRotation(forHorizon: -3.0) == -3.0)
 
         let flat = grayGradient(lo: 0.05, hi: 0.95)
-        #expect(params(flat, horizon: 1.2).parameters.rotationDegrees == -1.2)
+        #expect(params(flat, horizon: 1.2).parameters.rotationDegrees == 1.2)
         #expect(params(flat, horizon: 7).parameters.rotationDegrees == 0)
     }
 
