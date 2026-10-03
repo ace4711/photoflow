@@ -42,6 +42,10 @@ extension PipelineRunner {
             ])
             state.appendLog("Alla \(nefFiles.count) previews finns redan — hoppar over.", type: .info)
             state.appendStepLog(.generatePreviews, "Alla \(nefFiles.count) previews finns redan — hoppar over", type: .info)
+            // Äldre sessioner: rotationen skrevs inte förut — rätta en gång.
+            if !FileManager.default.fileExists(atPath: previewDir.appendingPathComponent(Self.orientationMarker).path) {
+                try await applyPreviewOrientation(nefFiles: nefFiles, previewDir: previewDir)
+            }
             state.progress = 1.0
             return
         }
@@ -78,8 +82,13 @@ extension PipelineRunner {
                 stdinData: pathsList.data(using: .utf8)
             )
 
-            // Orientation is already correct in embedded JPEG previews from NEF files,
-            // so no separate orientation copy step is needed.
+        }
+
+        // Rotationen skrivs för de nya förhandsbilderna — eller för alla, om
+        // mappen kommer från en körning innan detta fanns.
+        let markerExists = FileManager.default.fileExists(atPath: previewDir.appendingPathComponent(Self.orientationMarker).path)
+        if !markerExists || !filesToProcess.isEmpty {
+            try await applyPreviewOrientation(nefFiles: markerExists ? filesToProcess : nefFiles, previewDir: previewDir)
         }
 
         // Count actual results
@@ -91,5 +100,54 @@ extension PipelineRunner {
         state.appendLog("Preview-generering klar: \(finalPreviews) bilder.", type: .success)
         state.appendStepLog(.generatePreviews, "\(finalPreviews) previews genererade", type: .success)
         audio.playStepComplete()
+    }
+
+    // MARK: - Rotation
+
+    /// Markerfil i previews/: rotationen är skriven för mappens förhandsbilder.
+    static let orientationMarker = ".orientation_v1"
+
+    /// Den inbäddade JPEG:en (JpgFromRaw) i en Z 8-NEF är alltid liggande och
+    /// saknar rotationsflagga — porträttbilder visades därför på sidan i
+    /// granskningen tills RAW-renderingen (som roterar) tog över. Läser
+    /// NEF-filernas Orientation i ett exiftool-anrop och skriver den till
+    /// förhandsbilderna som behöver den. Pixlarna rörs inte; bildladdarna läser
+    /// flaggan (`kCGImageSourceCreateThumbnailWithTransform`).
+    func applyPreviewOrientation(nefFiles: [URL], previewDir: URL) async throws {
+        guard !nefFiles.isEmpty else { return }
+        let exiftool = try requireExiftool()
+        let listing = try await runProcess(
+            executablePath: exiftool,
+            arguments: ["-q", "-T", "-n", "-FileName", "-Orientation", "-@", "-"],
+            stdinData: nefFiles.map(\.path).joined(separator: "\n").data(using: .utf8)
+        )
+        let rotated = Self.parseOrientations(listing).filter { $0.value != 1 }
+        var lines: [String] = []
+        for (base, orientation) in rotated.sorted(by: { $0.key < $1.key }) {
+            let preview = previewDir.appendingPathComponent("\(base).jpg")
+            guard FileManager.default.fileExists(atPath: preview.path) else { continue }
+            lines += ["-overwrite_original", "-Orientation#=\(orientation)", preview.path, "-execute"]
+        }
+        if !lines.isEmpty {
+            _ = try await runProcess(
+                executablePath: exiftool,
+                arguments: ["-q", "-@", "-"],
+                stdinData: lines.joined(separator: "\n").data(using: .utf8)
+            )
+            state.appendStepLog(.generatePreviews, "Rotation satt på \(lines.count / 4) porträttbilder", type: .info)
+        }
+        FileManager.default.createFile(atPath: previewDir.appendingPathComponent(Self.orientationMarker).path, contents: Data())
+    }
+
+    /// `exiftool -T -n -FileName -Orientation` → [filnamn utan ändelse: orientering].
+    /// Rader utan siffra (t.ex. "-" när taggen saknas) hoppas över.
+    nonisolated static func parseOrientations(_ text: String) -> [String: Int] {
+        var result: [String: Int] = [:]
+        for line in text.split(separator: "\n") {
+            let parts = line.split(separator: "\t")
+            guard parts.count == 2, let value = Int(parts[1].trimmingCharacters(in: .whitespaces)) else { continue }
+            result[(String(parts[0]) as NSString).deletingPathExtension] = value
+        }
+        return result
     }
 }
