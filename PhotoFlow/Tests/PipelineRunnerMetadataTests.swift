@@ -153,3 +153,21 @@ struct PipelineRunnerMetadataTests {
         #expect(args.contains("-IPTC:Caption-Abstract=En AI-beskrivning"))
     }
 }
+
+struct ExiftoolProgressParsingTests {
+    @Test("Räknar färdiga exiftool-kommandon i utdatan, även misslyckade")
+    func countsCompletedCommands() {
+        let output = """
+        ======== /x/a.dng [1/1]
+            1 image files updated
+        ======== /x/b.dng [1/1]
+            1 image files unchanged
+        ======== /x/c.dng [1/1]
+        Error: File not found - /x/c.dng
+            1 files weren't updated due to errors
+        ======== /x/d.dng [1/1]
+        """
+        #expect(PipelineRunner.completedExiftoolCommands(in: output) == 3)
+        #expect(PipelineRunner.completedExiftoolCommands(in: "") == 0)
+    }
+}

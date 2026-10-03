@@ -1,6 +1,17 @@
 import Foundation
 
 extension PipelineRunner {
+    /// Antal färdiga exiftool-kommandon (ett per fil i argfilen) i utdatan —
+    /// varje kommando avslutas med en rad "N image files updated/unchanged" eller
+    /// "N files weren't updated due to errors".
+    nonisolated static func completedExiftoolCommands(in output: String) -> Int {
+        output.split(separator: "\n").filter { line in
+            line.contains("image files updated") || line.contains("image files unchanged")
+                || line.contains("image file updated") || line.contains("image file unchanged")
+                || line.contains("weren't updated due to errors")
+        }.count
+    }
+
     /// Builds the exiftool argfile lines (one file's block, ending with "-execute")
     /// for writing address/GPS/IPTC/AI metadata to a single output file.
     ///
@@ -360,11 +371,40 @@ extension PipelineRunner {
 
             let filesInChunk = chunk.filter { $0 == "-execute" }.count
 
+            // exiftool skriver "N image files updated" efter varje fil och tömmer
+            // utdatan direkt (verifierat), så filen läses varje sekund medan den
+            // kör: förloppet och loggen uppdateras fil för fil i stället för en
+            // gång per omgång om 100 (~30 s tystnad per omgång).
+            let stdoutURL = outputDir.appendingPathComponent(".exiftool_out_\(chunkIndex).txt")
+            let chunkStart = processedSoFar
+            let descriptions = fileDescriptions
+            let total = totalFiles
+            let state = self.state
+            let logged = LoggedCount()
+            let watcher = Task { @MainActor in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(1))
+                    let text = (try? String(contentsOf: stdoutURL, encoding: .utf8)) ?? ""
+                    let done = min(Self.completedExiftoolCommands(in: text), filesInChunk)
+                    guard done > logged.value else { continue }
+                    for i in (chunkStart + logged.value)..<min(chunkStart + done, descriptions.count) {
+                        state.appendStepLog(.writeIPTCTags, descriptions[i])
+                    }
+                    logged.value = done
+                    state.updateStepProgress(.writeIPTCTags, processed: chunkStart + done, total: total)
+                    state.statusMessage = "Skriver metadata: \(chunkStart + done)/\(total) filer"
+                }
+            }
+            defer { try? fm.removeItem(at: stdoutURL) }
+
             do {
-                let output = try await runProcess(
+                _ = try await runProcess(
                     executablePath: exiftoolPath,
-                    arguments: ["-@", argfileURL.path]
+                    arguments: ["-@", argfileURL.path, "-common_args", "-progress"],
+                    outputFile: stdoutURL
                 )
+                watcher.cancel()
+                let output = (try? String(contentsOf: stdoutURL, encoding: .utf8)) ?? ""
                 pipelineLog("Exiftool chunk \(chunkIndex + 1)/\(chunks.count) output: \(output)")
 
                 let updatedPattern = try? NSRegularExpression(pattern: "(\\d+) image files? updated")
@@ -375,13 +415,13 @@ extension PipelineRunner {
                     }
                 }
 
-                // Log per-file details for this chunk
-                let startIdx = processedSoFar
-                let endIdx = min(startIdx + filesInChunk, fileDescriptions.count)
-                for i in startIdx..<endIdx {
+                // Filer som bevakningen inte hann logga innan exiftool blev klar.
+                let endIdx = min(chunkStart + filesInChunk, fileDescriptions.count)
+                for i in min(chunkStart + logged.value, endIdx)..<endIdx {
                     state.appendStepLog(.writeIPTCTags, fileDescriptions[i])
                 }
             } catch {
+                watcher.cancel()
                 state.appendStepLog(.writeIPTCTags, "Exiftool-fel i omgång \(chunkIndex + 1): \(error.localizedDescription)", type: .error)
                 state.appendLog("Exiftool-fel i omgång \(chunkIndex + 1): \(error.localizedDescription)", type: .warning)
             }
@@ -424,3 +464,9 @@ struct IPTCFileMetadata {
     var aiTags: [String] = []
 }
 
+/// Hur många filer i en exiftool-omgång som redan loggats (delas mellan
+/// bevakningen av utdatan och avslutningen av omgången).
+@MainActor
+final class LoggedCount {
+    var value = 0
+}
