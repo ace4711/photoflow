@@ -56,7 +56,7 @@ struct PhotoFlowCLI {
                     photoflow-cli reel --input <mapp> --output <mapp> [flaggor]
 
         "run" kör hela PhotoFlow-pipelinen (NEF -> DNG -> previews ->
-        bracket-analys -> [HDR] -> [kalendermatchning] -> [AI-taggning] ->
+        bracket-analys -> [HDR] -> [förbättra bilder] -> [kalendermatchning] -> [AI-taggning] ->
         adressmappar -> metadata) headless, utan GUI/testvärd. Se
         FORBATTRINGAR.md, "Rök-test via CLI", för bakgrund och verifierade
         körningar.
@@ -70,6 +70,8 @@ struct PhotoFlowCLI {
                              — använd ALLTID den här flaggan utanför en
                              interaktiv GUI-session).
           --no-ai           Stäng av AI-taggning/Vision-analys (på som standard).
+          --no-enhance      Stäng av "Förbättra bilder" (automatisk färg-/tonkorrigering
+                             efter HDR; på som standard).
           --json            Skriv en maskinläsbar JSON-sammanfattning på
                              slutet (mellan PHOTOFLOW_CLI_JSON_SUMMARY_BEGIN/
                              _END-markörraderna på stdout).
@@ -131,6 +133,7 @@ struct PhotoFlowCLI {
         var noHDR = false
         var noCalendar = false
         var noAI = false
+        var noEnhance = false
         var jsonOutput = false
 
         var idx = 0
@@ -151,6 +154,8 @@ struct PhotoFlowCLI {
                 noCalendar = true
             case "--no-ai":
                 noAI = true
+            case "--no-enhance":
+                noEnhance = true
             case "--json":
                 jsonOutput = true
             case "--help", "-h":
@@ -186,6 +191,7 @@ struct PhotoFlowCLI {
         settings.hdrMergeEnabled = !noHDR
         settings.calendarMatchEnabled = !noCalendar
         settings.aiTaggingEnabled = !noAI
+        settings.enhanceEnabled = !noEnhance
         // Ljud/tal/systemnotiser stängs alltid av headless: dels är de
         // meningslösa utan en interaktiv session, dels kraschar
         // `NotificationService` numera bara inte längre (se dess
@@ -198,7 +204,7 @@ struct PhotoFlowCLI {
         print("PhotoFlow CLI — startar pipeline")
         print("  input:  \(inputURL.path)")
         print("  output: \(outputURL.path)")
-        print("  HDR: \(settings.hdrMergeEnabled ? "på" : "av"), kalender: \(settings.calendarMatchEnabled ? "på" : "av"), AI-taggning: \(settings.aiTaggingEnabled ? "på" : "av")")
+        print("  HDR: \(settings.hdrMergeEnabled ? "på" : "av"), kalender: \(settings.calendarMatchEnabled ? "på" : "av"), AI-taggning: \(settings.aiTaggingEnabled ? "på" : "av"), förbättra bilder: \(settings.enhanceEnabled ? "på (profil \(settings.enhanceProfileID))" : "av")")
 
         let state = PipelineState()
         let runner = PipelineRunner(state: state)
@@ -268,6 +274,7 @@ struct PhotoFlowCLI {
             dngFiles: countFiles(in: outputURL.appendingPathComponent("dng"), ext: "dng"),
             previewFiles: countFiles(in: outputURL.appendingPathComponent("previews"), ext: "jpg"),
             hdrTiffFiles: countFilesRecursive(in: outputURL, namePrefix: "hdr_group_", ext: "tiff"),
+            enhancedFiles: AddressFolderLayout.locateEnhancedFiles(in: outputURL).count,
             symlinks: countSymlinksRecursive(in: outputURL),
             xmpSidecars: countFilesRecursive(in: outputURL, ext: "xmp")
         )
@@ -282,7 +289,7 @@ struct PhotoFlowCLI {
             let dur = s.durationSeconds.map { String(format: "%.1fs", $0) } ?? "-"
             print("  - \(s.step): \(s.phase) (\(s.processed)/\(s.total), \(dur))")
         }
-        print("  Skapade filer: \(filesCreated.dngFiles) DNG, \(filesCreated.previewFiles) previews, \(filesCreated.hdrTiffFiles) HDR-TIFF, \(filesCreated.symlinks) symlänkar, \(filesCreated.xmpSidecars) XMP-sidecars")
+        print("  Skapade filer: \(filesCreated.dngFiles) DNG, \(filesCreated.previewFiles) previews, \(filesCreated.hdrTiffFiles) HDR-TIFF, \(filesCreated.enhancedFiles) förbättrade, \(filesCreated.symlinks) symlänkar, \(filesCreated.xmpSidecars) XMP-sidecars")
 
         if jsonOutput {
             let summary = RunSummary(
@@ -292,6 +299,7 @@ struct PhotoFlowCLI {
                 hdrEnabled: settings.hdrMergeEnabled,
                 calendarEnabled: settings.calendarMatchEnabled,
                 aiTaggingEnabled: settings.aiTaggingEnabled,
+                enhanceEnabled: settings.enhanceEnabled,
                 success: success,
                 errorMessage: state.errorMessage,
                 steps: stepSummaries,
@@ -601,6 +609,7 @@ private struct FilesCreated: Codable {
     let dngFiles: Int
     let previewFiles: Int
     let hdrTiffFiles: Int
+    let enhancedFiles: Int
     let symlinks: Int
     let xmpSidecars: Int
 }
@@ -612,6 +621,7 @@ private struct RunSummary: Codable {
     let hdrEnabled: Bool
     let calendarEnabled: Bool
     let aiTaggingEnabled: Bool
+    let enhanceEnabled: Bool
     let success: Bool
     let errorMessage: String?
     let steps: [StepSummary]

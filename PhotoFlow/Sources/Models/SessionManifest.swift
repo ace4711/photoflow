@@ -41,6 +41,9 @@ struct SessionManifest: Codable, Equatable {
     /// som skulle kunna ändras om `DashboardStep`s case-ordning ändras).
     var steps: [String: StepRecord]
     var cullSummary: CullSummary
+    /// Stilprofilen ("Förbättra bilder") som sessionen använde senast. Profilkoppling
+    /// till mäklare/objekt görs senare; detta fält är bara spårbarhet.
+    var enhancementProfileID: String?
 
     struct AddressRecord: Codable, Equatable {
         var address: String
@@ -88,6 +91,7 @@ extension DashboardStep {
         case .findCalendarInfo: return "findCalendarInfo"
         case .aiTagging: return "aiTagging"
         case .createHDR: return "createHDR"
+        case .enhancePhotos: return "enhancePhotos"
         case .moveToFolders: return "moveToFolders"
         case .writeIPTCTags: return "writeIPTCTags"
         case .manualReview: return "manualReview"

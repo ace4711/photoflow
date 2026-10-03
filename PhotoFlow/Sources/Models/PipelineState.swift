@@ -438,7 +438,7 @@ class PipelineState: ObservableObject {
     /// på användaren och ingår inte i prognosen.
     static let automaticSteps: [DashboardStep] = [
         .copyToInput, .convertToDNG, .generatePreviews, .findCalendarInfo,
-        .aiTagging, .createHDR, .moveToFolders, .writeIPTCTags,
+        .aiTagging, .createHDR, .enhancePhotos, .moveToFolders, .writeIPTCTags,
     ]
 
     /// Bilder i körningen — samma skala för alla steg. Under kortkopieringen
@@ -513,6 +513,7 @@ class PipelineState: ObservableObject {
                 // Under kortkopieringen har körningen inte startat än — räkna med
                 // de steg som kommer att köras.
                 pending = (step != .createHDR || settings.hdrMergeEnabled)
+                    && (step != .enhancePhotos || settings.enhanceEnabled)
                     && (step != .aiTagging || settings.aiTaggingEnabled)
                     && ((step != .findCalendarInfo && step != .writeIPTCTags) || settings.calendarMatchEnabled)
             default:
@@ -560,6 +561,14 @@ class PipelineState: ObservableObject {
                 cullSummary: SessionManifest.CullSummary(accepted: 0, rejected: 0, unreviewed: 0)
             )
         }
+    }
+
+    /// Noterar i sessionsmanifestet vilken stilprofil förbättringssteget använde.
+    func recordEnhancementProfile(_ id: String) {
+        ensureManifestLoaded()
+        guard sessionManifest != nil, sessionManifest?.enhancementProfileID != id else { return }
+        sessionManifest?.enhancementProfileID = id
+        syncManifest()
     }
 
     /// Enda stället som skriver `sessionManifest` till disk — anropas från

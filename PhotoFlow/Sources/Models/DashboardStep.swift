@@ -8,6 +8,7 @@ enum DashboardStep: Int, CaseIterable, Identifiable {
     case findCalendarInfo
     case aiTagging
     case createHDR
+    case enhancePhotos
     case moveToFolders
     case writeIPTCTags
     case manualReview
@@ -30,6 +31,7 @@ enum DashboardStep: Int, CaseIterable, Identifiable {
         case .writeIPTCTags: return "Skriv metadata"
         case .aiTagging: return "AI-taggning"
         case .createHDR: return "Skapa HDR"
+        case .enhancePhotos: return "Förbättra bilder"
         case .manualReview: return "Granska"
         case .moveToFolders: return "Sortera filer"
         case .importToLightroom: return "Lightroom"
@@ -46,6 +48,7 @@ enum DashboardStep: Int, CaseIterable, Identifiable {
         case .writeIPTCTags: return "GPS & IPTC-taggar"
         case .aiTagging: return "Vision-analys"
         case .createHDR: return "Bracket → HDR"
+        case .enhancePhotos: return "Färg & ton"
         case .manualReview: return AppSettings.shared.hdrMergeEnabled ? "Brackets & gallring" : "Gallring"
         case .moveToFolders: return "Adress-kataloger"
         case .importToLightroom: return "Plugin-import"
@@ -62,6 +65,7 @@ enum DashboardStep: Int, CaseIterable, Identifiable {
         case .writeIPTCTags: return "mappin.and.ellipse"
         case .aiTagging: return "brain"
         case .createHDR: return "square.stack.3d.up"
+        case .enhancePhotos: return "wand.and.stars"
         case .manualReview: return "hand.tap"
         case .moveToFolders: return "folder.badge.plus"
         case .importToLightroom: return "arrow.right.doc.on.clipboard"

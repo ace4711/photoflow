@@ -50,6 +50,12 @@ class AppSettings: ObservableObject {
     @AppStorage("hdrAlignEnabled") var hdrAlignEnabled: Bool = true
     /// Lätt skärpning av HDR-resultatet (se `HDREngine.Options.sharpenEnabled`).
     @AppStorage("hdrSharpenEnabled") var hdrSharpenEnabled: Bool = true
+    /// "Förbättra bilder": automatisk färg-/tonkorrigering av de färdiga bilderna
+    /// (HDR-TIFF per bracket, DNG-rendering per singel) efter HDR-steget.
+    /// Skriver nya filer i `enhanced/` — originalen rörs aldrig.
+    @AppStorage("enhanceEnabled") var enhanceEnabled: Bool = true
+    /// Id för den stilprofil som styr förbättringen (`EnhancementProfileStore`).
+    @AppStorage("enhanceProfileID") var enhanceProfileID: String = EnhancementProfile.automaticID
     @AppStorage("detailedProgress") var detailedProgress: Bool = true
     @AppStorage("calendarMatchEnabled") var calendarMatchEnabled: Bool = true
     /// DEPRECERAD läsväg (flera kalendrar): ersatt av `calendarNames` nedan,

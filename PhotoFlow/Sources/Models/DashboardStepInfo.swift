@@ -125,11 +125,24 @@ extension DashboardStep {
                 settingsTab: 1
             )
 
+        case .enhancePhotos:
+            return StepInfo(
+                summary: "Förbättrar de färdiga bilderna automatiskt (vitbalans, exponering, ton, färg, lätt rätning) och sparar dem som nya filer — originalen rörs aldrig.",
+                details: [
+                    "Läser: HDR-TIFF för varje bracket (hdr/ eller adressmappen) och DNG (annars förhandsbild) för varje singelbild. Gallrade bilder och brackets utan HDR hoppas över.",
+                    "Analyserar en nedskalad kopia och räknar fram explicita parametrar (exponering, vitbalans, svart/vit-punkt, skuggor/högdagrar, S-kurva, vibrance, clarity, skärpa, horisonträtning).",
+                    "Skriver 16-bitars TIFF + JPEG (4000 px) som hdr_group_N_enh.* / DSC_xxxx_enh.* i enhanced/; sorteringen flyttar dem till <adress> FÖRBÄTTRADE. Parametrar per bild i enhancement.json.",
+                    "Hoppar över bilder som redan har en förbättrad fil med samma fingerprint (källfil + stilprofil + motorversion); en ändrad profil gör om alla.",
+                    "Styrs av Förbättra bilder och Stilprofil i Inställningar → Pipeline (Automatisk, Neutral, Varm & ljus)."
+                ],
+                settingsTab: 1
+            )
+
         case .moveToFolders:
             return StepInfo(
                 summary: "Symlänkar alla bilder (och HDR-resultat) in i adressnamngivna mappar utifrån kalendermatchningen.",
                 details: [
-                    "Skapar per adress tre mappar: <adress> (DNG), <adress> TITTBILDER (previews) och <adress> ÖVRIGA (original-NEF + HDR-TIFF).",
+                    "Skapar per adress mapparna <adress> (DNG), <adress> TITTBILDER (previews), <adress> ÖVRIGA (original-NEF + HDR-TIFF) och <adress> FÖRBÄTTRADE (förbättrade bilder).",
                     "Kopierar aldrig filerna — skapar symlänkar tillbaka till dng/ och previews/, så inget dubbleras på disk.",
                     "Ingen kalendermatchning → bilden hamnar i \"Osorterade\" i stället för en adressmapp.",
                     "Hoppar över om files_sorted.json finns och fingerprintet (bildlista + HDR-läge + adresser/GPS-rättningar) matchar.",

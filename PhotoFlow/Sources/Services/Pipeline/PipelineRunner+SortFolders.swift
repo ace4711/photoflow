@@ -47,6 +47,7 @@ extension PipelineRunner {
             state.appendStepLog(.moveToFolders, "Filer redan sorterade (\(savedCount) bilder) — hoppar över", type: .info)
             state.appendLog("Filsortering redan klar — hoppar över.", type: .info)
             moveUnsortedHDR(outputDir: outputDir)
+            moveUnsortedEnhanced(outputDir: outputDir)
             return
         }
 
@@ -73,6 +74,7 @@ extension PipelineRunner {
             state.appendStepLog(.moveToFolders, "Filer redan sorterade (\(savedCount) bilder) — hoppar över", type: .info)
             state.appendLog("Filsortering redan klar — hoppar över.", type: .info)
             moveUnsortedHDR(outputDir: outputDir)
+            moveUnsortedEnhanced(outputDir: outputDir)
             return
         }
 
@@ -215,6 +217,7 @@ extension PipelineRunner {
 
         // Copy HDR TIFF results into address folders (only if HDR merge is enabled)
         taggedFiles += moveUnsortedHDR(outputDir: outputDir)
+        taggedFiles += moveUnsortedEnhanced(outputDir: outputDir)
 
         if organized > 0 || unmatched > 0 {
             state.appendStepLog(.moveToFolders, "Sorterat: \(organized) bilder i adressmappar" + (unmatched > 0 ? ", \(unmatched) i Osorterade" : ""), type: .success)
@@ -372,6 +375,64 @@ extension PipelineRunner {
 
         if !moved.isEmpty {
             state.appendLog("Flyttade \(moved.count) HDR-filer till adressmapparna.", type: .success)
+            try? fm.removeItem(at: outputDir.appendingPathComponent("metadata_written.json"))
+        }
+        return moved
+    }
+
+    /// Flyttar förbättrade filer (`enhanced/<nyckel>_enh.tiff|jpg`, skrivna av
+    /// förbättringssteget) till `<adress> FÖRBÄTTRADE/`. Körs, precis som
+    /// `moveUnsortedHDR`, även när sorteringen i övrigt hoppas över, och oavsett
+    /// HDR-inställningen. En fil som redan finns i adressmappen ersätts: den i
+    /// `enhanced/` är nyare. Har något flyttats tas metadatamarkören bort så att
+    /// metadatasteget (GPS/IPTC) skrivs även till de nya filerna.
+    ///
+    /// Nyckeln är `hdr_group_<id>` (adress från gruppens första bild) eller en
+    /// bilds basnamn (`DSC_0012`). Okända nycklar hamnar i "Osorterade".
+    @discardableResult
+    func moveUnsortedEnhanced(outputDir: URL) -> [String] {
+        let fm = FileManager.default
+        let stagingDir = AddressFolderLayout.enhancedStagingDir(in: outputDir)
+        guard let names = try? fm.contentsOfDirectory(atPath: stagingDir.path), !names.isEmpty else { return [] }
+        let calendar = CalendarService.shared
+        var moved: [String] = []
+
+        func folderName(forKey key: String) -> String {
+            var photo: PhotoItem?
+            if key.hasPrefix("hdr_group_"), let id = Int(key.dropFirst("hdr_group_".count)),
+               let group = state.bracketGroups.first(where: { $0.id == id }) {
+                photo = state.photos(in: group).first
+            } else {
+                photo = state.allPhotos.first { $0.displayName == key }
+            }
+            guard let photo else { return "Osorterade" }
+            return calendar.addressFolder(for: photo.dateTime, mappings: calendarMappings) ?? "Osorterade"
+        }
+
+        for name in names.sorted() {
+            let ext = (name as NSString).pathExtension.lowercased()
+            let stem = (name as NSString).deletingPathExtension
+            guard ["tiff", "tif", "jpg"].contains(ext), stem.hasSuffix(AddressFolderLayout.enhancedFileSuffix) else { continue }
+            let key = String(stem.dropLast(AddressFolderLayout.enhancedFileSuffix.count))
+            let source = stagingDir.appendingPathComponent(name)
+            let targetDir = AddressFolderLayout.enhancedDir(in: outputDir, folderName: folderName(forKey: key))
+            let dest = targetDir.appendingPathComponent(name)
+            do {
+                try fm.createDirectory(at: targetDir, withIntermediateDirectories: true)
+                if fm.fileExists(atPath: dest.path) {
+                    _ = try fm.replaceItemAt(dest, withItemAt: source)
+                } else {
+                    try fm.moveItem(at: source, to: dest)
+                }
+                moved.append(dest.path)
+            } catch {
+                state.appendStepLog(.moveToFolders, "Kunde inte flytta \(name): \(error.localizedDescription)", type: .warning)
+            }
+        }
+
+        if !moved.isEmpty {
+            state.appendStepLog(.moveToFolders, "\(moved.count) förbättrade filer → FÖRBÄTTRADE-mapparna")
+            state.appendLog("Flyttade \(moved.count) förbättrade filer till adressmapparna.", type: .success)
             try? fm.removeItem(at: outputDir.appendingPathComponent("metadata_written.json"))
         }
         return moved

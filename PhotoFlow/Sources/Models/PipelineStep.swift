@@ -9,6 +9,7 @@ enum PipelineStep: Int, CaseIterable, Identifiable {
     case mergingHDR
     case generatingPreviews
     case taggingPhotos
+    case enhancingPhotos
     case sortingFiles
     case writingMetadata
     case culling
@@ -26,6 +27,7 @@ enum PipelineStep: Int, CaseIterable, Identifiable {
         case .mergingHDR: return "HDR-sammanslagning"
         case .generatingPreviews: return "Skapar previews"
         case .taggingPhotos: return "AI-taggning"
+        case .enhancingPhotos: return "Förbättrar bilder"
         case .sortingFiles: return "Sorterar filer"
         case .writingMetadata: return "Skriver metadata"
         case .culling: return "Gallring"
@@ -44,6 +46,7 @@ enum PipelineStep: Int, CaseIterable, Identifiable {
         case .culling: return "checkmark.circle"
         case .generatingPreviews: return "photo.on.rectangle"
         case .taggingPhotos: return "brain"
+        case .enhancingPhotos: return "wand.and.stars"
         case .sortingFiles: return "folder.badge.plus"
         case .writingMetadata: return "mappin.and.ellipse"
         case .done: return "checkmark.seal.fill"

@@ -73,6 +73,7 @@ class PipelineRunner: ObservableObject {
         "ai_tagging": .aiTagging,
         "photo_quality": .aiTagging,
         "hdr_merge": .createHDR,
+        "enhance": .enhancePhotos,
         "move_to_folders": .moveToFolders,
         "write_iptc": .writeIPTCTags,
     ]
@@ -167,6 +168,7 @@ class PipelineRunner: ObservableObject {
         state.updateStep(.convertToDNG, phase: .queued)
         state.updateStep(.generatePreviews, phase: .queued)
         state.updateStep(.createHDR, phase: settings.hdrMergeEnabled ? .queued : .disabled)
+        state.updateStep(.enhancePhotos, phase: settings.enhanceEnabled ? .queued : .disabled)
         state.updateStep(.findCalendarInfo, phase: settings.calendarMatchEnabled ? .queued : .disabled)
         state.updateStep(.writeIPTCTags, phase: settings.calendarMatchEnabled ? .queued : .disabled)
         state.updateStep(.aiTagging, phase: settings.aiTaggingEnabled ? .queued : .disabled)
@@ -189,7 +191,9 @@ class PipelineRunner: ObservableObject {
             "outputDir": state.outputDirectory!.path,
             "hdrEnabled": "\(AppSettings.shared.hdrMergeEnabled)",
             "calendarEnabled": "\(AppSettings.shared.calendarMatchEnabled)",
-            "aiTaggingEnabled": "\(AppSettings.shared.aiTaggingEnabled)"
+            "aiTaggingEnabled": "\(AppSettings.shared.aiTaggingEnabled)",
+            "enhanceEnabled": "\(AppSettings.shared.enhanceEnabled)",
+            "enhanceProfile": AppSettings.shared.enhanceProfileID
         ])
 
         let nefFiles = findNEFFiles(in: inputDir)
@@ -273,6 +277,19 @@ class PipelineRunner: ObservableObject {
             pipelineLog(">>> Steg: Laddar bracket-grupper")
             try await loadBracketGroups()
             pipelineLog("<<< Bracket-grupper laddade")
+
+            // Step: Förbättra bilder (färg/ton) — efter HDR, före sortering
+            try await checkCancellationAndWaitIfPaused()
+            if AppSettings.shared.enhanceEnabled {
+                pipelineLog(">>> Steg: Förbättra bilder")
+                state.updateStep(.enhancePhotos, phase: .active)
+                let enhanced = try await runEnhancePhotos()
+                state.completeStep(.enhancePhotos, count: enhanced)
+                pipelineLog("<<< Förbättra bilder klart")
+            } else {
+                state.updateStep(.enhancePhotos, phase: .disabled)
+                state.appendStepLog(.enhancePhotos, "Förbättra bilder avaktiverad i inställningar", type: .info)
+            }
 
             // Step: Sort files into address folders (before review)
             try await checkCancellationAndWaitIfPaused()
@@ -392,6 +409,16 @@ class PipelineRunner: ObservableObject {
                 try await runHDRMerge()
                 try await loadBracketGroups()
                 state.completeStep(step)
+
+            case .enhancePhotos:
+                // Rensa loggen så att alla bilder görs om (nya filer i enhanced/ ersätter de i FÖRBÄTTRADE)
+                if let outputDir = state.outputDirectory {
+                    try? FileManager.default.removeItem(at: outputDir.appendingPathComponent(EnhancementLog.fileName))
+                }
+                try await loadBracketGroups()
+                let enhanced = try await runEnhancePhotos()
+                if let outputDir = state.outputDirectory { moveUnsortedEnhanced(outputDir: outputDir) }
+                state.completeStep(step, count: enhanced)
 
             case .findCalendarInfo:
                 // Delete saved matches to force re-match

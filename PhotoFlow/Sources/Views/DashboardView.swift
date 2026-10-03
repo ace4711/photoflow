@@ -593,6 +593,7 @@ struct DashboardView: View {
 
     private func isStepEnabled(_ step: DashboardStep) -> Bool {
         if !settings.hdrMergeEnabled && step == .createHDR { return false }
+        if !settings.enhanceEnabled && step == .enhancePhotos { return false }
         if !settings.aiTaggingEnabled && step == .aiTagging { return false }
         if !settings.calendarMatchEnabled && (step == .findCalendarInfo || step == .writeIPTCTags) { return false }
         return true

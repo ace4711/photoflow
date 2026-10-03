@@ -154,6 +154,39 @@ struct DirectoryPicker: View {
 
 // MARK: - Pipeline
 
+/// Raderna i sektionen "Förbättra bilder" (steget efter HDR): av/på + val av stilprofil.
+struct EnhanceSettingsRows: View {
+    @ObservedObject var settings: AppSettings
+    @State private var profiles = EnhancementProfileStore.shared.loadAll()
+
+    var body: some View {
+        Toggle("Förbättra bilder automatiskt (färg & ton)", isOn: $settings.enhanceEnabled)
+
+        if settings.enhanceEnabled {
+            Picker("Stilprofil", selection: $settings.enhanceProfileID) {
+                ForEach(profiles) { profile in
+                    Text(profile.name).tag(profile.id)
+                }
+                if !profiles.contains(where: { $0.id == settings.enhanceProfileID }) {
+                    Text("Okänd profil (Automatisk används)").tag(settings.enhanceProfileID)
+                }
+            }
+            .pickerStyle(.menu)
+
+            Text("Efter HDR-steget korrigeras varje färdig bild (HDR-TIFF per bracket, DNG-rendering per singel): vitbalans, exponering, svart/vit-punkt, skuggor/högdagrar, lätt S-kurva, vibrance, clarity, skärpa och liten horisonträtning. Resultatet sparas som nya filer i mappen FÖRBÄTTRADE — originalen rörs aldrig. Parametrar per bild sparas i enhancement.json.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Text("Automatisk: full automatik med en liten varm förskjutning. Neutral: svag automatik, ingen varm ton, ingen rätning. Varm & ljus: något ljusare och varmare. Egna profiler läggs som JSON i ~/Library/Application Support/PhotoFlow/profiles/.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        } else {
+            Text("Bilderna levereras som HDR-TIFF/DNG utan automatisk förbättring.")
+                .font(.caption)
+                .foregroundColor(.orange)
+        }
+    }
+}
+
 struct PipelineTab: View {
     @ObservedObject var settings: AppSettings
 
@@ -225,6 +258,10 @@ struct PipelineTab: View {
                         .font(.caption)
                         .foregroundColor(.orange)
                 }
+            }
+
+            Section("Förbättra bilder") {
+                EnhanceSettingsRows(settings: settings)
             }
 
             Section("AI-taggning") {

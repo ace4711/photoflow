@@ -28,10 +28,10 @@ struct AddressFolderLayoutTests {
         #expect(dir.lastPathComponent == "Lindvägen 12, Tyresö ÖVRIGA")
     }
 
-    @Test("allDirs innehåller DNG, preview och extras i den ordningen")
-    func allDirs_containsAllThreeInOrder() {
+    @Test("allDirs innehåller DNG, preview, extras och förbättrade i den ordningen")
+    func allDirs_containsAllInOrder() {
         let dirs = AddressFolderLayout.allDirs(in: outputDir, folderName: "Osorterade")
-        #expect(dirs.map(\.lastPathComponent) == ["Osorterade", "Osorterade TITTBILDER", "Osorterade ÖVRIGA"])
+        #expect(dirs.map(\.lastPathComponent) == ["Osorterade", "Osorterade TITTBILDER", "Osorterade ÖVRIGA", "Osorterade FÖRBÄTTRADE"])
     }
 
     @Test("Färdiga- och film-mapparna har suffixen FÄRDIGA och FILM")

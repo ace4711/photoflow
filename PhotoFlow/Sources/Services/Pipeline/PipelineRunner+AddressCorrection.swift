@@ -67,7 +67,8 @@ extension PipelineRunner {
         let renamePairs = [
             (AddressFolderLayout.dngDirName(oldName), AddressFolderLayout.dngDirName(newName)),
             (AddressFolderLayout.previewDirName(oldName), AddressFolderLayout.previewDirName(newName)),
-            (AddressFolderLayout.extrasDirName(oldName), AddressFolderLayout.extrasDirName(newName))
+            (AddressFolderLayout.extrasDirName(oldName), AddressFolderLayout.extrasDirName(newName)),
+            (AddressFolderLayout.enhancedDirName(oldName), AddressFolderLayout.enhancedDirName(newName))
         ]
 
         var movedAny = false
