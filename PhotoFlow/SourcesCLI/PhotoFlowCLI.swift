@@ -37,6 +37,8 @@ struct PhotoFlowCLI {
             await runCommand(Array(arguments.dropFirst()))
         case "verify":
             await verifyCommand(Array(arguments.dropFirst()))
+        case "reel":
+            await reelCommand(Array(arguments.dropFirst()))
         case "--help", "-h", "help":
             printUsage()
             exit(0)
@@ -51,6 +53,7 @@ struct PhotoFlowCLI {
         print("""
         Användning: photoflow-cli run --input <mapp> --output <mapp> [flaggor]
                     photoflow-cli verify --output <mapp> [--json]
+                    photoflow-cli reel --input <mapp> --output <mapp> [flaggor]
 
         "run" kör hela PhotoFlow-pipelinen (NEF -> DNG -> previews ->
         bracket-analys -> [HDR] -> [kalendermatchning] -> [AI-taggning] ->
@@ -87,6 +90,24 @@ struct PhotoFlowCLI {
                              verifieringen körs. Rör aldrig original-NEF.
           --dry-run         Tillsammans med --repair-links: visa bara vad
                              som skulle repareras, skriv inget till disk.
+
+        "reel" gör en Objektfilm (bildspel) av färdiga bilder: analyserar
+        bilderna (cache i reel_analysis.json i outputmappen), väljer och
+        ordnar dem, skriver specen reel.json och renderar reel_<format>.mp4
+        (H.264 High, 30 fps, tyst AAC-spår) i outputmappen.
+
+        Flaggor (reel):
+          --input <mapp>    Mapp med färdiga bilder (JPEG/PNG/TIFF/HEIC,
+                             inte rekursivt). Krävs.
+          --output <mapp>   Mapp för reel.json, reel_analysis.json och
+                             videon. Krävs.
+          --count <n>       Antal bilder i filmen (standard 5).
+          --aspect <a>      9:16 (standard, 1080x1920), 1:1 (1080x1080)
+                             eller 16:9 (1920x1080).
+          --no-ai           Hoppa över Foundation Models-beskrivningen
+                             (rum/kategori) i analysen.
+          --json            Skriv en maskinläsbar JSON-sammanfattning
+                             (mellan PHOTOFLOW_CLI_JSON_SUMMARY_BEGIN/_END).
 
         Avslutar med exit-kod 0 om alla steg/kontroller lyckades, annars 1.
         Exit-kod 2 vid felaktiga argument.
@@ -373,6 +394,147 @@ struct PhotoFlowCLI {
         exit(report.errorCount == 0 ? 0 : 1)
     }
 
+    // MARK: - reel
+
+    private static func reelCommand(_ args: [String]) async {
+        var inputPath: String?
+        var outputPath: String?
+        var count = 5
+        var format = ReelFormat.vertical
+        var describe = true
+        var jsonOutput = false
+
+        var idx = 0
+        while idx < args.count {
+            let arg = args[idx]
+            switch arg {
+            case "--input":
+                idx += 1
+                guard idx < args.count else { fail("--input kräver ett värde") }
+                inputPath = args[idx]
+            case "--output":
+                idx += 1
+                guard idx < args.count else { fail("--output kräver ett värde") }
+                outputPath = args[idx]
+            case "--count":
+                idx += 1
+                guard idx < args.count, let n = Int(args[idx]), n > 0 else { fail("--count kräver ett heltal > 0") }
+                count = n
+            case "--aspect":
+                idx += 1
+                guard idx < args.count else { fail("--aspect kräver ett värde") }
+                switch args[idx] {
+                case "9:16": format = .vertical
+                case "1:1": format = .square
+                case "16:9": format = .landscape
+                default: fail("--aspect måste vara 9:16, 1:1 eller 16:9")
+                }
+            case "--no-ai":
+                describe = false
+            case "--json":
+                jsonOutput = true
+            case "--help", "-h":
+                printUsage()
+                exit(0)
+            default:
+                fail("Okänd flagga: \(arg)")
+            }
+            idx += 1
+        }
+        guard let inputPath, let outputPath else { fail("--input och --output krävs") }
+        // Symlänkar löses upp (efter att outputmappen skapats) så att specens
+        // relativa sökvägar blir rätt även när /tmp och /private/tmp blandas.
+        try? FileManager.default.createDirectory(atPath: outputPath, withIntermediateDirectories: true)
+        let inputURL = URL(fileURLWithPath: inputPath).resolvingSymlinksInPath()
+        let outputURL = URL(fileURLWithPath: outputPath).resolvingSymlinksInPath()
+
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: inputURL.path, isDirectory: &isDir), isDir.boolValue else {
+            standardError("Indatamappen finns inte: \(inputURL.path)\n")
+            exit(1)
+        }
+        let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "tif", "tiff", "heic"]
+        let files = ((try? FileManager.default.contentsOfDirectory(
+            at: inputURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? [])
+            .filter { imageExtensions.contains($0.pathExtension.lowercased()) }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        guard !files.isEmpty else {
+            standardError("Inga bilder i \(inputURL.path)\n")
+            exit(1)
+        }
+        try? FileManager.default.createDirectory(at: outputURL, withIntermediateDirectories: true)
+
+        func log(_ text: String) { if !jsonOutput { print(text) } }
+        log("PhotoFlow CLI — Objektfilm")
+        log("  input:  \(inputURL.path) (\(files.count) bilder)")
+        log("  output: \(outputURL.path)")
+
+        do {
+            // Analys
+            let analysisStart = Date()
+            let items = try await ReelImageAnalyzer.analyze(
+                urls: files, cacheDirectory: outputURL, aiTagsDirectory: inputURL, describe: describe)
+            let analysisSeconds = Date().timeIntervalSince(analysisStart)
+            log(String(format: "Analys: %d av %d bilder på %.1fs", items.count, files.count, analysisSeconds))
+            guard !items.isEmpty else { fail("Ingen bild gick att analysera") }
+
+            // Komponera
+            var options = ReelComposer.Options()
+            options.count = count
+            options.format = format
+            options.address = inputURL.lastPathComponent
+            let result = ReelComposer.compose(items: items, specDirectory: outputURL, options: options)
+            let spec = result.spec
+            let specURL = outputURL.appendingPathComponent("reel.json")
+            try spec.jsonData().write(to: specURL, options: .atomic)
+            let total = ReelTimeline.totalDuration(spec)
+
+            let names: [String: String] = Dictionary(uniqueKeysWithValues: spec.assets.map { asset in
+                (asset.id, asset.sources.first?.path.map { ($0 as NSString).lastPathComponent } ?? asset.id)
+            })
+            let picks: [PickSummary] = (spec.provenance.autoSelection ?? []).map {
+                PickSummary(asset: $0.asset, file: names[$0.asset] ?? "", slot: $0.slot, reason: $0.reason)
+            }
+            log("Urval (\(spec.timeline.count) klipp, \(String(format: "%.1f", total)) s):")
+            for p in picks { log("  \(p.asset) \(p.file) [\(p.slot)] \(p.reason)") }
+            for e in result.selection.excluded.prefix(10) { log("  utesluten: \(e.reason)") }
+
+            // Rendera
+            let output = format.output
+            let videoURL = outputURL.appendingPathComponent("reel_\(output.aspect.replacingOccurrences(of: ":", with: "x")).mp4")
+            let renderStart = Date()
+            let lastPercent = ProgressBox()
+            let quiet = jsonOutput
+            try await ReelRenderer.export(spec: spec, specDirectory: outputURL, output: output, to: videoURL) { p in
+                let pct = Int(p * 10) * 10
+                if !quiet, lastPercent.advance(to: pct) { print("  rendering \(pct)%") }
+            }
+            let renderSeconds = Date().timeIntervalSince(renderStart)
+            let size = (try? FileManager.default.attributesOfItem(atPath: videoURL.path)[.size] as? Int) ?? 0
+            log(String(format: "Klar: %@ (%.1f s film, %.1f MB, rendering %.1fs)",
+                       videoURL.path, total, Double(size) / 1_000_000, renderSeconds))
+
+            if jsonOutput {
+                let summary = ReelSummary(
+                    inputDirectory: inputURL.path, specFile: specURL.path, videoFile: videoURL.path,
+                    aspect: output.aspect, width: output.width, height: output.height, fps: output.fps,
+                    durationSeconds: total, fileBytes: size, analysisSeconds: analysisSeconds,
+                    renderSeconds: renderSeconds, picks: picks)
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys]
+                if let data = try? encoder.encode(summary), let json = String(data: data, encoding: .utf8) {
+                    print("PHOTOFLOW_CLI_JSON_SUMMARY_BEGIN")
+                    print(json)
+                    print("PHOTOFLOW_CLI_JSON_SUMMARY_END")
+                }
+            }
+            exit(0)
+        } catch {
+            standardError("photoflow-cli reel: \(error.localizedDescription)\n")
+            exit(1)
+        }
+    }
+
     // MARK: - Progress printing
 
     @MainActor
@@ -454,4 +616,38 @@ private struct RunSummary: Codable {
     let errorMessage: String?
     let steps: [StepSummary]
     let filesCreated: FilesCreated
+}
+
+private struct PickSummary: Codable {
+    let asset: String
+    let file: String
+    let slot: String
+    let reason: String
+}
+
+private struct ReelSummary: Codable {
+    let inputDirectory: String
+    let specFile: String
+    let videoFile: String
+    let aspect: String
+    let width: Int
+    let height: Int
+    let fps: Int
+    let durationSeconds: Double
+    let fileBytes: Int
+    let analysisSeconds: Double
+    let renderSeconds: Double
+    let picks: [PickSummary]
+}
+
+/// Låter en `@Sendable`-progresscallback skriva ut varje tiondel bara en gång.
+private nonisolated final class ProgressBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last = -1
+    func advance(to value: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard value > last else { return false }
+        last = value
+        return true
+    }
 }
