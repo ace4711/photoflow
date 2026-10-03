@@ -135,6 +135,15 @@ final class NotificationService: NSObject, ObservableObject {
         )
     }
 
+    /// Objektfilmen är renderad (efter mäklarens godkännande) och uppladdad.
+    func notifyReelRendered(address: String, folder: URL) {
+        send(
+            title: "Objektfilm klar",
+            body: "Filmen för \(address) är renderad och uppladdad.",
+            folderURL: folder
+        )
+    }
+
     /// Ett fel uppstod i ett pipeline-steg.
     func notifyError(_ message: String) {
         send(title: "Fel i PhotoFlow", body: message)

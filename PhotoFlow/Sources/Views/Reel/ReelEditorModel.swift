@@ -422,6 +422,28 @@ final class ReelEditorModel {
         }
     }
 
+    // MARK: Synk mot mäklaren
+
+    /// Ersätter filmen med en spec från servern (redan översatt till lokala källor, se `ReelSyncMerger`).
+    func adoptRemoteSpec(_ remote: ReelSpec) {
+        spec = remote
+        format = ReelFormat(rawValue: remote.outputs.first?.id ?? "") ?? format
+        count = min(max(remote.assets.count, Self.countRange.lowerBound), Self.countRange.upperBound)
+        selectedAssetID = nil
+        revisionToken += 1
+        if case .rendered = phase { phase = .ready }
+        saveSpec()
+    }
+
+    /// Efter lyckad skickning: lokala specen får serverns revision och status (utan att räknas som en ändring).
+    func markSynced(revision: Int, status: String) {
+        guard var current = spec else { return }
+        current.revision = revision
+        current.status = status
+        spec = current
+        saveSpec()
+    }
+
     // MARK: Rendera
 
     func render() {
@@ -457,17 +479,5 @@ final class ReelEditorModel {
 
     func dismissError() {
         if case .failed = phase { phase = items.isEmpty ? .idle : .ready }
-    }
-}
-
-/// Släpper bara igenom ökande heltalsprocent (renderingens förlopp kommer från en bakgrundstråd).
-nonisolated final class ProgressGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value = -1
-    func advance(to v: Int) -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        guard v > value else { return false }
-        value = v
-        return true
     }
 }

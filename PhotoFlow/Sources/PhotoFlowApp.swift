@@ -83,6 +83,9 @@ struct PhotoFlowApp: App {
         // `SessionHistoryStore.pruneMissingOutputDirectories`s dokkommentar.
         SessionHistoryStore.pruneMissingOutputDirectories()
 
+        // Objektfilm: starta renderworkern om användaren slagit på automatisk rendering.
+        ReelWorkerController.shared.apply()
+
         // Startkontrollen (mappar, kalender, verktyg, Lightroom) ersätter den
         // tidigare verktygsvarningen: öppnas av sig själv bara om något blockerar,
         // annars syns resultatet i verktygsfältet. Läser bara — begär ingen
