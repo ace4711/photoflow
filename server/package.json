@@ -1,0 +1,12 @@
+{
+  "name": "objektfilm-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Objektfilm-servern: mäklarlänkar, specrevisioner, renderkö och media (inga npm-beroenden).",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/main.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test \"test/*.test.ts\""
+  }
+}

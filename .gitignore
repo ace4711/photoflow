@@ -8,3 +8,11 @@ build/
 # Webbdelen av Objektfilm
 web/reel/node_modules/
 web/reel/dist/
+
+# Objektfilm-servern (lokal data och hemligheter)
+data/
+.env
+node_modules/
+dist/
+server/data/
+server/.env
