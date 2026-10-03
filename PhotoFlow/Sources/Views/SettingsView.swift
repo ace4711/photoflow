@@ -62,6 +62,7 @@ struct SettingsView: View {
 
 struct DirectoriesTab: View {
     @ObservedObject var settings: AppSettings
+    @ObservedObject private var preflight = PreflightModel.shared
 
     var body: some View {
         Form {
@@ -82,8 +83,33 @@ struct DirectoriesTab: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
+
+            // Samma kontroll som Startkontroll i verktygsfältet, bara mappdelen.
+            Section("Status") {
+                ForEach(preflight.report.checks(in: .folders)) { check in
+                    PreflightRow(check: check, showSection: false, onFix: handle)
+                }
+            }
         }
         .formStyle(.grouped)
+        .task { await preflight.run() }
+    }
+
+    private func handle(_ fix: Preflight.Fix) {
+        switch fix {
+        case .chooseInput, .chooseOutput:
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.allowsMultipleSelection = false
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            if fix == .chooseInput { settings.inputDirectory = url } else { settings.outputDirectory = url }
+            Task { await preflight.run() }
+        case .openSettings:
+            return
+        default:
+            Task { await preflight.perform(fix) }
+        }
     }
 }
 

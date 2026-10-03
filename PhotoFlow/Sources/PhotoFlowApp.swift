@@ -7,9 +7,7 @@ struct PhotoFlowApp: App {
     // `MenuBarExtra`-menyn delar samma bevaknings-/pipeline-state (se
     // `ContentView`s klasskommentar för `RunnerWrapper`).
     @StateObject private var runner = RunnerWrapper()
-    @StateObject private var deps = DependencyManager.shared
     @ObservedObject private var settings = AppSettings.shared
-    @State private var showDependencyAlert = false
 
     /// Samma UserDefaults-nyckel som `AppSettings.showMenuBarExtra`, men
     /// deklarerad direkt som `@AppStorage` här i stället för proxad via
@@ -46,17 +44,6 @@ struct PhotoFlowApp: App {
                 .onOpenURL { url in
                     pipeline.pendingFieldNotesImportURL = url
                 }
-                .alert("Verktyg saknas", isPresented: $showDependencyAlert) {
-                    Button("Öppna Inställningar") {
-                        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                    }
-                    Button("Fortsätt ändå", role: .cancel) {}
-                } message: {
-                    let missing = deps.checks
-                        .filter { $0.status == .missing && $0.importance == .required }
-                        .map(\.name)
-                    Text("Följande verktyg behövs men saknas:\n\(missing.joined(separator: ", "))\n\nÖppna Inställningar → System för att installera.")
-                }
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 1400, height: 900)
@@ -87,17 +74,14 @@ struct PhotoFlowApp: App {
         // `SessionHistoryStore.pruneMissingOutputDirectories`s dokkommentar.
         SessionHistoryStore.pruneMissingOutputDirectories()
 
-        // Run dependency check
-        deps.runChecks()
-
-        // Wait for check to finish
-        while deps.isChecking {
-            try? await Task.sleep(nanoseconds: 100_000_000)
-        }
-
-        // Show alert if critical tools are missing
-        if deps.hasMissing {
-            showDependencyAlert = true
+        // Startkontrollen (mappar, kalender, verktyg, Lightroom) ersätter den
+        // tidigare verktygsvarningen: öppnas av sig själv bara om något blockerar,
+        // annars syns resultatet i verktygsfältet. Läser bara — begär ingen
+        // behörighet (se nedan).
+        let preflight = PreflightModel.shared
+        let report = await preflight.run(includeTools: true)
+        if !report.blockers.isEmpty {
+            preflight.isPresented = true
         }
 
         // Behörigheter begärs INTE vid appstart. Kalenderåtkomst frågas när

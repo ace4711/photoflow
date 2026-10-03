@@ -95,23 +95,18 @@ class DependencyManager: ObservableObject {
     // MARK: - Check
 
     func runChecks() {
+        Task { await runChecksAndWait() }
+    }
+
+    /// Samma kontroll som `runChecks`, men går att vänta på — startkontrollen
+    /// (`PreflightModel`) behöver resultatet innan den kan visa verktygssektionen.
+    func runChecksAndWait() async {
         isChecking = true
-
-        Task.detached { [tools] in
-            var mutableResults: [DependencyCheck] = []
-
-            for tool in tools {
-                let result = Self.checkTool(tool)
-                mutableResults.append(result)
-            }
-
-            let results = mutableResults
-
-            await MainActor.run {
-                self.checks = results
-                self.isChecking = false
-            }
-        }
+        let results = await Task.detached { [tools] in
+            tools.map { Self.checkTool($0) }
+        }.value
+        checks = results
+        isChecking = false
     }
 
     nonisolated private static func checkTool(_ tool: ToolDef) -> DependencyCheck {

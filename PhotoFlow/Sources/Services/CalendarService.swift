@@ -23,7 +23,7 @@ class CalendarService {
     ///   valda namn råkar matcha samma kalender räknas den bara en gång),
     ///   i den ordning de först matchades.
     /// - `notFound`: de valda namn (trimmade) som inte gav någon träff alls.
-    static func matchCalendarNames(selected: [String], available: [String]) -> (matched: [String], notFound: [String]) {
+    nonisolated static func matchCalendarNames(selected: [String], available: [String]) -> (matched: [String], notFound: [String]) {
         var matched: [String] = []
         var seen = Set<String>()
         var notFound: [String] = []

@@ -4,6 +4,8 @@ struct DashboardView: View {
     @EnvironmentObject var pipeline: PipelineState
     @ObservedObject var runner: RunnerWrapper
     @ObservedObject var settings = AppSettings.shared
+    // Startkontrollen: mappar, kalender, verktyg — se `Preflight`/`PreflightView`.
+    @ObservedObject private var preflight = PreflightModel.shared
     @State private var showLog: Bool = true
     @State private var showReview: Bool = false
     @State private var showSettings: Bool = false
@@ -37,6 +39,9 @@ struct DashboardView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView(initialTab: settingsInitialTab)
                 .frame(width: 700, height: 620)
+        }
+        .sheet(isPresented: $preflight.isPresented) {
+            PreflightView(model: preflight, onFix: handlePreflightFix)
         }
         .sheet(isPresented: $showHistory) {
             SessionHistoryView(runner: runner, onOpened: { showReview = true })
@@ -80,6 +85,11 @@ struct DashboardView: View {
 
     private var dashboardContent: some View {
         VStack(spacing: 12) {
+            if let blocker = preflight.report.blockers.first {
+                preflightBanner(blocker)
+                    .padding(.horizontal, 20)
+            }
+
             if settings.calendarMatchEnabled {
                 AddressBanner()
                     .padding(.horizontal, 20)
@@ -155,7 +165,8 @@ struct DashboardView: View {
                 label: "Input",
                 path: settings.inputDirectory?.lastPathComponent,
                 color: .blue,
-                detail: nefCount > 0 ? "\(nefCount) NEF" : nil
+                detail: nefCount > 0 ? "\(nefCount) NEF" : nil,
+                alert: hasBlocker(prefix: "input.")
             ) {
                 pickInputFolder()
             }
@@ -165,10 +176,21 @@ struct DashboardView: View {
                 label: "Output",
                 path: settings.outputDirectory?.lastPathComponent ?? pipeline.outputDirectory?.lastPathComponent,
                 color: .green,
-                detail: hasProcessedOutput ? "Bearbetat" : nil
+                detail: hasProcessedOutput ? "Bearbetat" : nil,
+                alert: hasBlocker(prefix: "output.")
             ) {
                 pickOutputFolder()
             }
+
+            Button(action: { preflight.isPresented = true }) {
+                HStack(spacing: 5) {
+                    Image(systemName: PreflightView.icon(for: preflight.report.worst))
+                        .foregroundStyle(PreflightView.color(for: preflight.report.worst))
+                    Text(preflight.report.checks.isEmpty ? "Startkontroll" : preflight.report.summary)
+                        .font(.caption)
+                }
+            }
+            .help("Startkontroll — mappar, kalender, verktyg och Lightroom")
         }
 
         if pipeline.isRunning {
@@ -273,11 +295,11 @@ struct DashboardView: View {
 
     // MARK: - Folder button (toolbar)
 
-    private func folderButton(icon: String, label: String, path: String?, color: Color, detail: String?, action: @escaping () -> Void) -> some View {
+    private func folderButton(icon: String, label: String, path: String?, color: Color, detail: String?, alert: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .foregroundStyle(color)
+                Image(systemName: alert ? "exclamationmark.triangle.fill" : icon)
+                    .foregroundStyle(alert ? .red : color)
                 VStack(alignment: .leading, spacing: 1) {
                     if let path {
                         Text(path)
@@ -445,7 +467,21 @@ struct DashboardView: View {
     }
 
     private func toggleWatchMode() {
-        pipeline.isWatchMode.toggle()
+        guard !pipeline.isWatchMode else {
+            setWatchMode(false)
+            return
+        }
+        Task {
+            if await preflight.blocksStart() {
+                pipeline.appendLog("Bevakningen startades inte — startkontrollen hittade något som måste åtgärdas först.", type: .error)
+                return
+            }
+            setWatchMode(true)
+        }
+    }
+
+    private func setWatchMode(_ on: Bool) {
+        pipeline.isWatchMode = on
         if pipeline.isWatchMode {
             runner.startWatchingForSDCards()
             for step in DashboardStep.allCases {
@@ -465,6 +501,16 @@ struct DashboardView: View {
     }
 
     private func startPipeline() {
+        Task {
+            if await preflight.blocksStart() {
+                pipeline.appendLog("Startkontrollen hittade något som måste åtgärdas först — se Startkontroll.", type: .error)
+                return
+            }
+            startPipelineUnchecked()
+        }
+    }
+
+    private func startPipelineUnchecked() {
         // Always start SD card watching in auto mode
         runner.startWatchingForSDCards()
 
@@ -487,6 +533,57 @@ struct DashboardView: View {
         if !settings.aiTaggingEnabled && step == .aiTagging { return false }
         if !settings.calendarMatchEnabled && (step == .findCalendarInfo || step == .writeIPTCTags) { return false }
         return true
+    }
+
+    // MARK: - Startkontroll
+
+    private func hasBlocker(prefix: String) -> Bool {
+        preflight.report.blockers.contains { $0.id.hasPrefix(prefix) }
+    }
+
+    private func preflightBanner(_ blocker: Preflight.Check) -> some View {
+        let others = preflight.report.blockers.count - 1
+        return HStack(spacing: 12) {
+            Image(systemName: "xmark.octagon.fill")
+                .font(.title2)
+                .foregroundStyle(.red)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(blocker.title + (others > 0 ? " (+\(others) till)" : ""))
+                    .font(.body.weight(.semibold))
+                Text(blocker.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer()
+            Button("Visa startkontroll") { preflight.isPresented = true }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.red.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.red.opacity(0.4), lineWidth: 1))
+    }
+
+    /// Åtgärder från startkontrollen som rör tillstånd den här vyn äger.
+    private func handlePreflightFix(_ fix: Preflight.Fix) {
+        switch fix {
+        case .chooseInput:
+            pickInputFolder()
+            Task { await preflight.run() }
+        case .chooseOutput:
+            pickOutputFolder()
+            Task { await preflight.run() }
+        case .openSettings(let tab, _):
+            preflight.isPresented = false
+            // Ett ark i taget: vänta tills startkontrollen hunnit stängas.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                settingsInitialTab = tab
+                showSettings = true
+            }
+        default:
+            Task { await preflight.perform(fix) }
+        }
     }
 
     private func refreshFileCount() {
