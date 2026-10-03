@@ -33,6 +33,23 @@ struct AddressFolderLayoutTests {
         let dirs = AddressFolderLayout.allDirs(in: outputDir, folderName: "Osorterade")
         #expect(dirs.map(\.lastPathComponent) == ["Osorterade", "Osorterade TITTBILDER", "Osorterade ÖVRIGA"])
     }
+
+    @Test("Färdiga- och film-mapparna har suffixen FÄRDIGA och FILM")
+    func finishedAndReelDirs() {
+        #expect(AddressFolderLayout.finishedDir(in: outputDir, folderName: "Lindvägen 12").lastPathComponent == "Lindvägen 12 FÄRDIGA")
+        #expect(AddressFolderLayout.reelDir(in: outputDir, folderName: "Lindvägen 12").lastPathComponent == "Lindvägen 12 FILM")
+    }
+
+    @Test("Filmens utmapp ligger bredvid källmappen, med adressen om den kan härledas")
+    func reelDirForSource() {
+        let finished = URL(fileURLWithPath: "/x/Objekt/Lindvägen 12 FÄRDIGA", isDirectory: true)
+        #expect(AddressFolderLayout.reelDir(forSource: finished).path == "/x/Objekt/Lindvägen 12 FILM")
+        let other = URL(fileURLWithPath: "/x/Objekt/Export", isDirectory: true)
+        #expect(AddressFolderLayout.reelDir(forSource: other).path == "/x/Objekt/Export FILM")
+        #expect(AddressFolderLayout.addressName(fromFinishedDir: "Lindvägen 12 FÄRDIGA") == "Lindvägen 12")
+        #expect(AddressFolderLayout.addressName(fromFinishedDir: "Lindvägen 12") == nil)
+    }
+
 }
 
 struct HDRLocatorTests {

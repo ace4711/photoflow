@@ -15,6 +15,13 @@ enum AddressFolderLayout {
     static func dngDirName(_ folderName: String) -> String { folderName }
     static func previewDirName(_ folderName: String) -> String { "\(folderName) TITTBILDER" }
     static func extrasDirName(_ folderName: String) -> String { "\(folderName) ÖVRIGA" }
+    /// Färdiga bilder exporterade från Lightroom (underlag för Objektfilm).
+    static func finishedDirName(_ folderName: String) -> String { "\(folderName) FÄRDIGA" }
+    /// Objektfilmens utmapp (`reel.json`, `reel_<format>.mp4`, `reel_analysis.json`).
+    static func reelDirName(_ folderName: String) -> String { "\(folderName) FILM" }
+
+    static let finishedSuffix = " FÄRDIGA"
+    static let reelSuffix = " FILM"
 
     static func dngDir(in outputDir: URL, folderName: String) -> URL {
         outputDir.appendingPathComponent(dngDirName(folderName))
@@ -24,6 +31,26 @@ enum AddressFolderLayout {
     }
     static func extrasDir(in outputDir: URL, folderName: String) -> URL {
         outputDir.appendingPathComponent(extrasDirName(folderName))
+    }
+    static func finishedDir(in outputDir: URL, folderName: String) -> URL {
+        outputDir.appendingPathComponent(finishedDirName(folderName))
+    }
+    static func reelDir(in outputDir: URL, folderName: String) -> URL {
+        outputDir.appendingPathComponent(reelDirName(folderName))
+    }
+
+    /// Adressen ur en `<adress> FÄRDIGA`-mapp (nil om namnet inte följer mönstret).
+    static func addressName(fromFinishedDir name: String) -> String? {
+        guard name.hasSuffix(finishedSuffix), name.count > finishedSuffix.count else { return nil }
+        return String(name.dropLast(finishedSuffix.count))
+    }
+
+    /// Filmens utmapp för en källmapp med färdiga bilder: `<adress> FILM` bredvid
+    /// `<adress> FÄRDIGA`, annars `<källmappens namn> FILM` bredvid källmappen.
+    static func reelDir(forSource source: URL) -> URL {
+        let name = source.lastPathComponent
+        let base = addressName(fromFinishedDir: name) ?? name
+        return source.deletingLastPathComponent().appendingPathComponent(reelDirName(base), isDirectory: true)
     }
 
     /// Var en grupps HDR-filer ligger just nu. Sorteringen flyttar TIFF:en till
