@@ -56,6 +56,13 @@ nonisolated struct ReelServerRender: Decodable, Sendable, Equatable {
     var revision: Int
     var outputId: String
     var current: Bool
+    /// Signerad media-URL (gäller i en timme), relativ eller absolut. Saknas i äldre svar.
+    var url: String?
+    var width: Int?
+    var height: Int?
+    var duration: Double?
+    var bytes: Int?
+    var createdAt: String?
 }
 
 nonisolated struct ReelServerObjectDetail: Decodable, Sendable {

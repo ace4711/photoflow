@@ -10,7 +10,7 @@ import Foundation
 /// bug had `writeIPTCMetadata` look for a non-existent `<address> DNG` folder,
 /// silently skipping all DNG files for metadata writing. All three call sites
 /// should go through this type so the layout can only change in one place.
-enum AddressFolderLayout {
+nonisolated enum AddressFolderLayout {
     /// DNG symlinks live directly in the address-named folder — no suffix.
     static func dngDirName(_ folderName: String) -> String { folderName }
     static func previewDirName(_ folderName: String) -> String { "\(folderName) TITTBILDER" }
