@@ -209,4 +209,17 @@ class AppSettings: ObservableObject {
         guard (removable ?? false) || (ejectable ?? false) else { return false }
         return hasDCIM
     }
+
+    /// Whether NEF files found in `sourceDir` must be copied into the input folder
+    /// before the pipeline starts. Previously decided by `sourceDir` starting with
+    /// "/Volumes/" — wrong as soon as the input folder itself lives on an external
+    /// drive: the watcher's own hits inside the input folder (often a dated
+    /// subfolder) were then rsynced into the input root, duplicating every NEF.
+    /// Now: anything at or below the input folder is already in place.
+    static func sourceNeedsCopyToInput(sourceDir: URL, inputDir: URL?) -> Bool {
+        guard let inputDir else { return sourceDir.path.hasPrefix("/Volumes/") }
+        let source = sourceDir.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+        let input = inputDir.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+        return !source.starts(with: input)
+    }
 }

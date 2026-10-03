@@ -48,8 +48,9 @@ class RunnerWrapper: ObservableObject {
         watcher.onNewFilesDetected = { [weak self] sourceDir, files in
             Task { @MainActor in
                 guard let self else { return }
-                // If source is on a volume (SD card), copy to input dir first
-                if sourceDir.path.hasPrefix("/Volumes/") {
+                // Source outside the input dir (SD card) → copy to input dir first.
+                // Not a "/Volumes/" check: the input dir may itself be on an external drive.
+                if AppSettings.sourceNeedsCopyToInput(sourceDir: sourceDir, inputDir: AppSettings.shared.inputDirectory) {
                     await self.copyFromSDCardAndStart(sourceDir: sourceDir, files: files)
                 } else {
                     // Use configured output dir to avoid creating output inside input
