@@ -164,7 +164,9 @@ class RunnerWrapper: ObservableObject {
             state.completeStep(.copyToInput, count: copiedCount)
             state.appendLog("rsync: Kopiering klar — \(copiedCount) filer", type: .success)
             watcher.markCopiedFilesHandled(files, from: sourceDir, into: inputDir)
-            start(inputDir: inputDir)
+            // Utan outputDir föll körningen tillbaka på <input>/processed i stället
+            // för den valda outputmappen.
+            start(inputDir: inputDir, outputDir: settings.outputDirectory)
         } else if exitCode > 0 {
             state.updateStep(.copyToInput, phase: .error("rsync avslutades med kod \(exitCode)"))
             state.appendLog("rsync: Fel vid kopiering (kod \(exitCode))", type: .error)
