@@ -76,6 +76,11 @@ struct DashboardView: View {
         }
         .onChange(of: settings.inputDirectoryPath) { _, _ in refreshFileCount() }
         .onChange(of: settings.outputDirectoryPath) { _, _ in refreshFileCount() }
+        // Antalet på Kör-knappen: kortkopiering och körningar ändrar inputmappen,
+        // och startkontrollen körs om när appen blir aktiv.
+        .onChange(of: pipeline.isRunning) { _, _ in refreshFileCount() }
+        .onChange(of: pipeline.stepStatuses[.copyToInput]?.phase) { _, _ in refreshFileCount() }
+        .onChange(of: preflight.lastRun) { _, _ in refreshFileCount() }
         .onChange(of: showSettings) { _, showing in
             if !showing { refreshFileCount() }
         }
@@ -215,22 +220,8 @@ struct DashboardView: View {
                 }
             }
 
-            Button(action: { startPipeline() }) {
-                Label(
-                    pipeline.isRunning ? "Kör..." : "Auto",
-                    systemImage: "bolt.circle.fill"
-                )
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.accentColor)
-            .disabled(pipeline.isRunning || settings.inputDirectory == nil)
-            .help("Kör hela pipelinen automatiskt")
-
-            Button(action: { toggleWatchMode() }) {
-                Image(systemName: pipeline.isWatchMode ? "eye.slash" : "eye")
-            }
-            .tint(pipeline.isWatchMode ? .orange : nil)
-            .help(pipeline.isWatchMode ? "Stoppa bevakning" : "Bevaka inputmapp")
+            runButton
+            watchButton
         }
 
         ToolbarSpacer(.fixed, placement: .primaryAction)
@@ -256,6 +247,51 @@ struct DashboardView: View {
                 Image(systemName: "gearshape")
             }
             .help("Inställningar")
+        }
+    }
+
+    /// Kör-knappen är en handling, inte ett läge: den är blå (framträdande)
+    /// bara när det finns bilder att köra, så att den inte ser "intryckt" ut.
+    /// Förut hette den "Auto" och var alltid blå.
+    @ViewBuilder
+    private var runButton: some View {
+        let button = Button(action: { startPipeline() }) {
+            if pipeline.isRunning {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Kör…")
+                }
+            } else {
+                Label(nefCount > 0 ? "Kör \(nefCount) bilder" : "Kör", systemImage: "play.fill")
+                    .labelStyle(.titleAndIcon)
+            }
+        }
+        .disabled(pipeline.isRunning || settings.inputDirectory == nil)
+        .help(pipeline.isRunning
+              ? "Pipelinen kör"
+              : "Kör pipelinen nu på bilderna i inputmappen (slår också på minneskortsbevakningen)")
+        if nefCount > 0 && !pipeline.isRunning {
+            button.buttonStyle(.borderedProminent).tint(.accentColor)
+        } else {
+            button
+        }
+    }
+
+    /// Bevakningen är ett läge: orange och ifylld när den är på.
+    @ViewBuilder
+    private var watchButton: some View {
+        let on = pipeline.isWatchMode
+        let button = Button(action: { toggleWatchMode() }) {
+            Label(on ? "Bevakar" : "Bevaka", systemImage: on ? "eye.fill" : "eye")
+                .labelStyle(.titleAndIcon)
+        }
+        .help(on
+              ? "Bevakningen är på: nya minneskort och nya filer i inputmappen körs automatiskt. Klicka för att stänga av."
+              : "Slå på bevakning: nya minneskort kopieras och körs automatiskt. Bilder som redan ligger i inputmappen körs med Kör.")
+        if on {
+            button.buttonStyle(.borderedProminent).tint(.orange)
+        } else {
+            button
         }
     }
 

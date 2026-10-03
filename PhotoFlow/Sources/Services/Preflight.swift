@@ -3,7 +3,7 @@ import Foundation
 /// Startkontrollen: visar om allt appen behöver är på plats — mappar, kalender,
 /// verktyg, Lightroom-pluginet och AI-modellen — och vad man gör åt det som
 /// saknas. Körs vid appstart, när inställningarna ändras, när en disk ansluts
-/// eller matas ut, och innan Auto/bevakning startar. En blockerande brist (t.ex.
+/// eller matas ut, och innan Kör/bevakning startar. En blockerande brist (t.ex.
 /// att inputmappens externa disk inte är ansluten) öppnar kontrollen i stället
 /// för att låta pipelinen misslyckas halvvägs.
 ///

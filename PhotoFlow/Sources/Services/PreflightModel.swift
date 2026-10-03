@@ -18,7 +18,7 @@ final class PreflightModel: ObservableObject {
     @Published private(set) var isRunning = false
     @Published private(set) var lastRun: Date?
     /// Sätts när kontrollen ska visas (vid start med en blockerande brist, eller
-    /// när Auto/bevakning stoppades av en) — `DashboardView` visar arket.
+    /// när Kör/bevakning stoppades av en) — `DashboardView` visar arket.
     @Published var isPresented = false
     /// Resultat av den senaste åtgärden, visas i arket (t.ex. "Starta om Lightroom").
     @Published var actionMessage: String?
@@ -83,7 +83,7 @@ final class PreflightModel: ObservableObject {
     }
 
     /// Kör kontrollen och visar den om något blockerar. Returnerar `true` om
-    /// Auto/bevakning INTE ska starta.
+    /// Kör/bevakning INTE ska starta.
     func blocksStart() async -> Bool {
         let result = await run()
         if !result.blockers.isEmpty {

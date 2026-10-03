@@ -4632,7 +4632,7 @@ Körs vid appstart (ersätter den tidigare verktygsvarningen; öppnas av sig sj�
 vid blockerande brist), när en disk ansluts/matas ut, när appen blir aktiv och när
 en inställning ändras (0,5 s debounce). Verktygen kontrolleras bara vid start och
 "Kontrollera igen". Blockerande brister visas som röd banderoll överst på dashboarden,
-rödmarkerar mappknappen det gäller, och stoppar Auto och bevakning (arket öppnas i
+rödmarkerar mappknappen det gäller, och stoppar Kör och bevakning (arket öppnas i
 stället, med en rad i loggen). Mappdelen visas även under Inställningar → Mappar.
 Kontrollen läser bara; kalenderåtkomst begärs aldrig automatiskt.
 
