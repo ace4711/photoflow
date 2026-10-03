@@ -247,8 +247,29 @@ nonisolated struct ReelSpec: Codable, Sendable, Equatable {
     /// Avkodar en spec. Okända fält ignoreras; versionskravet kontrolleras
     /// separat med `isReadable`, så att anroparen kan ge ett begripligt fel.
     static func decode(from data: Data) throws -> ReelSpec {
+        try makeDecoder().decode(ReelSpec.self, from: data)
+    }
+
+    /// Avkodaren som `decode(from:)` använder; även för svar där en spec ligger inbäddad.
+    static func makeDecoder() -> JSONDecoder {
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(ReelSpec.self, from: data)
+        // Servern skriver millisekunder ("…:07.123Z"), appen hela sekunder: båda ska gå att läsa.
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let text = try decoder.singleValueContainer().decode(String.self)
+            if let date = Self.parseISO8601(text) { return date }
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath,
+                                                    debugDescription: "Ogiltigt datum: \(text)"))
+        }
+        return decoder
+    }
+
+    /// ISO 8601 med eller utan bråkdelssekunder.
+    static func parseISO8601(_ text: String) -> Date? {
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        if let date = plain.date(from: text) { return date }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: text)
     }
 }
