@@ -1,4 +1,5 @@
 import Foundation
+import IOKit
 
 /// Startkontrollen: visar om allt appen behöver är på plats — mappar, kalender,
 /// verktyg, Lightroom-pluginet och AI-modellen — och vad man gör åt det som
@@ -130,6 +131,30 @@ nonisolated enum Preflight {
         var symlinkDestination: String?
     }
 
+    /// Hur en extern disk är ansluten, läst ur IOKit (`IOUSBHostDevice`).
+    nonisolated struct USBLink: Equatable, Sendable {
+        var product: String
+        /// `USBSpeed`: 1 low, 2 full, 3 high (480 Mb/s), 4 super (5 Gb/s),
+        /// 5 super+ (10 Gb/s), 6 super+ 2×2 (20 Gb/s).
+        var speed: Int
+
+        /// USB 2.0 eller långsammare — för en SSD eller kortläsare betyder det
+        /// nästan alltid fel kabel eller en kontakt som inte sitter i ordentligt.
+        var isSlow: Bool { speed <= 3 }
+
+        var label: String {
+            switch speed {
+            case 1: return "1,5 Mb/s"
+            case 2: return "12 Mb/s"
+            case 3: return "480 Mb/s (USB 2.0)"
+            case 4: return "5 Gb/s"
+            case 5: return "10 Gb/s"
+            case 6: return "20 Gb/s"
+            default: return "okänd hastighet"
+            }
+        }
+    }
+
     /// Filsystemsläsningarna, utbytbara i tester.
     nonisolated struct FolderProbe: Sendable {
         var item: @Sendable (URL) -> ItemState
@@ -138,6 +163,8 @@ nonisolated enum Preflight {
         var freeBytes: @Sendable (URL) -> Int64?
         /// NEF-filer i mappen (rekursivt), utan att gå in i `excluding`.
         var nefBytes: @Sendable (_ dir: URL, _ excluding: URL?) -> (count: Int, bytes: Int64)
+        /// USB-anslutningen för disken som `url` ligger på, eller nil om den inte sitter på USB.
+        var usbLink: @Sendable (URL) -> USBLink? = { _ in nil }
 
         static let live = FolderProbe(
             item: { url in
@@ -176,8 +203,31 @@ nonisolated enum Preflight {
                     bytes += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
                 }
                 return (count, bytes)
-            }
+            },
+            usbLink: { url in liveUSBLink(for: url) }
         )
+
+        /// Volym → BSD-namn (statfs) → IOMedia → uppåt i IOService-trädet till
+        /// USB-enheten. Fungerar även för APFS-volymer, vars förälder är
+        /// containern och därefter den fysiska disken.
+        private static func liveUSBLink(for url: URL) -> USBLink? {
+            var fs = statfs()
+            guard statfs(url.path, &fs) == 0 else { return nil }
+            let device = withUnsafePointer(to: &fs.f_mntfromname) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+            }
+            guard device.hasPrefix("/dev/"), let matching = IOBSDNameMatching(kIOMainPortDefault, 0, String(device.dropFirst(5))) else { return nil }
+            let media = IOServiceGetMatchingService(kIOMainPortDefault, matching)
+            guard media != 0 else { return nil }
+            defer { IOObjectRelease(media) }
+            let options = IOOptionBits(kIORegistryIterateRecursively | kIORegistryIterateParents)
+            func search(_ key: String) -> Any? {
+                IORegistryEntrySearchCFProperty(media, kIOServicePlane, key as CFString, kCFAllocatorDefault, options)
+            }
+            guard let speed = (search("USBSpeed") as? NSNumber)?.intValue else { return nil }
+            let product = (search("USB Product Name") as? String)?.trimmingCharacters(in: .whitespaces) ?? "USB-disk"
+            return USBLink(product: product, speed: speed)
+        }
     }
 
     nonisolated enum CalendarAccess: Sendable {
@@ -314,6 +364,12 @@ nonisolated enum Preflight {
             }
         }
 
+        checks += usbChecks(
+            input: inputUsable ? input.inputDir : nil,
+            output: outputUsable ? effectiveOutput : nil,
+            cards: input.sdCards, probe: probe
+        )
+
         // Ledigt utrymme
         if outputUsable, let out = effectiveOutput {
             let measureAt = probe.item(out).exists ? out : out.deletingLastPathComponent()
@@ -390,6 +446,42 @@ nonisolated enum Preflight {
             }
         }
         return (checks, structure)
+    }
+
+    /// USB-hastigheten för de externa diskar som input, output och anslutna
+    /// minneskort ligger på — en per disk, med alla roller den har.
+    private static func usbChecks(input: URL?, output: URL?, cards: [String], probe: FolderProbe) -> [Check] {
+        var roles: [(root: URL, url: URL, role: String)] = []
+        func add(_ url: URL?, _ role: String) {
+            guard let url, let root = volumeRoot(of: url) else { return }
+            if let i = roles.firstIndex(where: { samePath($0.root, root) }) {
+                roles[i].role += " och \(role)"
+            } else {
+                roles.append((root, url, role))
+            }
+        }
+        add(input, "inputmappen")
+        add(output, "outputmappen")
+        for card in cards { add(URL(fileURLWithPath: "/Volumes").appendingPathComponent(card), "minneskortet") }
+
+        return roles.compactMap { entry in
+            guard let link = probe.usbLink(entry.url) else { return nil }
+            let name = entry.root.lastPathComponent.trimmingCharacters(in: .whitespaces)
+            let id = "usb.\(name)"
+            if link.isSlow {
+                return Check(
+                    id: id, section: .folders, status: .warning,
+                    title: "\"\(name)\" är ansluten i USB 2.0-hastighet",
+                    detail: "\(link.product) (\(entry.role)) går i \(link.label) i stället för 5–10 Gb/s, så kopiering och DNG-konvertering tar många gånger längre tid. "
+                        + "Vanligast är kabeln — många USB-C-kablar klarar bara USB 2.0. Använd kabeln som följde med, tryck i kontakten ordentligt i båda ändar eller prova en annan port. Mata ut disken först.",
+                    path: entry.root.path
+                )
+            }
+            return Check(
+                id: id, section: .folders, status: .ok, title: "Anslutning för \"\(name)\"",
+                detail: "\(link.product) (\(entry.role)): \(link.label).", path: entry.root.path
+            )
+        }
     }
 
     /// Kontrollerna för en vald mapp: disken ansluten → mappen finns → är en mapp → läs/skriv.

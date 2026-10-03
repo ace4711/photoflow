@@ -13,6 +13,8 @@ struct PreflightTests {
         var mounted: Set<String> = []
         var free: Int64? = 500_000_000_000
         var nef: (count: Int, bytes: Int64) = (0, 0)
+        /// USB-anslutning per volymrot (`/Volumes/<namn>`).
+        var usb: [String: Preflight.USBLink] = [:]
 
         func dir(_ path: String, writable: Bool = true) {
             items[path] = .init(exists: true, isDirectory: true, readable: true, writable: writable)
@@ -23,7 +25,8 @@ struct PreflightTests {
                 item: { [self] in items[$0.standardizedFileURL.path] ?? .init() },
                 isVolumeMounted: { [self] in mounted.contains($0.path) },
                 freeBytes: { [self] _ in free },
-                nefBytes: { [self] _, _ in nef }
+                nefBytes: { [self] _, _ in nef },
+                usbLink: { [self] url in Preflight.volumeRoot(of: url).flatMap { usb[$0.path] } }
             )
         }
     }
@@ -301,5 +304,41 @@ struct PreflightTests {
     func volumeRoot() {
         #expect(Preflight.volumeRoot(of: URL(fileURLWithPath: "\(Self.ext)/input"))?.path == "/Volumes/photo-ingestion")
         #expect(Preflight.volumeRoot(of: URL(fileURLWithPath: "/Users/x/Desktop/INPUT")) == nil)
+    }
+
+    // MARK: - USB-hastighet
+
+    @Test("Disk i USB 2.0-hastighet ger en varning som nämner både input och output")
+    func slowUSB_warnsOncePerDisk() {
+        let disk = healthyDisk()
+        disk.usb["/Volumes/photo-ingestion"] = .init(product: "Portable SSD T5", speed: 3)
+        let report = Preflight.evaluate(input(), probe: disk.probe)
+        let check = report.check("usb.photo-ingestion")
+        #expect(check?.status == .warning)
+        #expect(check?.detail.contains("Portable SSD T5") == true)
+        #expect(check?.detail.contains("inputmappen och outputmappen") == true)
+        #expect(report.checks.filter { $0.id.hasPrefix("usb.") }.count == 1)
+    }
+
+    @Test("Disk i 10 Gb/s är OK")
+    func fastUSB_ok() {
+        let disk = healthyDisk()
+        disk.usb["/Volumes/photo-ingestion"] = .init(product: "Portable SSD T5", speed: 5)
+        let report = Preflight.evaluate(input(), probe: disk.probe)
+        #expect(report.check("usb.photo-ingestion")?.status == .ok)
+        #expect(report.check("usb.photo-ingestion")?.detail.contains("10 Gb/s") == true)
+    }
+
+    @Test("Långsam kortläsare varnar; intern disk och okänd anslutning kontrolleras inte")
+    func cardReaderAndInternal() {
+        let disk = healthyDisk()
+        disk.usb["/Volumes/NIKON Z 8"] = .init(product: "XQD 120GB", speed: 3)
+        var inp = input(inputDir: "/Users/x/INPUT", outputDir: "/Users/x/OUTPUT")
+        disk.dir("/Users/x"); disk.dir("/Users/x/INPUT"); disk.dir("/Users/x/OUTPUT")
+        inp.sdCards = ["NIKON Z 8"]
+        let report = Preflight.evaluate(inp, probe: disk.probe)
+        #expect(report.check("usb.NIKON Z 8")?.status == .warning)
+        #expect(report.check("usb.NIKON Z 8")?.detail.contains("minneskortet") == true)
+        #expect(report.checks.filter { $0.id.hasPrefix("usb.") }.count == 1)
     }
 }
