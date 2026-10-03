@@ -59,6 +59,13 @@ final class ImageCache {
         cache(for: tier).object(forKey: url as NSURL)
     }
 
+    /// Glömmer `url` i båda nivåerna — för filer som skrivs om under samma namn
+    /// (en omgjord HDR heter fortfarande `hdr_group_N.jpg`).
+    func evict(_ url: URL) {
+        thumbnailCache.removeObject(forKey: url as NSURL)
+        fullSizeCache.removeObject(forKey: url as NSURL)
+    }
+
     func store(_ image: NSImage, for url: URL, tier: Tier) {
         cache(for: tier).setObject(image, forKey: url as NSURL, cost: cost(of: image))
     }

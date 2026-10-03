@@ -79,6 +79,11 @@ class PipelineState: ObservableObject {
     }
 
     @Published var bracketGroups: [BracketGroup] = []
+    /// Grupper vars HDR görs om just nu (granskningsvyn visar "Gör om HDR…").
+    @Published var reMergingGroups: Set<Int> = []
+    /// Räknas upp när en grupps HDR gjorts om, så att vyerna laddar om bilden
+    /// trots att filnamnet är detsamma.
+    @Published var hdrRevision: [Int: Int] = [:]
     @Published var allPhotos: [PhotoItem] = [] {
         // Fas 10 (prestanda vid stora sessioner, se FORBATTRINGAR.md): tidigare
         // byggdes `photoIndexByID` om (O(n)) på VARJE mutation av `allPhotos`,

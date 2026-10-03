@@ -260,6 +260,10 @@ struct BracketReviewView: View {
                 // Show merged HDR preview
                 VStack(spacing: 12) {
                     LocalImageView(url: hdrURL)
+                        .id(hdrIdentity)
+                        .overlay {
+                            if isReMergingCurrent { reMergeBadge(large: true) }
+                        }
                         .overlay(alignment: .topTrailing) {
                             GlassEffectContainer {
                                 VStack(alignment: .trailing, spacing: 6) {
@@ -388,8 +392,12 @@ struct BracketReviewView: View {
                     if let group = currentGroup, group.mergedHDRPreviewURL != nil {
                         VStack(spacing: 4) {
                             LocalThumbnailView(url: group.mergedHDRPreviewURL)
+                                .id(hdrIdentity)
                                 .frame(width: 100, height: 75)
                                 .clipped()
+                                .overlay {
+                                    if isReMergingCurrent { reMergeBadge(large: false) }
+                                }
 
                             Text("HDR")
                                 .font(.system(.caption2, design: .monospaced, weight: .bold))
@@ -534,7 +542,30 @@ struct BracketReviewView: View {
         scheduleReMerge()
     }
 
-    /// Debounced re-merge: waits 1.5s after last change before triggering Photoshop
+    // MARK: - Omgjord HDR
+
+    private var isReMergingCurrent: Bool {
+        currentGroup.map { pipeline.reMergingGroups.contains($0.id) } ?? false
+    }
+
+    /// Byts när gruppens HDR gjorts om, så att bilden laddas om fast filnamnet är detsamma.
+    private var hdrIdentity: String {
+        guard let group = currentGroup else { return "hdr-none" }
+        return "hdr-\(group.id)-\(pipeline.hdrRevision[group.id] ?? 0)"
+    }
+
+    private func reMergeBadge(large: Bool) -> some View {
+        VStack(spacing: large ? 10 : 4) {
+            ProgressView().controlSize(large ? .regular : .small)
+            Text(large ? "Gör om HDR med ditt urval…" : "Gör om…")
+                .font(large ? .headline : .caption2.bold())
+        }
+        .foregroundStyle(.white)
+        .padding(large ? 16 : 6)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.black.opacity(0.6)))
+    }
+
+    /// Debounced re-merge: waits 1.5s after the last change, then re-runs HDREngine with the new selection
     @State private var reMergeTask: Task<Void, Never>?
 
     private func scheduleReMerge() {

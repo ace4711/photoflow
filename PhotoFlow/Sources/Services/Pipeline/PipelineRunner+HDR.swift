@@ -209,23 +209,29 @@ extension PipelineRunner {
 
     /// Re-merge a single bracket group after user changes selection.
     /// Called from BracketReviewView when user modifies which photos are included.
-    func reMergeHDR(group: BracketGroup) async {
-        guard let outputDir = state.outputDirectory else { return }
+    /// Returnerar URL:erna som skrevs om (TIFF + JPEG) när det lyckades, så att
+    /// appen kan tömma bildcachen för dem — filnamnen är desamma som förut.
+    @discardableResult
+    func reMergeHDR(group: BracketGroup) async -> [URL] {
+        guard let outputDir = state.outputDirectory else { return [] }
         let hdrDir = outputDir.appendingPathComponent("hdr")
 
         let selectedPhotos = state.photos(in: group).filter { $0.accepted }
         guard selectedPhotos.count >= 2 else {
             state.appendLog("Grupp \(group.id): Minst 2 bilder krävs för HDR.", type: .warning)
-            return
+            return []
         }
 
-        // Remove old HDR files
+        // Den gamla HDR:en får ligga kvar tills den nya är klar — TIFF:en byts
+        // in först när den är färdigskriven (HDRWriter), så ett misslyckat
+        // försök lämnar den föregående sammanslagningen orörd.
         let hdrTiff = hdrDir.appendingPathComponent("hdr_group_\(group.id).tiff")
         let hdrJpeg = hdrDir.appendingPathComponent("hdr_group_\(group.id).jpg")
-        let hdrTifOld = hdrDir.appendingPathComponent("hdr_group_\(group.id).tif")
-        try? FileManager.default.removeItem(at: hdrTiff)
-        try? FileManager.default.removeItem(at: hdrJpeg)
-        try? FileManager.default.removeItem(at: hdrTifOld)
+        try? FileManager.default.removeItem(at: hdrDir.appendingPathComponent("hdr_group_\(group.id).tif"))
+
+        state.reMergingGroups.insert(group.id)
+        defer { state.reMergingGroups.remove(group.id) }
+        var mergeSucceeded = false
 
         let engine = AppSettings.shared.hdrEngine
         let engineLabel = engine == "opencv" ? "Mertens exposure fusion (OpenCV)" : "Exposure fusion (Core Image RAW)"
@@ -239,11 +245,11 @@ extension PipelineRunner {
                 }
                 guard previewPaths.count >= 2 else {
                     state.appendLog("Grupp \(group.id): för få förhandsbilder för OpenCV-fusion.", type: .warning)
-                    return
+                    return []
                 }
                 guard let python3Path = ToolLocator.python3WithOpenCV else {
                     state.appendLog("python3 med OpenCV (cv2) och numpy saknas — installera med: pip3 install opencv-python numpy", type: .error)
-                    return
+                    return []
                 }
                 let scriptPath = FileManager.default.temporaryDirectory.appendingPathComponent("photoflow_mertens.py")
                 try mertensFusionPython().write(to: scriptPath, atomically: true, encoding: .utf8)
@@ -252,11 +258,12 @@ extension PipelineRunner {
                     executablePath: python3Path,
                     arguments: [scriptPath.path, hdrTiff.path] + previewPaths
                 )
+                mergeSucceeded = true
             } else {
                 let rawURLs = selectedPhotos.compactMap { $0.dngURL ?? $0.nefURL }
                 guard rawURLs.count >= 2 else {
                     state.appendLog("Grupp \(group.id): för få RAW-filer (DNG/NEF) för HDR.", type: .warning)
-                    return
+                    return []
                 }
                 let hdrOptions = HDREngine.Options(
                     maxDimension: AppSettings.shared.hdrMaxDimension,
@@ -269,12 +276,13 @@ extension PipelineRunner {
                     jpegURL: hdrJpeg,
                     exiftoolPath: try? requireExiftool()
                 )
+                mergeSucceeded = true
             }
         } catch {
             state.appendLog("Fusion misslyckades: \(error.localizedDescription)", type: .error)
         }
 
-        if FileManager.default.fileExists(atPath: hdrTiff.path) {
+        if mergeSucceeded, FileManager.default.fileExists(atPath: hdrTiff.path) {
             // Use JPEG preview for UI if available, otherwise TIFF
             let previewURL = FileManager.default.fileExists(atPath: hdrJpeg.path) ? hdrJpeg : hdrTiff
             if let idx = state.bracketGroups.firstIndex(where: { $0.id == group.id }) {
@@ -282,9 +290,11 @@ extension PipelineRunner {
             }
             state.appendLog("HDR-ommerge klar för grupp \(group.id) (16-bit TIFF).", type: .success)
             audio.playStepComplete()
+            return [hdrTiff, hdrJpeg]
         } else {
-            state.appendLog("HDR-ommerge misslyckades för grupp \(group.id).", type: .error)
+            state.appendLog("HDR-ommerge misslyckades för grupp \(group.id) — den tidigare sammanslagningen ligger kvar.", type: .error)
             audio.playError()
+            return []
         }
     }
 

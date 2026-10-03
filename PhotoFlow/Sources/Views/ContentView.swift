@@ -205,7 +205,12 @@ class RunnerWrapper: ObservableObject {
     func reMergeHDR(group: BracketGroup) {
         guard let runner else { return }
         Task {
-            await runner.reMergeHDR(group: group)
+            let rewritten = await runner.reMergeHDR(group: group)
+            guard !rewritten.isEmpty else { return }
+            // Samma filnamn som förut: töm cachen och byt vyernas identitet, annars
+            // visas den gamla sammanslagningen kvar.
+            rewritten.forEach { ImageCache.shared.evict($0) }
+            state?.hdrRevision[group.id, default: 0] += 1
         }
     }
 
