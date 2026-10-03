@@ -86,6 +86,9 @@ class RunnerWrapper: ObservableObject {
 
         watcher.isCopyingFromCard = true
         defer { watcher.isCopyingFromCard = false }
+        // Samma skydd mot App Nap som pipelinen (se PipelineRunner.startPipeline).
+        let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleSystemSleepDisabled], reason: "PhotoFlow kopierar från minneskort")
+        defer { ProcessInfo.processInfo.endActivity(activity) }
 
         state.updateStep(.copyToInput, phase: .active)
         state.appendStepLog(.copyToInput, "Kopierar \(files.count) NEF-filer från \(sourceDir.path)...")

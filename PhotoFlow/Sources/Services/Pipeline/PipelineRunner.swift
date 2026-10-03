@@ -150,6 +150,16 @@ class PipelineRunner: ObservableObject {
         state.outputDirectory = outputDir ?? inputDir.appendingPathComponent("processed")
         state.isRunning = true
 
+        // Utan det här stryper macOS appen (App Nap) när skärmen är låst eller
+        // fönstret inte syns: processen fick prioritet 4 och HDR-grupperna gick
+        // från ~11 s till över 10 min styck medan användaren var borta.
+        // .idleSystemSleepDisabled håller också datorn vaken tills körningen är klar.
+        let activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .idleSystemSleepDisabled],
+            reason: "PhotoFlow bearbetar bilder"
+        )
+        defer { ProcessInfo.processInfo.endActivity(activity) }
+
         // Mark upcoming steps as queued so cards aren't grey
         let settings = AppSettings.shared
         state.updateStep(.watchSources, phase: .complete)  // Already found files

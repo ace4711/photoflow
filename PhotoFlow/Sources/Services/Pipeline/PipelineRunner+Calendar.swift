@@ -83,8 +83,10 @@ extension PipelineRunner {
             }
             // Geocode cached addresses to show GPS status — skip any address with a
             // saved manual correction, using its corrected coordinate instead.
+            // Ingen kalenderåtkomst behövs här (matchningarna kommer från filen och
+            // geokodningen går via MapKit) — förut begärdes den ändå, vilket kunde
+            // visa en onödig dialog och fick photoflow-cli att krascha.
             let calendar = CalendarService.shared
-            _ = await calendar.requestAccess()
             for (idx, mapping) in calendarMappings.enumerated() {
                 if correctedAddresses.contains(mapping.address) {
                     let coord = state.correctedCoordinates[mapping.address]
