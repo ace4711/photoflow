@@ -22,6 +22,13 @@ struct StepStatus {
     var startedAt: Date?
     var lastDuration: TimeInterval?
     var logEntries: [LogLine] = []
+    /// Prognos för tid kvar (`PipelineState.eta`), satt av vyn vid visning —
+    /// sparas inte i tillståndet eftersom den ändras med klockan.
+    var estimatedRemaining: TimeInterval?
+
+    private var estimateSuffix: String {
+        estimatedRemaining.map { " · ~\(StepTiming.format($0)) kvar" } ?? ""
+    }
 
     /// Formatted duration string, e.g. "2m 13s" or "45s"
     var durationText: String? {
@@ -43,13 +50,19 @@ struct StepStatus {
             if newCount > 0 { return "\(newCount) nya filer" }
             return "Bevakar..."
         case .queued:
-            return "\(queuedCount) i ko"
+            if let estimate = estimatedRemaining {
+                return "I kö · ~\(StepTiming.format(estimate))"
+            }
+            return queuedCount > 0 ? "\(queuedCount) i kö" : "I kö"
         case .active:
             if totalCount > 0 {
+                if estimatedRemaining != nil {
+                    return "\(processedCount)/\(totalCount)\(estimateSuffix)"
+                }
                 let remaining = totalCount - processedCount
                 return "\(processedCount)/\(totalCount) (\(remaining) kvar)"
             }
-            return "Arbetar..."
+            return "Arbetar...\(estimateSuffix)"
         case .needsAttention:
             return "Vantar pa dig"
         case .paused:

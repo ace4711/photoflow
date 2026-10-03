@@ -412,13 +412,110 @@ class PipelineState: ObservableObject {
     func completeStep(_ step: DashboardStep, count: Int = 0) {
         let now = Date()
         if let startedAt = stepStatuses[step]?.startedAt {
-            stepStatuses[step]?.lastDuration = now.timeIntervalSince(startedAt)
+            let duration = now.timeIntervalSince(startedAt)
+            stepStatuses[step]?.lastDuration = duration
+            recordTiming(step, duration: duration, count: count, finishedAt: now)
         }
         stepStatuses[step]?.phase = .complete
         stepStatuses[step]?.processedCount = count
         stepStatuses[step]?.totalCount = count
         stepStatuses[step]?.lastUpdated = now
         syncManifest(step: step)
+    }
+
+    // MARK: - Stegtider och prognos (se `StepTiming`)
+
+    /// Tidigare körningars stegtider, läst en gång och sedan uppdaterad i minnet.
+    private lazy var timingHistory: [StepTiming.Record] = StepTiming.Store.shared.load()
+
+    /// Steg som körs automatiskt, i körordning. Granskning och Lightroom väntar
+    /// på användaren och ingår inte i prognosen.
+    static let automaticSteps: [DashboardStep] = [
+        .copyToInput, .convertToDNG, .generatePreviews, .findCalendarInfo,
+        .aiTagging, .createHDR, .moveToFolders, .writeIPTCTags,
+    ]
+
+    /// Bilder i körningen — samma skala för alla steg. Under kortkopieringen
+    /// är det antalet filer som kopieras.
+    private var runPhotoCount: Int {
+        stepStatuses[.copyToInput]?.totalCount ?? 0
+    }
+
+    private func recordTiming(_ step: DashboardStep, duration: TimeInterval, count: Int, finishedAt: Date) {
+        guard Self.automaticSteps.contains(step), duration >= 0.5 else { return }
+        let photos = step == .copyToInput ? count : (runPhotoCount > 0 ? runPhotoCount : count)
+        guard photos > 0 else { return }
+        let settings = AppSettings.shared
+        let record = StepTiming.Record(
+            step: step.manifestKey, photos: photos, items: count, seconds: duration, finishedAt: finishedAt,
+            settings: [
+                "hdrEngine": settings.hdrEngine,
+                "hdrAlign": "\(settings.hdrAlignEnabled)",
+                "hdrMaxDimension": "\(settings.hdrMaxDimension)",
+                "aiDescriptions": "\(settings.aiDescriptionsEnabled)",
+            ]
+        )
+        timingHistory.append(record)
+        StepTiming.Store.shared.append(record)
+        let rate = String(format: "%.2f", duration / Double(photos))
+        appendLog("⏱ \(step.title): \(StepTiming.formatExact(duration)) för \(photos) bilder (\(rate) s/bild)")
+    }
+
+    struct ETA: Equatable {
+        /// Steget som pågår just nu (det senast startade aktiva).
+        var current: DashboardStep?
+        /// Återstående tid per steg som ännu inte är klart, där en prognos finns.
+        var perStep: [DashboardStep: TimeInterval]
+        /// Summan av `perStep` — tid kvar tills alla automatiska steg är klara.
+        var remaining: TimeInterval
+        /// Steg som återstår men saknar tidigare tider (prognosen är då för låg).
+        var unknown: [DashboardStep]
+
+        var currentRemaining: TimeInterval? { current.flatMap { perStep[$0] } }
+    }
+
+    /// Prognos för det som återstår av den pågående körningen (eller
+    /// kortkopieringen och körningen efter den). `nil` när inget pågår.
+    func eta(now: Date = Date()) -> ETA? {
+        let copying = stepStatuses[.copyToInput]?.phase == .active
+        guard isRunning || copying else { return nil }
+        let settings = AppSettings.shared
+        let photos = runPhotoCount
+
+        let active = Self.automaticSteps.filter { stepStatuses[$0]?.phase == .active }
+        let current = active.max { (stepStatuses[$0]?.startedAt ?? .distantPast) < (stepStatuses[$1]?.startedAt ?? .distantPast) }
+
+        var perStep: [DashboardStep: TimeInterval] = [:]
+        var unknown: [DashboardStep] = []
+        for step in Self.automaticSteps {
+            guard let status = stepStatuses[step] else { continue }
+            let pending: Bool
+            switch status.phase {
+            case .active, .queued, .paused:
+                pending = true
+            case .idle where copying:
+                // Under kortkopieringen har körningen inte startat än — räkna med
+                // de steg som kommer att köras.
+                pending = (step != .createHDR || settings.hdrMergeEnabled)
+                    && (step != .aiTagging || settings.aiTaggingEnabled)
+                    && ((step != .findCalendarInfo && step != .writeIPTCTags) || settings.calendarMatchEnabled)
+            default:
+                pending = false
+            }
+            guard pending else { continue }
+            let expected = StepTiming.expectedDuration(step: step.manifestKey, photos: photos, history: timingHistory)
+            let value: TimeInterval?
+            if step == current {
+                let elapsed = status.startedAt.map { now.timeIntervalSince($0) } ?? 0
+                value = StepTiming.remaining(
+                    elapsed: elapsed, processed: status.processedCount, total: status.totalCount, expected: expected
+                )
+            } else {
+                value = expected
+            }
+            if let value { perStep[step] = value } else { unknown.append(step) }
+        }
+        return ETA(current: current, perStep: perStep, remaining: perStep.values.reduce(0, +), unknown: unknown)
     }
 
     // MARK: - Fas 6: sessionsmanifest (photoflow_session.json)

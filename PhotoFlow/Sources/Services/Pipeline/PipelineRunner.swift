@@ -232,7 +232,10 @@ class PipelineRunner: ObservableObject {
 
             try await checkCancellationAndWaitIfPaused()
             if hdrEnabled {
-                // Step: Merge HDR brackets
+                // Step: Merge HDR brackets. Startar om stegets klocka: kortet har
+                // stått som aktivt sedan bracket-analysen, och utan omstart hade
+                // previews, kalender och AI räknats in i HDR-tiden.
+                state.updateStep(.createHDR, phase: .active)
                 try await runHDRMerge()
                 state.completeStep(.createHDR)
             } else {
@@ -271,6 +274,13 @@ class PipelineRunner: ObservableObject {
                 state.appendStepLog(.writeIPTCTags, "Metadata-skrivning avaktiverad (ingen kalendermatchning)", type: .info)
             }
             pipelineLog("<<< Metadata klar")
+
+            pipelineLog("⏱ Stegtider:")
+            for step in PipelineState.automaticSteps {
+                if let duration = state.stepStatuses[step]?.lastDuration {
+                    pipelineLog("   \(step.title): \(StepTiming.formatExact(duration))")
+                }
+            }
 
             // Pipeline done — review/culling is optional from here
             state.updateStep(.manualReview, phase: .needsAttention)

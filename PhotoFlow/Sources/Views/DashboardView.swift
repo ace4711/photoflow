@@ -100,9 +100,12 @@ struct DashboardView: View {
                     .padding(.horizontal, 20)
             }
 
+            // Ritas om var 5:e sekund så att prognoserna räknar ner medan något pågår.
+            TimelineView(.periodic(from: .now, by: 5)) { context in
+            let eta = pipeline.eta(now: context.date)
             LazyVGrid(columns: columns, spacing: 12) {
                 ForEach(DashboardStep.allCases) { step in
-                    let status = pipeline.stepStatuses[step] ?? .idle
+                    let status = Self.withEstimate(pipeline.stepStatuses[step] ?? .idle, eta?.perStep[step])
                     StepCardView(
                         step: step,
                         status: status,
@@ -123,6 +126,7 @@ struct DashboardView: View {
                 }
             }
             .padding(.horizontal, 20)
+            }
 
             Spacer(minLength: 0)
 
@@ -198,14 +202,19 @@ struct DashboardView: View {
             .help("Startkontroll — mappar, kalender, verktyg och Lightroom")
         }
 
-        if pipeline.isRunning {
+        if pipeline.isRunning || pipeline.stepStatuses[.copyToInput]?.phase == .active {
             ToolbarItem(placement: .principal) {
-                HStack(spacing: 6) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text(pipeline.currentStep.title)
-                        .font(.caption)
-                        .foregroundColor(.accentColor)
+                TimelineView(.periodic(from: .now, by: 5)) { context in
+                    let eta = pipeline.eta(now: context.date)
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(Self.etaHeadline(eta, fallback: pipeline.currentStep.title, now: context.date))
+                            .font(.caption)
+                            .foregroundColor(.accentColor)
+                            .monospacedDigit()
+                    }
+                    .help(Self.etaBreakdown(eta))
                 }
             }
         }
@@ -569,6 +578,43 @@ struct DashboardView: View {
         if !settings.aiTaggingEnabled && step == .aiTagging { return false }
         if !settings.calendarMatchEnabled && (step == .findCalendarInfo || step == .writeIPTCTags) { return false }
         return true
+    }
+
+    // MARK: - Prognos
+
+    private static func withEstimate(_ status: StepStatus, _ estimate: TimeInterval?) -> StepStatus {
+        var copy = status
+        copy.estimatedRemaining = estimate
+        return copy
+    }
+
+    /// "Konvertera DNG · ~11 min kvar · allt klart ~16:45".
+    private static func etaHeadline(_ eta: PipelineState.ETA?, fallback: String, now: Date) -> String {
+        guard let eta, let current = eta.current else { return fallback }
+        var parts = [current.title]
+        if let left = eta.currentRemaining {
+            parts.append("~\(StepTiming.format(left)) kvar")
+        }
+        if eta.remaining > 0, eta.perStep.count > 1 || eta.currentRemaining == nil {
+            let finish = now.addingTimeInterval(eta.remaining).formatted(date: .omitted, time: .shortened)
+            parts.append("allt klart ~\(finish)" + (eta.unknown.isEmpty ? "" : "+"))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private static func etaBreakdown(_ eta: PipelineState.ETA?) -> String {
+        guard let eta else { return "" }
+        var lines = PipelineState.automaticSteps.compactMap { step in
+            eta.perStep[step].map { "\(step.title): ~\(StepTiming.format($0))" }
+        }
+        if !eta.perStep.isEmpty {
+            lines.append("Totalt kvar: ~\(StepTiming.format(eta.remaining)) (exklusive granskning)")
+        }
+        if !eta.unknown.isEmpty {
+            lines.append("Inga tidigare tider för: \(eta.unknown.map(\.title).joined(separator: ", ")) — räknas inte med.")
+        }
+        lines.append("Prognosen bygger på tidigare körningar och takten hittills.")
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - Startkontroll

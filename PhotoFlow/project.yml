@@ -200,6 +200,9 @@ targets:
           # UI-vyerna, aldrig anropad av pipeline-koden (Services/Models/
           # Shared, verifierat med grep).
           - "ImageCache.swift"
+          # PreflightModel.swift är startkontrollens UI-modell (NSOpenPanel,
+          # DependencyManager) — den rena kontrollen (Preflight.swift) följer med.
+          - "PreflightModel.swift"
       - Sources/Models
       - Sources/Shared
       - SourcesCLI
