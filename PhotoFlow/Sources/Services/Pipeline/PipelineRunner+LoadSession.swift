@@ -38,7 +38,7 @@ extension PipelineRunner {
 
         let previewDir = outputDir.appendingPathComponent("previews")
         let dngStagingDir = outputDir.appendingPathComponent("dng")
-        let hdrDir = outputDir.appendingPathComponent("hdr")
+        let existingHDR = AddressFolderLayout.locateHDRFiles(in: outputDir)
 
         // Build DNG lookup: search entire output dir (files may be in dng/ staging or address folders)
         var dngLookup: [String: URL] = [:]
@@ -195,18 +195,11 @@ extension PipelineRunner {
                 : "single_\(String(format: "%03d", groupId))_\(photos.count)img"
 
             // Check for merged HDR output (TIFF is the real file, JPEG is preview for UI)
-            let hdrTiff = hdrDir.appendingPathComponent("hdr_group_\(groupId).tiff")
-            let hdrJpeg = hdrDir.appendingPathComponent("hdr_group_\(groupId).jpg")
-            let hdrPreviewURL: URL?
-            if FileManager.default.fileExists(atPath: hdrJpeg.path) {
-                hdrPreviewURL = hdrJpeg
-            } else if FileManager.default.fileExists(atPath: hdrTiff.path) {
-                hdrPreviewURL = hdrTiff
-            } else {
-                hdrPreviewURL = nil
-            }
+            // — i hdr/ eller, efter sorteringen, i adressmappen.
+            let hdrFiles = existingHDR[groupId]
+            let hdrPreviewURL = hdrFiles?.jpeg ?? hdrFiles?.tiff
             if hdrPreviewURL != nil {
-                pipelineLog("  Grupp \(groupId): HDR finns (\(FileManager.default.fileExists(atPath: hdrTiff.path) ? "16-bit TIFF" : "JPEG"))")
+                pipelineLog("  Grupp \(groupId): HDR finns (\(hdrFiles?.tiff != nil ? "16-bit TIFF" : "JPEG"))")
             }
 
             let group = BracketGroup(

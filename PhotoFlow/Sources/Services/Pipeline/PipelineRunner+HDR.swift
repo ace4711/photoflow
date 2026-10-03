@@ -48,15 +48,16 @@ extension PipelineRunner {
             }
         }
 
-        // Build list of groups to merge (skip already-done ones)
+        // Build list of groups to merge (skip already-done ones — även de som
+        // sorteringen redan flyttat till en adressmapp)
+        let existingHDR = AddressFolderLayout.locateHDRFiles(in: outputDir)
         var groupsToMerge: [(groupId: Int, previewPaths: [String], rawURLs: [URL])] = []
         for group in bracketGroups {
             let groupId = (group["group_id"] as? Int) ?? 0
             let files = (group["files"] as? [String]) ?? []
             let suggestedIndices = (group["suggested_hdr_indices"] as? [Int]) ?? Array(0..<files.count)
 
-            let hdrTiff = hdrDir.appendingPathComponent("hdr_group_\(groupId).tiff")
-            if FileManager.default.fileExists(atPath: hdrTiff.path) { continue }
+            if existingHDR[groupId]?.tiff != nil { continue }
 
             let selectedFiles = suggestedIndices.compactMap { i -> String? in
                 guard i < files.count else { return nil }
@@ -226,8 +227,12 @@ extension PipelineRunner {
         // Den gamla HDR:en får ligga kvar tills den nya är klar — TIFF:en byts
         // in först när den är färdigskriven (HDRWriter), så ett misslyckat
         // försök lämnar den föregående sammanslagningen orörd.
-        let hdrTiff = hdrDir.appendingPathComponent("hdr_group_\(group.id).tiff")
-        let hdrJpeg = hdrDir.appendingPathComponent("hdr_group_\(group.id).jpg")
+        // Skriv där gruppens HDR redan ligger: efter sorteringen i adressmappen,
+        // så att den levererade filen byts ut och inte en kopia i hdr/.
+        let existing = AddressFolderLayout.locateHDRFiles(in: outputDir)[group.id]
+        let hdrTiff = existing?.tiff ?? hdrDir.appendingPathComponent("hdr_group_\(group.id).tiff")
+        let hdrJpeg = existing?.jpeg ?? hdrDir.appendingPathComponent("hdr_group_\(group.id).jpg")
+        try? FileManager.default.createDirectory(at: hdrDir, withIntermediateDirectories: true)
         try? FileManager.default.removeItem(at: hdrDir.appendingPathComponent("hdr_group_\(group.id).tif"))
 
         state.reMergingGroups.insert(group.id)
