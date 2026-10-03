@@ -132,7 +132,7 @@ struct ReelShareSheet: View {
 }
 
 /// Ger `NSSharingServicePicker` en vy att fästa sig vid.
-private struct ShareAnchor: NSViewRepresentable {
+struct ShareAnchor: NSViewRepresentable {
     @Binding var view: NSView?
     func makeNSView(context: Context) -> NSView {
         let v = NSView()

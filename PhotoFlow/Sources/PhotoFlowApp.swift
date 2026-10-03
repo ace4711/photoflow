@@ -57,6 +57,19 @@ struct PhotoFlowApp: App {
         }
         .defaultSize(width: 1200, height: 900)
 
+        // Filmlistan för en session och spelaren (se `ReelFilmListView`, `ReelPlayerView`).
+        WindowGroup("Filmer", id: ReelFilmsWindow.id, for: ReelFilmsRequest.self) { $request in
+            if let request {
+                ReelFilmListView(outputDirectory: URL(fileURLWithPath: request.outputPath))
+            }
+        }
+        .defaultSize(width: 760, height: 560)
+
+        WindowGroup("Film", id: ReelPlayerWindow.id, for: ReelPlayerRequest.self) { $request in
+            if let request { ReelPlayerView(request: request) }
+        }
+        .windowResizability(.contentMinSize)
+
         Settings {
             SettingsView()
         }

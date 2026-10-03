@@ -13,6 +13,7 @@ struct ReelEditorView: View {
     @State private var didStart = false
     @State private var showShareSheet = false
     @State private var shareLoadedFor: URL?
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,6 +33,8 @@ struct ReelEditorView: View {
             shareLoadedFor = dir
             share.load(reelDirectory: dir)
             Task { await share.autoRefresh(into: model) }
+            // Filmlistans "Ny länk…": öppna delningsarket direkt.
+            if request.showShare == true { showShareSheet = true }
         }
         .sheet(isPresented: $showShareSheet) {
             ReelShareSheet(share: share, editor: model) { showShareSheet = false }
@@ -163,6 +166,7 @@ struct ReelEditorView: View {
             Button("Avbryt") { model.cancelRender() }
         case .rendered(let url):
             Label("Klar", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+            Button("Spela", systemImage: "play.fill") { openPlayer(url) }
             Button("Visa i Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
             Button("Rendera igen") { model.render() }
         default:
@@ -171,6 +175,17 @@ struct ReelEditorView: View {
                 .disabled(!model.hasFilm || model.isBusy)
                 .help("Skapar reel_\(model.format.output.aspect.replacingOccurrences(of: ":", with: "x")).mp4 och reel.json i \(model.reelDirectory?.lastPathComponent ?? "film-mappen")")
         }
+    }
+
+    /// Öppnar spelarfönstret för den just renderade filmen.
+    private func openPlayer(_ url: URL) {
+        let output = model.spec?.outputs.first
+        let aspect = output?.aspect ?? model.format.output.aspect
+        openWindow(id: ReelPlayerWindow.id, value: ReelPlayerRequest(
+            filePath: url.path, objectId: share.state?.objectId, renderId: nil,
+            title: "\(model.address) · \(aspect)",
+            width: output?.width ?? model.format.output.width, height: output?.height ?? model.format.output.height,
+            folderPath: model.reelDirectory?.path, outputPath: request.outputPath))
     }
 
     // MARK: Innehåll

@@ -60,6 +60,7 @@ struct SessionHistoryView: View {
                                 onRevealInFinder: { reveal(entry) },
                                 onVerify: { verify(entry) },
                                 onReel: { openReel(entry, address: $0) },
+                                onFilms: { openFilms(entry) },
                                 onDelete: { entryPendingDeletion = entry }
                             )
                             .swipeActions(edge: .trailing) {
@@ -180,6 +181,11 @@ struct SessionHistoryView: View {
         openWindow(id: ReelWindow.id, value: request)
     }
 
+    /// Filmlistan för sessionen (eget fönster, så att den kan ligga kvar när historiken stängs).
+    private func openFilms(_ entry: SessionHistoryStore.Entry) {
+        openWindow(id: ReelFilmsWindow.id, value: ReelFilmsRequest(outputPath: entry.outputDirectory))
+    }
+
     private func reveal(_ entry: SessionHistoryStore.Entry) {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: entry.outputDirectory)])
     }
@@ -192,6 +198,8 @@ private struct SessionHistoryRow: View {
     let onVerify: () -> Void
     /// Öppnar bildspelsfönstret för en adress (nil = ingen känd adress).
     let onReel: (String?) -> Void
+    /// Öppnar sessionens filmlista.
+    let onFilms: () -> Void
     let onDelete: () -> Void
 
     private static let dateFormatter: DateFormatter = {
@@ -201,6 +209,9 @@ private struct SessionHistoryRow: View {
         formatter.locale = Locale(identifier: "sv_SE")
         return formatter
     }()
+
+    /// Antal filmer i sessionens FILM-mappar (nil medan det räknas).
+    @State private var filmCount: Int?
 
     private var outputDirectoryExists: Bool {
         FileManager.default.fileExists(atPath: entry.outputDirectory)
@@ -267,12 +278,22 @@ private struct SessionHistoryRow: View {
                     .buttonStyle(.bordered)
                     .disabled(!outputDirectoryExists)
                 reelButton
+                Button(action: onFilms) {
+                    Label(filmCount.map { "Filmer (\($0))" } ?? "Filmer", systemImage: "film.stack")
+                }
+                .buttonStyle(.bordered)
+                .disabled(!outputDirectoryExists)
+                .help("Se och spela sessionens renderade filmer")
                 Button("Ta bort ur historik", role: .destructive, action: onDelete)
                     .buttonStyle(.borderless)
                     .font(.caption)
             }
         }
         .padding(.vertical, 4)
+        .task(id: entry.outputDirectory) {
+            guard outputDirectoryExists else { return }
+            filmCount = await ReelLibrary.countFilms(in: URL(fileURLWithPath: entry.outputDirectory))
+        }
         .opacity(outputDirectoryExists ? 1 : 0.5)
         .help(outputDirectoryExists ? "" : "Outputmappen finns inte längre på disk")
     }

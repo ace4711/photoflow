@@ -248,10 +248,14 @@ struct DashboardView: View {
             }
             .help("Historik — tidigare sessioner")
 
-            Button(action: { openReelWindow() }) {
+            Menu {
+                Button("Nytt bildspel…", systemImage: "film") { openReelWindow() }
+                Button("Filmer i den här sessionen", systemImage: "film.stack") { openFilmsWindow() }
+                    .disabled(settings.outputDirectory == nil)
+            } label: {
                 Image(systemName: "film")
             }
-            .help("Bildspel… — gör en kort film av de färdiga bilderna")
+            .help("Bildspel — gör en kort film av de färdiga bilderna, eller se sessionens filmer")
 
             Button(action: { importFieldNotes() }) {
                 Image(systemName: "square.and.arrow.down.on.square")
@@ -342,6 +346,12 @@ struct DashboardView: View {
             .tint(.red)
             .help("Radera alla gallringsbeslut och anteckningar")
         }
+    }
+
+    /// Öppnar filmlistan för den konfigurerade outputmappen.
+    private func openFilmsWindow() {
+        guard let output = settings.outputDirectory else { return }
+        openWindow(id: ReelFilmsWindow.id, value: ReelFilmsRequest(outputPath: output.path))
     }
 
     /// Öppnar bildspelsfönstret med mappväljaren i den konfigurerade outputmappen.
