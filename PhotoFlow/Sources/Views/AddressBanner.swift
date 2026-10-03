@@ -57,14 +57,16 @@ struct AddressBanner: View {
                     index: 0
                 )
             } else {
+                let placeholder = Self.placeholder(for: pipeline.stepStatuses[.findCalendarInfo]?.phase ?? .idle)
                 HStack(spacing: 6) {
-                    Image(systemName: "mappin.slash")
+                    Image(systemName: placeholder.icon)
                         .font(.system(size: 14))
                         .foregroundColor(.secondary)
-                    Text("Adress ej funnen")
+                    Text(placeholder.text)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(.secondary)
                 }
+                .help(placeholder.help)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(
@@ -76,6 +78,25 @@ struct AddressBanner: View {
                         .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
                 )
             }
+        }
+    }
+
+    // MARK: - Platshållare utan adress
+
+    /// Vad bannern säger när ingen adress finns. Förut stod det alltid "Adress ej
+    /// funnen" — även innan kalendersteget ens körts, t.ex. medan kortet kopieras.
+    static func placeholder(for phase: StepPhase) -> (icon: String, text: String, help: String) {
+        switch phase {
+        case .active:
+            return ("calendar.badge.clock", "Söker bokning i kalendern…", "Steget Hitta bokning matchar bildernas tid mot kalendern.")
+        case .complete:
+            return ("mappin.slash", "Ingen bokning matchade bilderna",
+                    "Ingen kalenderhändelse överlappade bildernas tid. Bilderna hamnar under \"Osorterade\". Startkontrollen visar vilka kalendrar som används.")
+        case .error:
+            return ("exclamationmark.triangle", "Kalendersteget misslyckades", "Se loggen för detaljer.")
+        default:
+            return ("mappin", "Adressen hämtas i steget Hitta bokning",
+                    "Adressen tas från kalenderbokningen som överlappar bildernas tid, när pipelinen når det steget.")
         }
     }
 
