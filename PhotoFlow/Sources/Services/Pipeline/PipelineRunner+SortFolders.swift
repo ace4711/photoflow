@@ -46,6 +46,7 @@ extension PipelineRunner {
             ])
             state.appendStepLog(.moveToFolders, "Filer redan sorterade (\(savedCount) bilder) — hoppar över", type: .info)
             state.appendLog("Filsortering redan klar — hoppar över.", type: .info)
+            moveUnsortedHDR(outputDir: outputDir)
             return
         }
 
@@ -71,6 +72,7 @@ extension PipelineRunner {
             ])
             state.appendStepLog(.moveToFolders, "Filer redan sorterade (\(savedCount) bilder) — hoppar över", type: .info)
             state.appendLog("Filsortering redan klar — hoppar över.", type: .info)
+            moveUnsortedHDR(outputDir: outputDir)
             return
         }
 
@@ -212,48 +214,7 @@ extension PipelineRunner {
         // Staging folders (dng/, previews/) kept intact — address folders use symlinks
 
         // Copy HDR TIFF results into address folders (only if HDR merge is enabled)
-        let hdrEnabled = AppSettings.shared.hdrMergeEnabled
-        let hdrDir = outputDir.appendingPathComponent("hdr")
-        for group in state.bracketGroups where group.isBracket && hdrEnabled {
-            guard let firstPhoto = state.photos(in: group).first else { continue }
-            // Slutgranskning: this used to `continue` (skip the group entirely)
-            // when there was no calendar match, unlike every other file type
-            // above which falls back to "Osorterade" — a session with no
-            // calendar match (e.g. no calendar access, or no event covering the
-            // shoot) silently orphaned its merged HDR TIFF/JPEG in outputDir/hdr/
-            // forever, with no address folder ever pointing at them. Same
-            // fallback as the per-photo loop above.
-            let folderName = calendar.addressFolder(for: firstPhoto.dateTime, mappings: calendarMappings) ?? "Osorterade"
-            let previewDir = AddressFolderLayout.previewDir(in: outputDir, folderName: folderName)
-            let extrasDir = AddressFolderLayout.extrasDir(in: outputDir, folderName: folderName)
-            try? fm.createDirectory(at: previewDir, withIntermediateDirectories: true)
-            try? fm.createDirectory(at: extrasDir, withIntermediateDirectories: true)
-
-            // Move the 16-bit TIFF → ÖVRIGA
-            let hdrTiff = hdrDir.appendingPathComponent("hdr_group_\(group.id).tiff")
-            if fm.fileExists(atPath: hdrTiff.path) {
-                let dest = extrasDir.appendingPathComponent(hdrTiff.lastPathComponent)
-                if !fm.fileExists(atPath: dest.path) {
-                    try? fm.moveItem(at: hdrTiff, to: dest)
-                } else {
-                    try? fm.removeItem(at: hdrTiff)
-                }
-                taggedFiles.append(dest.path)
-                state.appendStepLog(.moveToFolders, "HDR \(hdrTiff.lastPathComponent) → \(folderName) ÖVRIGA/")
-            }
-
-            // Move HDR JPEG preview → TITTBILDER
-            let hdrJpeg = hdrDir.appendingPathComponent("hdr_group_\(group.id).jpg")
-            if fm.fileExists(atPath: hdrJpeg.path) {
-                let dest = previewDir.appendingPathComponent(hdrJpeg.lastPathComponent)
-                if !fm.fileExists(atPath: dest.path) {
-                    try? fm.moveItem(at: hdrJpeg, to: dest)
-                } else {
-                    try? fm.removeItem(at: hdrJpeg)
-                }
-                taggedFiles.append(dest.path)
-            }
-        }
+        taggedFiles += moveUnsortedHDR(outputDir: outputDir)
 
         if organized > 0 || unmatched > 0 {
             state.appendStepLog(.moveToFolders, "Sorterat: \(organized) bilder i adressmappar" + (unmatched > 0 ? ", \(unmatched) i Osorterade" : ""), type: .success)
@@ -357,5 +318,62 @@ extension PipelineRunner {
                 }
             }
         }
+    }
+
+    /// Flyttar HDR-filer som ligger i `hdr/` till sin adressmapp (TIFF → ÖVRIGA,
+    /// JPEG → TITTBILDER). Körs även när sorteringen i övrigt hoppas över: förut
+    /// blev nya eller omgjorda HDR-filer kvar i `hdr/` för gott när bilderna
+    /// redan var sorterade. En fil som redan finns i adressmappen ersätts — den i
+    /// `hdr/` är nyare (förut kastades den nya och den gamla behölls).
+    /// Har något flyttats tas metadatamarkören bort, så att metadatasteget skriver
+    /// till de nya filerna i stället för att hoppa över.
+    @discardableResult
+    func moveUnsortedHDR(outputDir: URL) -> [String] {
+        guard AppSettings.shared.hdrMergeEnabled else { return [] }
+        let fm = FileManager.default
+        let calendar = CalendarService.shared
+        let hdrDir = outputDir.appendingPathComponent("hdr")
+        var moved: [String] = []
+
+        func place(_ source: URL, in folder: URL) -> String? {
+            guard fm.fileExists(atPath: source.path) else { return nil }
+            let dest = folder.appendingPathComponent(source.lastPathComponent)
+            do {
+                if fm.fileExists(atPath: dest.path) {
+                    _ = try fm.replaceItemAt(dest, withItemAt: source)
+                } else {
+                    try fm.moveItem(at: source, to: dest)
+                }
+                return dest.path
+            } catch {
+                state.appendStepLog(.moveToFolders, "Kunde inte flytta \(source.lastPathComponent): \(error.localizedDescription)", type: .warning)
+                return nil
+            }
+        }
+
+        for group in state.bracketGroups where group.isBracket {
+            guard let firstPhoto = state.photos(in: group).first else { continue }
+            // Samma reserv som bilderna: utan kalendermatchning → "Osorterade",
+            // så att ingen HDR blir kvar i hdr/ utan adressmapp.
+            let folderName = calendar.addressFolder(for: firstPhoto.dateTime, mappings: calendarMappings) ?? "Osorterade"
+            let previewDir = AddressFolderLayout.previewDir(in: outputDir, folderName: folderName)
+            let extrasDir = AddressFolderLayout.extrasDir(in: outputDir, folderName: folderName)
+            let tiff = hdrDir.appendingPathComponent("hdr_group_\(group.id).tiff")
+            let jpeg = hdrDir.appendingPathComponent("hdr_group_\(group.id).jpg")
+            guard fm.fileExists(atPath: tiff.path) || fm.fileExists(atPath: jpeg.path) else { continue }
+            try? fm.createDirectory(at: previewDir, withIntermediateDirectories: true)
+            try? fm.createDirectory(at: extrasDir, withIntermediateDirectories: true)
+            if let path = place(tiff, in: extrasDir) {
+                moved.append(path)
+                state.appendStepLog(.moveToFolders, "HDR \(tiff.lastPathComponent) → \(folderName) ÖVRIGA/")
+            }
+            if let path = place(jpeg, in: previewDir) { moved.append(path) }
+        }
+
+        if !moved.isEmpty {
+            state.appendLog("Flyttade \(moved.count) HDR-filer till adressmapparna.", type: .success)
+            try? fm.removeItem(at: outputDir.appendingPathComponent("metadata_written.json"))
+        }
+        return moved
     }
 }
