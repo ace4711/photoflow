@@ -286,7 +286,9 @@ nonisolated enum PhotoQualityService {
 
     // MARK: - Per-bild Vision-mätning
 
-    private struct ImageMeasurement {
+    /// Rå mätning av en bild. Internt åtkomlig så att `ReelImageAnalyzer`
+    /// (bildspelsmodulen) kan mäta godtyckliga färdiga bilder med exakt samma mått.
+    struct ImageMeasurement {
         var overallScore: Float = 0
         var isUtility: Bool = false
         var horizonAngleDegrees: Double?
@@ -294,7 +296,9 @@ nonisolated enum PhotoQualityService {
         var featurePrint: FeaturePrintObservation?
     }
 
-    private static func measureImage(url: URL) async -> ImageMeasurement {
+    /// Mäter en enskild bild (estetik, nyttobild, horisont, feature print, skärpa).
+    /// Körs på anroparens aktör; anropa den från bakgrundskontext för tung analys.
+    static func measureImage(url: URL) async -> ImageMeasurement {
         var m = ImageMeasurement()
 
         if let aesthetics = try? await CalculateImageAestheticsScoresRequest().perform(on: url) {
