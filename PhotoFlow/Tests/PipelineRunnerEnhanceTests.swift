@@ -173,4 +173,36 @@ struct PipelineRunnerEnhanceTests {
         changed.identity = [nef, other]
         #expect(runner.enhanceFingerprint(job: changed, profile: .automatic) != before)
     }
+
+    @Test("Övergången godkänner verkliga poster från förra versionen (källan sparad som filnamn)")
+    func migration_acceptsLegacyEntriesWithFileNameSource() throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/Enhancement/legacy-entries.json")
+        let root = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        let engine = root["engineVersion"] as! Int
+        func entry(_ name: String) throws -> (key: String, entry: EnhancementLog.Entry) {
+            var dict = root[name] as! [String: Any]
+            let key = dict.removeValue(forKey: "key") as! String
+            let data = try JSONSerialization.data(withJSONObject: dict)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601  // som EnhancementLog själv
+            return (key, try decoder.decode(EnhancementLog.Entry.self, from: data))
+        }
+        let single = try entry("single"), hdr = try entry("hdr")
+        let singleJob = PipelineRunner.EnhanceJob(
+            key: single.key, kind: .dng,
+            source: URL(fileURLWithPath: "/Volumes/x/output/dng/\(single.entry.source)"), label: single.key)
+        let hdrJob = PipelineRunner.EnhanceJob(
+            key: hdr.key, kind: .hdr,
+            source: URL(fileURLWithPath: "/Volumes/x/output/Gatan 1 ÖVRIGA/\(hdr.entry.source)"), label: hdr.key)
+        let profile = single.entry.profile
+        #expect(PipelineRunner.canAdoptPreviousEnhancement(entry: single.entry, job: singleJob, profile: profile, previousEngineVersion: engine))
+        #expect(PipelineRunner.canAdoptPreviousEnhancement(entry: hdr.entry, job: hdrJob, profile: hdr.entry.profile, previousEngineVersion: engine))
+        // Annan motorversion, annan källa eller annan profil → görs om.
+        #expect(!PipelineRunner.canAdoptPreviousEnhancement(entry: single.entry, job: singleJob, profile: profile, previousEngineVersion: engine + 1))
+        var other = singleJob
+        other.source = URL(fileURLWithPath: "/Volumes/x/output/dng/DSC_9999.dng")
+        #expect(!PipelineRunner.canAdoptPreviousEnhancement(entry: single.entry, job: other, profile: profile, previousEngineVersion: engine))
+        #expect(!PipelineRunner.canAdoptPreviousEnhancement(entry: single.entry, job: singleJob, profile: .neutral, previousEngineVersion: engine))
+    }
 }

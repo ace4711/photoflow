@@ -69,6 +69,18 @@ extension PipelineRunner {
         return (jobs, rejected, noSource)
     }
 
+    /// Engångsövergången från det gamla fingerprintet: samma motor, samma profil och
+    /// samma källa. `enhancement.json` sparar källans filnamn (inte hela sökvägen),
+    /// så jämförelsen görs på namnet — förut jämfördes hela sökvägen och ingen bild
+    /// godkändes.
+    static func canAdoptPreviousEnhancement(entry: EnhancementLog.Entry, job: EnhanceJob, profile: EnhancementProfile,
+                                            previousEngineVersion: Int) -> Bool {
+        previousEngineVersion == EnhancementEngine.version
+            && entry.profile == profile
+            && entry.kind == job.kind.rawValue
+            && (entry.source == job.source.lastPathComponent || entry.source == job.source.path)
+    }
+
     /// Per-bild-fingerprint: original-NEF:ernas namn och storlek (de skrivs aldrig
     /// till — se `EnhanceJob.identity`) + profilens innehåll + motorns version + det
     /// som ändrar källan (HDR-motorns version och inställningar, DNG-renderingens storlek).
@@ -117,8 +129,8 @@ extension PipelineRunner {
                 // Engångsövergång från det gamla fingerprintet (källans storlek/tid, som
                 // metadatasteget ändrar): samma motor, samma profil och samma källfil →
                 // resultatet är detsamma; uppdatera fingerprintet i stället för att göra om.
-                if previousEngineVersion == EnhancementEngine.version, entry.profile == profile,
-                   entry.source == job.source.path {
+                if Self.canAdoptPreviousEnhancement(entry: entry, job: job, profile: profile,
+                                                    previousEngineVersion: previousEngineVersion) {
                     log.entries[job.key]?.fingerprint = fingerprint
                     migrated += 1
                     continue
