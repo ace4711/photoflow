@@ -106,7 +106,8 @@ extension PipelineRunner {
 
         let hdrOptions = HDREngine.Options(
             maxDimension: AppSettings.shared.hdrMaxDimension,
-            alignEnabled: AppSettings.shared.hdrAlignEnabled
+            alignEnabled: AppSettings.shared.hdrAlignEnabled,
+            sharpenEnabled: AppSettings.shared.hdrSharpenEnabled
         )
 
         var successCount = 0
@@ -273,7 +274,8 @@ extension PipelineRunner {
                 }
                 let hdrOptions = HDREngine.Options(
                     maxDimension: AppSettings.shared.hdrMaxDimension,
-                    alignEnabled: AppSettings.shared.hdrAlignEnabled
+                    alignEnabled: AppSettings.shared.hdrAlignEnabled,
+                    sharpenEnabled: AppSettings.shared.hdrSharpenEnabled
                 )
                 try await HDREngine.merge(
                     rawURLs: rawURLs,

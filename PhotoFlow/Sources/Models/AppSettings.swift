@@ -48,6 +48,8 @@ class AppSettings: ObservableObject {
     /// Justerar handhållna brackets (Vision-baserad translationell
     /// bildregistrering mot mittexponeringen) innan fusion.
     @AppStorage("hdrAlignEnabled") var hdrAlignEnabled: Bool = true
+    /// Lätt skärpning av HDR-resultatet (se `HDREngine.Options.sharpenEnabled`).
+    @AppStorage("hdrSharpenEnabled") var hdrSharpenEnabled: Bool = true
     @AppStorage("detailedProgress") var detailedProgress: Bool = true
     @AppStorage("calendarMatchEnabled") var calendarMatchEnabled: Bool = true
     /// DEPRECERAD läsväg (flera kalendrar): ersatt av `calendarNames` nedan,

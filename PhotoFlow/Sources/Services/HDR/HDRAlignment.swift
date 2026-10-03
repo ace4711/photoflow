@@ -22,6 +22,26 @@ import Vision
 /// stream, so the older one-shot API is the better fit here and is what's
 /// used below — it isn't deprecated, just superseded for the video use case.
 nonisolated enum HDRAlignment {
+    /// Upplösning som registreringen körs på. Förut 800 px: där syns inte
+    /// rörelser på 2–3 px i full storlek, och varje fel blev ~7 px uppskalat.
+    static let refinedAlignDimension = 3000
+
+    /// Gör en uppmätt förskjutning användbar, eller avvisar den:
+    /// - mer än `maxFraction` av bilden → felregistrering (Vision ger ibland
+    ///   tusentals px för den mörkaste/ljusaste exponeringen — det gav spökbilder
+    ///   och strimmor i 8 av 97 grupper), ingen förskjutning alls;
+    /// - under `minPixels` → brus, ingen förskjutning;
+    /// - annars avrundat till hela pixlar, så att förskjutningen blir en ren
+    ///   kopiering i stället för en bilinjär omsampling som mjukar upp bilden.
+    /// Returnerar `nil` när förskjutningen avvisats som orimlig.
+    static func sanitizedShift(_ raw: CGPoint, width: Int, height: Int, maxFraction: Double = 0.02, minPixels: Double = 1.5) -> CGPoint? {
+        guard raw.x.isFinite, raw.y.isFinite,
+              abs(raw.x) <= maxFraction * Double(width), abs(raw.y) <= maxFraction * Double(height) else { return nil }
+        let x = abs(raw.x) < minPixels ? 0 : raw.x.rounded()
+        let y = abs(raw.y) < minPixels ? 0 : raw.y.rounded()
+        return CGPoint(x: x, y: y)
+    }
+
     enum AlignmentError: LocalizedError {
         case cgImageCreationFailed
 

@@ -201,17 +201,20 @@ struct PipelineTab: View {
                             .foregroundColor(.secondary)
 
                         HStack {
-                            Text("Max upplösning (lång sida)")
-                            Spacer()
-                            TextField("", value: $settings.hdrMaxDimension, format: .number)
-                                .frame(width: 80)
-                                .textFieldStyle(.roundedBorder)
-                            Text("px (0 = full upplösning)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                            Picker("Upplösning", selection: $settings.hdrMaxDimension) {
+                                Text("Snabb (6000 px)").tag(6000)
+                                Text("Full (kamerans upplösning, ca 2× tid)").tag(0)
+                                if settings.hdrMaxDimension != 6000 && settings.hdrMaxDimension != 0 {
+                                    Text("Egen (\(settings.hdrMaxDimension) px)").tag(settings.hdrMaxDimension)
+                                }
+                            }
                         }
 
-                        Toggle("Justera handhållna brackets (Vision-bildregistrering)", isOn: $settings.hdrAlignEnabled)
+                        Toggle("Lätt skärpning av HDR-resultatet", isOn: $settings.hdrSharpenEnabled)
+                        Toggle("Justera brackets mot varandra (Vision-bildregistrering)", isOn: $settings.hdrAlignEnabled)
+                        Text("Justeringen rättar små rörelser mellan exponeringarna (även på stativ) och avvisar orimliga mätningar. Påverkar bara HDR som skapas härefter.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     } else {
                         Text("Den äldre vägen: python3 + OpenCV (cv2.createMergeMertens) på inbäddade 8-bitars JPEG-förhandsbilder. Kräver att OpenCV är installerat (pip3 install opencv-python numpy).")
                             .font(.caption)

@@ -77,6 +77,27 @@ nonisolated enum HDRWriter {
         )
     }
 
+    /// Unsharp mask på RGBA float32-pixlar (sRGB-kodade, som resten av
+    /// skrivningen), utan färghantering. Kanterna förlängs (`clampedToExtent`)
+    /// så att bildkanten inte får en ljus eller mörk ram.
+    static func sharpen(pixels: [Float], width: Int, height: Int, radius: Double, intensity: Double) -> [Float] {
+        let rowBytes = width * 4 * MemoryLayout<Float>.size
+        let extent = CGRect(x: 0, y: 0, width: width, height: height)
+        let data = pixels.withUnsafeBufferPointer { Data(buffer: $0) }
+        let input = CIImage(bitmapData: data, bytesPerRow: rowBytes, size: extent.size, format: .RGBAf, colorSpace: nil)
+        guard let filter = CIFilter(name: "CIUnsharpMask") else { return pixels }
+        filter.setValue(input.clampedToExtent(), forKey: kCIInputImageKey)
+        filter.setValue(radius, forKey: kCIInputRadiusKey)
+        filter.setValue(intensity, forKey: kCIInputIntensityKey)
+        guard let output = filter.outputImage?.cropped(to: extent) else { return pixels }
+        let context = CIContext(options: [.workingColorSpace: NSNull(), .outputColorSpace: NSNull(), .workingFormat: CIFormat.RGBAf])
+        var result = [Float](repeating: 0, count: pixels.count)
+        result.withUnsafeMutableBytes { buffer in
+            context.render(output, toBitmap: buffer.baseAddress!, rowBytes: rowBytes, bounds: extent, format: .RGBAf, colorSpace: nil)
+        }
+        return result
+    }
+
     /// Packs `pixels` (RGBA float32, [0,1]) into a plain 3-channel,
     /// 16-bit-per-component RGB `CGImage` — no alpha, and no color conversion
     /// (`colorSpace` here must be the same one the values were rendered in).

@@ -19,8 +19,12 @@ nonisolated enum HDREngine {
     struct Options: Sendable {
         var maxDimension: Int = 6000
         var alignEnabled: Bool = true
-        var jpegMaxDimension: Int = 2400
+        /// Förut 2400 px — förstorades ~2,5× i granskningen på en 6K-skärm.
+        var jpegMaxDimension: Int = 4000
         var jpegQuality: Double = 0.92
+        /// Lätt skärpning (unsharp mask) av resultatet, som kamerans och
+        /// Lightrooms standardrendering gör — RAW-renderingen skärper inte.
+        var sharpenEnabled: Bool = true
     }
 
     enum EngineError: LocalizedError {
@@ -81,10 +85,12 @@ nonisolated enum HDREngine {
             let reference = rendered[middleIndex]
             for i in rendered.indices where i != middleIndex {
                 try Task.checkCancellation()
-                let shift = try HDRAlignment.computeShift(floating: rendered[i], reference: reference)
-                if shift != .zero {
-                    rendered[i].pixels = RAWRenderer.shiftRGBA(rendered[i].pixels, width: width, height: height, dx: Float(shift.x), dy: Float(shift.y))
-                }
+                let measured = try HDRAlignment.computeShift(
+                    floating: rendered[i], reference: reference, maxAlignDimension: HDRAlignment.refinedAlignDimension
+                )
+                // Orimliga förskjutningar avvisas, små rundas till hela pixlar — se sanitizedShift.
+                guard let shift = HDRAlignment.sanitizedShift(measured, width: width, height: height), shift != .zero else { continue }
+                rendered[i].pixels = RAWRenderer.shiftRGBA(rendered[i].pixels, width: width, height: height, dx: Float(shift.x), dy: Float(shift.y))
             }
         }
         progress?(0.55)
@@ -97,7 +103,11 @@ nonisolated enum HDREngine {
         }
 
         try Task.checkCancellation()
-        try HDRWriter.write(pixels: fused, width: width, height: height, tiffURL: tiffURL, jpegURL: jpegURL, jpegMaxDimension: options.jpegMaxDimension, jpegQuality: options.jpegQuality)
+        // Radien skalas med upplösningen: 1,2 px vid kamerans 8256 px.
+        let finalPixels = options.sharpenEnabled
+            ? HDRWriter.sharpen(pixels: fused, width: width, height: height, radius: max(0.6, 1.2 * Double(max(width, height)) / 8256), intensity: 0.6)
+            : fused
+        try HDRWriter.write(pixels: finalPixels, width: width, height: height, tiffURL: tiffURL, jpegURL: jpegURL, jpegMaxDimension: options.jpegMaxDimension, jpegQuality: options.jpegQuality)
         progress?(0.95)
 
         if let exiftoolPath {
