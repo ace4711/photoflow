@@ -76,6 +76,7 @@ class PipelineRunner: ObservableObject {
         "enhance": .enhancePhotos,
         "move_to_folders": .moveToFolders,
         "write_iptc": .writeIPTCTags,
+        "reel_proposal": .reelProposal,
     ]
 
     func logDecision(step: String, decision: String, details: [String: String] = [:]) {
@@ -171,6 +172,7 @@ class PipelineRunner: ObservableObject {
         state.updateStep(.enhancePhotos, phase: settings.enhanceEnabled ? .queued : .disabled)
         state.updateStep(.findCalendarInfo, phase: settings.calendarMatchEnabled ? .queued : .disabled)
         state.updateStep(.writeIPTCTags, phase: settings.calendarMatchEnabled ? .queued : .disabled)
+        state.updateStep(.reelProposal, phase: settings.reelProposalEnabled && settings.calendarMatchEnabled ? .queued : .disabled)
         state.updateStep(.aiTagging, phase: settings.aiTaggingEnabled ? .queued : .disabled)
         state.updateStep(.manualReview, phase: .queued)
         state.updateStep(.moveToFolders, phase: .queued)
@@ -193,7 +195,8 @@ class PipelineRunner: ObservableObject {
             "calendarEnabled": "\(AppSettings.shared.calendarMatchEnabled)",
             "aiTaggingEnabled": "\(AppSettings.shared.aiTaggingEnabled)",
             "enhanceEnabled": "\(AppSettings.shared.enhanceEnabled)",
-            "enhanceProfile": AppSettings.shared.enhanceProfileID
+            "enhanceProfile": AppSettings.shared.enhanceProfileID,
+            "reelProposalEnabled": "\(AppSettings.shared.reelProposalEnabled)"
         ])
 
         let nefFiles = findNEFFiles(in: inputDir)
@@ -318,6 +321,31 @@ class PipelineRunner: ObservableObject {
                 state.appendStepLog(.writeIPTCTags, "Metadata-skrivning avaktiverad (ingen kalendermatchning)", type: .info)
             }
             pipelineLog("<<< Metadata klar")
+
+            // Step: Filmförslag (Objektfilm per adress) — sist, så att bildfilerna är i sitt
+            // slutliga skick (se `runReelProposals`). Ett fel här stoppar inte körningen: filmen är
+            // ett tillägg, bilderna är redan sorterade och försedda med metadata.
+            try await checkCancellationAndWaitIfPaused()
+            if AppSettings.shared.reelProposalEnabled && AppSettings.shared.calendarMatchEnabled {
+                pipelineLog(">>> Steg: Filmförslag")
+                state.updateStep(.reelProposal, phase: .active)
+                do {
+                    let proposals = try await runReelProposals()
+                    try Task.checkCancellation()
+                    state.completeStep(.reelProposal, count: proposals)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    state.updateStep(.reelProposal, phase: .error(error.localizedDescription))
+                    state.appendStepLog(.reelProposal, "Fel: \(error.localizedDescription)", type: .error)
+                    pipelineLog("Filmförslag misslyckades: \(error.localizedDescription)")
+                }
+                pipelineLog("<<< Filmförslag klart")
+            } else {
+                state.updateStep(.reelProposal, phase: .disabled)
+                state.appendStepLog(.reelProposal, AppSettings.shared.reelProposalEnabled
+                    ? "Filmförslag kräver kalendermatchning (adresser)" : "Filmförslag avaktiverat i inställningar", type: .info)
+            }
 
             pipelineLog("⏱ Stegtider:")
             for step in PipelineState.automaticSteps {
@@ -444,6 +472,11 @@ class PipelineRunner: ObservableObject {
                 }
                 try await runAITagging()
                 state.completeStep(step)
+
+            case .reelProposal:
+                // Manuell omkörning bygger om även oförändrade förslag; skyddet för redigerade/skickade filmer gäller ändå.
+                let proposals = try await runReelProposals(force: true)
+                state.completeStep(step, count: proposals)
 
             case .manualReview:
                 try await loadBracketGroups()

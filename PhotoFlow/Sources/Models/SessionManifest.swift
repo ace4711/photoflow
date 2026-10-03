@@ -94,6 +94,7 @@ extension DashboardStep {
         case .enhancePhotos: return "enhancePhotos"
         case .moveToFolders: return "moveToFolders"
         case .writeIPTCTags: return "writeIPTCTags"
+        case .reelProposal: return "reelProposal"
         case .manualReview: return "manualReview"
         case .importToLightroom: return "importToLightroom"
         }

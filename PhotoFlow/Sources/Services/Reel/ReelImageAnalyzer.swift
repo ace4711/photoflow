@@ -90,6 +90,25 @@ nonisolated enum ReelImageAnalyzer {
         var analyses: [String: ReelImageAnalysis]
     }
 
+    /// Värden pipelinen redan har räknat fram för bilden (ai_tags.json, photo_quality.json). Med dem
+    /// hoppar analysen över de dyra mätningarna (feature print, estetikpoäng, skärpa, Foundation Models)
+    /// och räknar bara det som saknas i pipelinens data: pixelstorlek, saliency, luminans och hash.
+    nonisolated struct Precomputed: Sendable, Equatable {
+        var qualityScore: Double?
+        var isUtility = false
+        var horizonAngleDegrees: Double?
+        var sharpness: Double?
+        var room: String?
+        var category: String?
+        var features: [String]?
+        var caption: String?
+        /// Pipelinens dubblettkluster (`PhotoQualityService`), för att slå ihop nästan-lika bilder.
+        var duplicateGroupID: Int?
+
+        /// Finns det något att bygga på (rum, kategori eller kvalitet)?
+        var hasData: Bool { room != nil || category != nil || qualityScore != nil }
+    }
+
     // MARK: - Cache
 
     static func loadCache(from directory: URL) -> [String: ReelImageAnalysis] {
@@ -121,12 +140,14 @@ nonisolated enum ReelImageAnalyzer {
     /// hash saknas där analyseras. `aiTagsDirectory` pekar på en mapp med
     /// `ai_tags.json` (reserv för rum/bildtext). `describe: false` hoppar över
     /// Foundation Models (t.ex. i tester). Respekterar Task-avbrytning: kastar
-    /// `CancellationError`, men sparar först det som hunnit bli klart.
+    /// `CancellationError`, men sparar först det som hunnit bli klart. `precomputed` ger värden ur
+    /// pipelinens egna filer per bild (se `Precomputed`): då görs bara den lätta analysen.
     static func analyze(
         urls: [URL],
         cacheDirectory: URL?,
         aiTagsDirectory: URL? = nil,
         describe: Bool = true,
+        precomputed: [URL: Precomputed] = [:],
         maxConcurrent: Int = 4,
         progress: @Sendable @MainActor (Int, Int) -> Void = { _, _ in }
     ) async throws -> [Item] {
@@ -146,7 +167,8 @@ nonisolated enum ReelImageAnalyzer {
                     let idx = next, url = urls[idx]
                     next += 1; inFlight += 1
                     group.addTask {
-                        (idx, await analyzeOne(url: url, cache: cacheSnapshot, describe: describe, aiTags: aiTags))
+                        (idx, await analyzeOne(url: url, cache: cacheSnapshot, describe: describe, aiTags: aiTags,
+                                               precomputed: precomputed[url]))
                     }
                 }
                 while inFlight < max(1, maxConcurrent) && next < urls.count {
@@ -180,20 +202,27 @@ nonisolated enum ReelImageAnalyzer {
         url: URL,
         cache: [String: ReelImageAnalysis],
         describe: Bool,
-        aiTags: [String: AITagsStore.Entry]?
+        aiTags: [String: AITagsStore.Entry]?,
+        precomputed: Precomputed? = nil
     ) async -> ReelImageAnalysis? {
         guard let sha = sha256Hex(of: url) else { return nil }
         if Task.isCancelled { return nil }
 
-        let wantsModel = describe && PhotoDescriptionService.isAvailable
+        // Pipelinens data ersätter modellfrågan bara när den faktiskt ger ett rum.
+        let pipelineData = precomputed.flatMap { $0.hasData ? $0 : nil }
+        let wantsModel = describe && PhotoDescriptionService.isAvailable && pipelineData?.room == nil
         var analysis: ReelImageAnalysis
         if let cached = cache[sha] {
             analysis = cached          // mätningarna återanvänds; bara beskrivningen kan saknas
+        } else if pipelineData != nil {
+            guard let measured = await measureLight(url: url, sha: sha) else { return nil }
+            analysis = measured
         } else {
             guard let measured = await measure(url: url, sha: sha) else { return nil }
             analysis = measured
         }
         if Task.isCancelled { return nil }
+        if let pipelineData { apply(pipelineData, to: &analysis) }
 
         if wantsModel, analysis.describedBy != "foundationModels" {
             let tags = await PhotoDescriptionService.shared.describe(imageAt: url)
@@ -215,6 +244,36 @@ nonisolated enum ReelImageAnalyzer {
             if analysis.describedBy == nil { analysis.describedBy = "aiTags" }
         }
         return analysis
+    }
+
+    /// Pipelinens värden över en analys. Bara fält som pipelinen faktiskt har skrivs över
+    /// (en cachad fullmätning behåller sin feature print och sina egna värden i övrigt).
+    static func apply(_ pre: Precomputed, to analysis: inout ReelImageAnalysis) {
+        if let q = pre.qualityScore { analysis.qualityScore = q }
+        analysis.isUtility = pre.isUtility
+        if let h = pre.horizonAngleDegrees { analysis.horizonAngleDegrees = h }
+        if let s = pre.sharpness { analysis.sharpness = s }
+        if let room = pre.room {
+            analysis.room = room
+            analysis.category = pre.category ?? analysis.category
+            analysis.features = pre.features ?? analysis.features
+            analysis.caption = pre.caption ?? analysis.caption
+            analysis.describedBy = "pipeline"
+        } else if let category = pre.category {
+            analysis.category = category
+        }
+    }
+
+    /// Bara det pipelinen inte har: pixelstorlek, saliency, luminans och EXIF-tid. Ingen feature
+    /// print, ingen estetikpoäng och ingen skärpemätning (de kommer ur `photo_quality.json`).
+    private static func measureLight(url: URL, sha: String) async -> ReelImageAnalysis? {
+        guard let props = imageProperties(url: url) else { return nil }
+        let (boxes, focus, salientWidth) = await saliency(url: url)
+        return ReelImageAnalysis(
+            sha256: sha, width: props.width, height: props.height,
+            qualityScore: nil, isUtility: false, horizonAngleDegrees: nil, sharpness: nil, featurePrint: nil,
+            saliencyBoxes: boxes, focus: focus, salientWidth: salientWidth,
+            meanLuminance: meanLuminance(url: url), exifDate: props.exifDate)
     }
 
     /// Alla mätningar utom beskrivningen.

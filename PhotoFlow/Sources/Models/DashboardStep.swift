@@ -11,6 +11,7 @@ enum DashboardStep: Int, CaseIterable, Identifiable {
     case enhancePhotos
     case moveToFolders
     case writeIPTCTags
+    case reelProposal
     case manualReview
     case importToLightroom
 
@@ -29,6 +30,7 @@ enum DashboardStep: Int, CaseIterable, Identifiable {
         case .generatePreviews: return "Skapa previews"
         case .findCalendarInfo: return "Hitta bokning"
         case .writeIPTCTags: return "Skriv metadata"
+        case .reelProposal: return "Filmförslag"
         case .aiTagging: return "AI-taggning"
         case .createHDR: return "Skapa HDR"
         case .enhancePhotos: return "Förbättra bilder"
@@ -46,6 +48,7 @@ enum DashboardStep: Int, CaseIterable, Identifiable {
         case .generatePreviews: return "JPEG-förhandsvisning"
         case .findCalendarInfo: return "Kalender & adress"
         case .writeIPTCTags: return "GPS & IPTC-taggar"
+        case .reelProposal: return "Objektfilm per adress"
         case .aiTagging: return "Vision-analys"
         case .createHDR: return "Bracket → HDR"
         case .enhancePhotos: return "Färg & ton"
@@ -63,6 +66,7 @@ enum DashboardStep: Int, CaseIterable, Identifiable {
         case .generatePreviews: return "photo.on.rectangle"
         case .findCalendarInfo: return "calendar"
         case .writeIPTCTags: return "mappin.and.ellipse"
+        case .reelProposal: return "film.stack"
         case .aiTagging: return "brain"
         case .createHDR: return "square.stack.3d.up"
         case .enhancePhotos: return "wand.and.stars"

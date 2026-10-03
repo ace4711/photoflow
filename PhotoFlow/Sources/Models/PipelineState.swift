@@ -438,7 +438,7 @@ class PipelineState: ObservableObject {
     /// på användaren och ingår inte i prognosen.
     static let automaticSteps: [DashboardStep] = [
         .copyToInput, .convertToDNG, .generatePreviews, .findCalendarInfo,
-        .aiTagging, .createHDR, .enhancePhotos, .moveToFolders, .writeIPTCTags,
+        .aiTagging, .createHDR, .enhancePhotos, .moveToFolders, .writeIPTCTags, .reelProposal,
     ]
 
     /// Bilder i körningen — samma skala för alla steg. Under kortkopieringen
@@ -514,6 +514,7 @@ class PipelineState: ObservableObject {
                 // de steg som kommer att köras.
                 pending = (step != .createHDR || settings.hdrMergeEnabled)
                     && (step != .enhancePhotos || settings.enhanceEnabled)
+                    && (step != .reelProposal || (settings.reelProposalEnabled && settings.calendarMatchEnabled))
                     && (step != .aiTagging || settings.aiTaggingEnabled)
                     && ((step != .findCalendarInfo && step != .writeIPTCTags) || settings.calendarMatchEnabled)
             default:

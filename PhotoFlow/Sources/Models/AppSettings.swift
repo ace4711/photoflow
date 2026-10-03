@@ -55,6 +55,10 @@ class AppSettings: ObservableObject {
     /// Skriver nya filer i `enhanced/` — originalen rörs aldrig.
     @AppStorage("enhanceEnabled") var enhanceEnabled: Bool = true
     /// Id för den stilprofil som styr förbättringen (`EnhancementProfileStore`).
+    /// "Filmförslag": efter sorteringen skapas ett automatiskt filmförslag (Objektfilm, 9:16,
+    /// 5 bilder) per kalendermatchad adress i `<adress> FILM/`. Rör aldrig en redigerad eller
+    /// skickad film.
+    @AppStorage("reelProposalEnabled") var reelProposalEnabled: Bool = true
     @AppStorage("enhanceProfileID") var enhanceProfileID: String = EnhancementProfile.automaticID
     @AppStorage("detailedProgress") var detailedProgress: Bool = true
     @AppStorage("calendarMatchEnabled") var calendarMatchEnabled: Bool = true

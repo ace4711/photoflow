@@ -12,6 +12,7 @@ enum PipelineStep: Int, CaseIterable, Identifiable {
     case enhancingPhotos
     case sortingFiles
     case writingMetadata
+    case proposingReel
     case culling
     case done
 
@@ -30,6 +31,7 @@ enum PipelineStep: Int, CaseIterable, Identifiable {
         case .enhancingPhotos: return "Förbättrar bilder"
         case .sortingFiles: return "Sorterar filer"
         case .writingMetadata: return "Skriver metadata"
+        case .proposingReel: return "Filmförslag"
         case .culling: return "Gallring"
         case .done: return "Klart"
         }
@@ -49,6 +51,7 @@ enum PipelineStep: Int, CaseIterable, Identifiable {
         case .enhancingPhotos: return "wand.and.stars"
         case .sortingFiles: return "folder.badge.plus"
         case .writingMetadata: return "mappin.and.ellipse"
+        case .proposingReel: return "film.stack"
         case .done: return "checkmark.seal.fill"
         }
     }
