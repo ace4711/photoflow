@@ -47,6 +47,11 @@ class WatchService: ObservableObject {
 
     var onNewFilesDetected: ((_ sourceDir: URL, _ files: [URL]) -> Void)?
 
+    /// Sant medan ett minneskort kopieras till inputmappen (`RunnerWrapper.copyFromSDCardAndStart`).
+    /// Inputmappen kontrolleras inte då: reservkontrollen kunde annars hinna se
+    /// de filer som redan kopierats som nya och starta pipelinen på halva kortet.
+    var isCopyingFromCard = false
+
     private var logFileHandle: FileHandle?
     private var logFileURL: URL?
 
@@ -286,7 +291,9 @@ class WatchService: ObservableObject {
         }
 
         // Check input directory
-        if let inputDir = settings.inputDirectory {
+        if isCopyingFromCard {
+            log("Kontroll: minneskort kopieras till inputmappen — väntar med inputmappen")
+        } else if let inputDir = settings.inputDirectory {
             await checkDirectory(inputDir)
         } else {
             log("Kontroll: Ingen inputmapp konfigurerad")
@@ -447,6 +454,29 @@ class WatchService: ObservableObject {
             }
             processedFiles.save()
             onNewFilesDetected?(dcim, nefFiles)
+        }
+    }
+
+    /// Markerar kopiorna i inputmappen av `files` (från `sourceDir` på kortet) som
+    /// hanterade, så att bevakningen inte ser dem som nya och startar en ny körning
+    /// när den pågående är klar. Nyckeln räknas på kopian, inte originalet —
+    /// rsync behåller ändringstiden men inte nödvändigtvis med samma precision.
+    func markCopiedFilesHandled(_ files: [URL], from sourceDir: URL, into inputDir: URL) {
+        for dest in Self.copyDestinations(for: files, from: sourceDir, into: inputDir)
+        where FileManager.default.fileExists(atPath: dest.path) {
+            processedFiles.markProcessed(source: dest.deletingLastPathComponent().path, key: Self.fileKey(for: dest))
+        }
+        processedFiles.save()
+    }
+
+    /// Var rsync (`<sourceDir>/` → `<inputDir>/`) lägger varje fil: samma relativa
+    /// sökväg under inputmappen. Filer utanför `sourceDir` hoppas över.
+    nonisolated static func copyDestinations(for files: [URL], from sourceDir: URL, into inputDir: URL) -> [URL] {
+        let base = sourceDir.standardizedFileURL.pathComponents
+        return files.compactMap { file in
+            let parts = file.standardizedFileURL.pathComponents
+            guard parts.count > base.count, parts.starts(with: base) else { return nil }
+            return parts[base.count...].reduce(inputDir) { $0.appendingPathComponent($1) }
         }
     }
 

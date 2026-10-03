@@ -84,6 +84,9 @@ class RunnerWrapper: ObservableObject {
 
         try? FileManager.default.createDirectory(at: inputDir, withIntermediateDirectories: true)
 
+        watcher.isCopyingFromCard = true
+        defer { watcher.isCopyingFromCard = false }
+
         state.updateStep(.copyToInput, phase: .active)
         state.appendStepLog(.copyToInput, "Kopierar \(files.count) NEF-filer från \(sourceDir.path)...")
         state.appendLog("rsync: Kopierar \(files.count) filer från SD-kort till \(inputDir.lastPathComponent)...", type: .info)
@@ -160,6 +163,7 @@ class RunnerWrapper: ObservableObject {
         if exitCode == 0 {
             state.completeStep(.copyToInput, count: copiedCount)
             state.appendLog("rsync: Kopiering klar — \(copiedCount) filer", type: .success)
+            watcher.markCopiedFilesHandled(files, from: sourceDir, into: inputDir)
             start(inputDir: inputDir)
         } else if exitCode > 0 {
             state.updateStep(.copyToInput, phase: .error("rsync avslutades med kod \(exitCode)"))

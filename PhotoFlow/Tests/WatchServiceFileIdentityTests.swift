@@ -107,4 +107,20 @@ struct WatchServiceFileIdentityTests {
         // ...but the most recent maxEntries should have survived.
         #expect(store.isProcessed(source: "/input", key: "file\(ProcessedFilesStore.maxEntries + 9).NEF|1|1") == true)
     }
+
+    @Test("Kortkopiornas sökvägar: samma relativa sökväg under inputmappen, filer utanför källan hoppas över")
+    func copyDestinations_mirrorRsyncLayout() {
+        let dcim = URL(fileURLWithPath: "/Volumes/NIKON Z 8/DCIM")
+        let input = URL(fileURLWithPath: "/Volumes/photo-ingestion/PhotoFlow/input")
+        let files = [
+            dcim.appendingPathComponent("100NCZ_8/DSC_0001.NEF"),
+            dcim.appendingPathComponent("101NCZ_8/DSC_0420.NEF"),
+            URL(fileURLWithPath: "/Volumes/NIKON Z 8/annat/DSC_9999.NEF"),
+        ]
+        let destinations = WatchService.copyDestinations(for: files, from: dcim, into: input).map(\.path)
+        #expect(destinations == [
+            "/Volumes/photo-ingestion/PhotoFlow/input/100NCZ_8/DSC_0001.NEF",
+            "/Volumes/photo-ingestion/PhotoFlow/input/101NCZ_8/DSC_0420.NEF",
+        ])
+    }
 }
