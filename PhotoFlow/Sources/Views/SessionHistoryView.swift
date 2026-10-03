@@ -7,6 +7,7 @@ import SwiftUI
 struct SessionHistoryView: View {
     @ObservedObject var runner: RunnerWrapper
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openWindow) private var openWindow
 
     /// Anropas efter att en session har börjat laddas via "Öppna" — låter
     /// `DashboardView` växla till granskningsvyn utan att den här vyn
@@ -58,6 +59,7 @@ struct SessionHistoryView: View {
                                 onOpen: { open(entry) },
                                 onRevealInFinder: { reveal(entry) },
                                 onVerify: { verify(entry) },
+                                onReel: { openReel(entry, address: $0) },
                                 onDelete: { entryPendingDeletion = entry }
                             )
                             .swipeActions(edge: .trailing) {
@@ -169,6 +171,15 @@ struct SessionHistoryView: View {
         dismiss()
     }
 
+    /// Bildspel för en adress i sessionen: `<adress> FÄRDIGA` i outputmappen om den finns,
+    /// annars en mappväljare som börjar i outputmappen.
+    private func openReel(_ entry: SessionHistoryStore.Entry, address: String?) {
+        let request = ReelLaunchRequest.forSession(
+            outputDirectory: URL(fileURLWithPath: entry.outputDirectory), address: address,
+            sessionID: entry.sessionID.uuidString)
+        openWindow(id: ReelWindow.id, value: request)
+    }
+
     private func reveal(_ entry: SessionHistoryStore.Entry) {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: entry.outputDirectory)])
     }
@@ -179,6 +190,8 @@ private struct SessionHistoryRow: View {
     let onOpen: () -> Void
     let onRevealInFinder: () -> Void
     let onVerify: () -> Void
+    /// Öppnar bildspelsfönstret för en adress (nil = ingen känd adress).
+    let onReel: (String?) -> Void
     let onDelete: () -> Void
 
     private static let dateFormatter: DateFormatter = {
@@ -191,6 +204,33 @@ private struct SessionHistoryRow: View {
 
     private var outputDirectoryExists: Bool {
         FileManager.default.fileExists(atPath: entry.outputDirectory)
+    }
+
+    /// Film-ikonen: en knapp för en adress, en meny när sessionen har flera.
+    @ViewBuilder
+    private var reelButton: some View {
+        if entry.addresses.count > 1 {
+            Menu {
+                ForEach(entry.addresses, id: \.self) { address in
+                    Button(address) { onReel(address) }
+                }
+            } label: {
+                Label("Bildspel", systemImage: "film")
+            }
+            .menuStyle(.button)
+            .buttonStyle(.bordered)
+            .disabled(!outputDirectoryExists)
+            .help("Gör ett bildspel (Objektfilm) för en av sessionens adresser")
+        } else {
+            Button {
+                onReel(entry.addresses.first)
+            } label: {
+                Label("Bildspel", systemImage: "film")
+            }
+            .buttonStyle(.bordered)
+            .disabled(!outputDirectoryExists)
+            .help("Gör ett bildspel (Objektfilm) av de färdiga bilderna")
+        }
     }
 
     var body: some View {
@@ -226,6 +266,7 @@ private struct SessionHistoryRow: View {
                 Button("Verifiera", action: onVerify)
                     .buttonStyle(.bordered)
                     .disabled(!outputDirectoryExists)
+                reelButton
                 Button("Ta bort ur historik", role: .destructive, action: onDelete)
                     .buttonStyle(.borderless)
                     .font(.caption)

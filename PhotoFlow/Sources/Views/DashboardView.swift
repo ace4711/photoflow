@@ -14,6 +14,7 @@ struct DashboardView: View {
     @State private var settingsInitialTab: Int = 0
     // Fas 6: "Historik" i verktygsfältet — se SessionHistoryView.
     @State private var showHistory: Bool = false
+    @Environment(\.openWindow) private var openWindow
     @State private var nefCount: Int = 0
     @State private var hasProcessedOutput: Bool = false
     // Fas 7: fältanteckningsimport — se importFieldNotes()/handleFieldNotesImport(at:).
@@ -247,6 +248,11 @@ struct DashboardView: View {
             }
             .help("Historik — tidigare sessioner")
 
+            Button(action: { openReelWindow() }) {
+                Image(systemName: "film")
+            }
+            .help("Bildspel… — gör en kort film av de färdiga bilderna")
+
             Button(action: { importFieldNotes() }) {
                 Image(systemName: "square.and.arrow.down.on.square")
             }
@@ -336,6 +342,18 @@ struct DashboardView: View {
             .tint(.red)
             .help("Radera alla gallringsbeslut och anteckningar")
         }
+    }
+
+    /// Öppnar bildspelsfönstret med mappväljaren i den konfigurerade outputmappen.
+    private func openReelWindow() {
+        var request = ReelLaunchRequest()
+        if let output = settings.outputDirectory {
+            request.startPath = output.path
+            request.outputPath = output.path
+        } else {
+            request.startPath = NSHomeDirectory()
+        }
+        openWindow(id: ReelWindow.id, value: request)
     }
 
     // MARK: - Folder button (toolbar)

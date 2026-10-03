@@ -28,6 +28,8 @@ struct PhotoFlowApp: App {
     /// utan en `MenuBarExtra` (eller annan scen) hade appen annars avslutats
     /// automatiskt när sista fönstret stängs.
     private static let mainWindowID = "main"
+    /// Fönster-id för bildspelsredigeraren (se `ReelWindow.id`).
+    private static let reelWindowID = ReelWindow.id
 
     var body: some Scene {
         WindowGroup(id: Self.mainWindowID) {
@@ -47,6 +49,13 @@ struct PhotoFlowApp: App {
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 1400, height: 900)
+
+        // Objektfilm: eget fönster per källa. Öppnas från dashboardens verktygsfält och Historik
+        // med `openWindow(id: "reel", value: ReelLaunchRequest)`.
+        WindowGroup("Bildspel", id: Self.reelWindowID, for: ReelLaunchRequest.self) { $request in
+            ReelEditorView(request: request ?? ReelLaunchRequest())
+        }
+        .defaultSize(width: 1200, height: 900)
 
         Settings {
             SettingsView()
