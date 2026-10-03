@@ -302,26 +302,40 @@ nonisolated enum ExposureFusion {
         }
 
         /// Upsamples `plane` to exactly `(toWidth, toHeight)` — the inverse of
-        /// `reduce`: zero-insert at even coordinates, blur, then scale by 4 to
-        /// restore the energy the zero-insertion diluted.
+        /// `reduce`: zero-insert at even coordinates, blur, and normalize.
+        ///
+        /// Normaliserad faltning: de nollfyllda samplen och en mask med ettor på
+        /// samplepositionerna suddas med samma kärna, och resultatet delas med
+        /// masken. Inne i bilden är masken exakt 1/4, så det blir samma sak som
+        /// den gamla multiplikationen med 4. Vid kanterna fyller kantutfyllnaden
+        /// (`kvImageEdgeExtend`) däremot in värden på positioner som ska vara
+        /// tomma, och ×4 blev då fel viktat — det gav en synligt mörkare översta
+        /// rad och vänstra kolumn i HDR-bilderna (kolumn 0 ≈ 86 mot 105 två
+        /// pixlar in). Divisionen med masken viktar kanterna rätt.
         static func expand(_ plane: Plane, toWidth: Int, toHeight: Int) -> Plane {
             var zeroFilled = [Float](repeating: 0, count: toWidth * toHeight)
+            var mask = [Float](repeating: 0, count: toWidth * toHeight)
             plane.data.withUnsafeBufferPointer { src in
                 zeroFilled.withUnsafeMutableBufferPointer { dst in
-                    for y in 0..<plane.height {
-                        let ty = y * 2
-                        guard ty < toHeight else { continue }
-                        for x in 0..<plane.width {
-                            let tx = x * 2
-                            guard tx < toWidth else { continue }
-                            dst[ty * toWidth + tx] = src[y * plane.width + x]
+                    mask.withUnsafeMutableBufferPointer { m in
+                        for y in 0..<plane.height {
+                            let ty = y * 2
+                            guard ty < toHeight else { continue }
+                            for x in 0..<plane.width {
+                                let tx = x * 2
+                                guard tx < toWidth else { continue }
+                                dst[ty * toWidth + tx] = src[y * plane.width + x]
+                                m[ty * toWidth + tx] = 1
+                            }
                         }
                     }
                 }
             }
             var blurred = blur(Plane(width: toWidth, height: toHeight, data: zeroFilled))
+            let weight = blur(Plane(width: toWidth, height: toHeight, data: mask))
             for i in 0..<blurred.data.count {
-                blurred.data[i] *= 4
+                // Varje pixel har ett sampel inom ±1 i båda led, så vikten är aldrig 0.
+                blurred.data[i] /= max(weight.data[i], 1e-6)
             }
             return blurred
         }
