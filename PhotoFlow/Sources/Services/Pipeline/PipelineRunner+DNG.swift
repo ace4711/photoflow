@@ -63,6 +63,7 @@ extension PipelineRunner {
             "dngDir": dngDir.path
         ])
         state.appendStepLog(.convertToDNG, "Konverterar \(missingDNG.count) av \(nefFiles.count) NEF → DNG (befintliga: \(existingDNGNames.count))")
+        if !existingDNGNames.isEmpty { state.markStepUntimed(.convertToDNG) }
 
         let converterPath = "/Applications/Adobe DNG Converter.app/Contents/MacOS/Adobe DNG Converter"
 

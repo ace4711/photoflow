@@ -60,6 +60,7 @@ extension PipelineRunner {
             return !FileManager.default.fileExists(atPath: previewFile.path)
         }
         let alreadyDone = nefFiles.count - filesToProcess.count
+        if alreadyDone > 0 { state.markStepUntimed(.generatePreviews) }
 
         state.currentFileIndex = alreadyDone
         state.progress = Double(alreadyDone) / Double(nefFiles.count)

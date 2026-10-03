@@ -63,7 +63,24 @@ class PipelineRunner: ObservableObject {
     /// Each line is a JSON object with timestamp, step, decision, and context details.
     /// This file persists across runs so we can trace why steps were skipped or re-run.
     // internal: called from other PipelineRunner extension files.
+    /// Vilket stegkort ett överhoppat beslut gäller — för att inte registrera
+    /// stegets tid (se `PipelineState.markStepUntimed`). Bracket-analysen hör
+    /// till HDR-kortet men mäts inte (HDR-klockan startar vid sammanslagningen).
+    private static let skippedDecisionSteps: [String: DashboardStep] = [
+        "dng_conversion": .convertToDNG,
+        "preview_generation": .generatePreviews,
+        "calendar_match": .findCalendarInfo,
+        "ai_tagging": .aiTagging,
+        "photo_quality": .aiTagging,
+        "hdr_merge": .createHDR,
+        "move_to_folders": .moveToFolders,
+        "write_iptc": .writeIPTCTags,
+    ]
+
     func logDecision(step: String, decision: String, details: [String: String] = [:]) {
+        if decision == "skipped", let dashboardStep = Self.skippedDecisionSteps[step] {
+            state.markStepUntimed(dashboardStep)
+        }
         guard let outputDir = state.outputDirectory else { return }
         let logFile = outputDir.appendingPathComponent("decision_log.jsonl")
 

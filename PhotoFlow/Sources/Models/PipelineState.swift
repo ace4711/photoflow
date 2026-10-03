@@ -339,6 +339,7 @@ class PipelineState: ObservableObject {
         }
         sessionManifest = nil
         pendingStepFingerprints = [:]
+        untimedSteps = []
     }
 
     /// Correct a mismatched address with new name and GPS coordinates
@@ -446,8 +447,18 @@ class PipelineState: ObservableObject {
         stepStatuses[.copyToInput]?.totalCount ?? 0
     }
 
+    /// Steg som i den här körningen hoppades över helt eller bara gjorde en del
+    /// av jobbet (fortsatte en avbruten körning). Deras tid säger inget om hur
+    /// lång tid steget tar och registreras inte — annars hade t.ex. ett överhoppat
+    /// AI-steg loggats som 912 bilder på en halv sekund.
+    private var untimedSteps: Set<DashboardStep> = []
+
+    func markStepUntimed(_ step: DashboardStep) {
+        untimedSteps.insert(step)
+    }
+
     private func recordTiming(_ step: DashboardStep, duration: TimeInterval, count: Int, finishedAt: Date) {
-        guard Self.automaticSteps.contains(step), duration >= 0.5 else { return }
+        guard Self.automaticSteps.contains(step), !untimedSteps.contains(step), duration >= 0.5 else { return }
         let photos = step == .copyToInput ? count : (runPhotoCount > 0 ? runPhotoCount : count)
         guard photos > 0 else { return }
         let settings = AppSettings.shared

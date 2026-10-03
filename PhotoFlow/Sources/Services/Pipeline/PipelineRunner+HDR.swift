@@ -111,6 +111,7 @@ extension PipelineRunner {
         var successCount = 0
         var failCount = 0
         state.updateStepProgress(.createHDR, processed: 0, total: groupsToMerge.count)
+        if groupsToMerge.count < bracketGroups.count { state.markStepUntimed(.createHDR) }
 
         for (idx, group) in groupsToMerge.enumerated() {
             try await checkCancellationAndWaitIfPaused()

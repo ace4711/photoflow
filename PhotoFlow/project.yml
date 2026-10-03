@@ -160,8 +160,12 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
-        CODE_SIGN_IDENTITY: "-"
-        CODE_SIGNING_REQUIRED: NO
+        # Samma identitet som appen: testbundlen bäddas in i PhotoFlow.app, och
+        # en osignerad bundle där får signeringen av appen att misslyckas.
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: 64W55596GY
+        PROVISIONING_PROFILE_SPECIFIER: ""
     dependencies:
       - target: PhotoFlow
 
