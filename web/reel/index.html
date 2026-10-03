@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Objektfilm – redigera</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Objektfilm</h1>
+    <span class="badge" title="Ingen backend: inget sparas på någon server.">Lokal prototyp</span>
+  </header>
+
+  <p id="msg" class="msg" role="status" hidden></p>
+
+  <main>
+    <section id="loader" class="card">
+      <h2>Öppna en film</h2>
+      <p class="muted">Välj mappen som innehåller <code>reel.json</code> och bilderna, eller släpp den här. Inget laddas upp: allt sker i den här webbläsaren.</p>
+      <div id="drop" class="drop" tabindex="0">Släpp en mapp eller flera filer här</div>
+      <div class="row">
+        <label class="btn">Välj mapp<input id="pickDir" type="file" webkitdirectory hidden></label>
+        <label class="btn">Välj filer<input id="pickFiles" type="file" multiple accept=".json,image/*" hidden></label>
+      </div>
+      <form id="urlForm" class="row">
+        <input id="urlInput" type="url" inputmode="url" placeholder="…eller adress till reel.json" aria-label="Adress till reel.json">
+        <button class="btn" type="submit">Öppna</button>
+      </form>
+    </section>
+
+    <section id="editor" hidden>
+      <div class="stage">
+        <div class="preview">
+          <canvas id="canvas" aria-label="Förhandsvisning"></canvas>
+        </div>
+        <div class="transport">
+          <button id="play" class="btn icon" aria-label="Spela">▶</button>
+          <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Tid">
+          <span id="time" class="time">0,0 / 0,0 s</span>
+        </div>
+      </div>
+
+      <div class="side">
+        <h2>Filmremsa <span id="total" class="muted"></span></h2>
+        <ol id="strip" class="strip"></ol>
+
+        <div id="candWrap">
+          <h2>Fler bilder</h2>
+          <div id="candidates" class="cands"></div>
+        </div>
+
+        <div class="card approve">
+          <p class="note"><strong>Lokal prototyp.</strong> Knappen sparar ingenting på en server och skickar inget till fotografen. Den laddar bara ner en uppdaterad <code>reel.json</code> (revision +1, status &quot;approved&quot;).</p>
+          <label class="field">Ditt namn (valfritt)<input id="who" type="text" autocomplete="name"></label>
+          <button id="approve" class="btn primary">Godkänn och ladda ner</button>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="editor.js"></script>
+</body>
+</html>

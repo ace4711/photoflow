@@ -4,3 +4,7 @@ DerivedData/
 build/
 *.xcuserstate
 .build/
+
+# Webbdelen av Objektfilm
+web/reel/node_modules/
+web/reel/dist/
