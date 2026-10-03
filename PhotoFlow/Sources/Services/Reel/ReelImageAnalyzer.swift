@@ -28,8 +28,8 @@ nonisolated struct ReelImageAnalysis: Codable, Sendable, Equatable {
     var horizonAngleDegrees: Double?
     /// Relativt mått (Laplace-varians), bara jämförbart inom ett objekt.
     var sharpness: Double?
-    /// Visions feature print som råa `Float32`-värden (little endian). Euklidiskt
-    /// avstånd mellan två sådana vektorer är detsamma som Visions `distance(to:)`.
+    /// Visions feature print som råa `Float32`-värden (little endian). Kvadrerat
+    /// euklidiskt avstånd mellan två sådana vektorer är detsamma som Visions `distance(to:)`.
     var featurePrint: Data?
     var saliencyBoxes: [Box]
     /// Motivets tyngdpunkt (areaviktad över saliency-boxarna), nil utan saliency.
@@ -87,8 +87,10 @@ nonisolated enum ReelImageAnalyzer {
 
     static func loadCache(from directory: URL) -> [String: ReelImageAnalysis] {
         let file = directory.appendingPathComponent(cacheFileName)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601   // samma som i saveCache
         guard let data = try? Data(contentsOf: file),
-              let persisted = try? JSONDecoder().decode(PersistedFile.self, from: data),
+              let persisted = try? decoder.decode(PersistedFile.self, from: data),
               persisted.version == currentVersion else { return [:] }
         return persisted.analyses
     }

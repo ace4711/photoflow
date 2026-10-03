@@ -89,6 +89,19 @@ struct ReelImageAnalyzerTests {
         #expect(items.isEmpty)
     }
 
+    @Test("Cachen bevarar EXIF-datum (heltalssekunder) vid skrivning och läsning")
+    func cacheKeepsExifDate() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let date = Date(timeIntervalSince1970: 1_790_000_000)
+        let a = ReelImageAnalysis(sha256: "ab", width: 10, height: 10, qualityScore: 0.5, isUtility: false,
+                                  horizonAngleDegrees: nil, sharpness: 1, featurePrint: Data([1, 2, 3, 4]),
+                                  saliencyBoxes: [], focus: nil, salientWidth: nil, meanLuminance: 0.5,
+                                  exifDate: date, room: "Kök", category: "Interiör", features: ["x"], caption: nil)
+        ReelImageAnalyzer.saveCache(["ab": a], to: dir)
+        #expect(ReelImageAnalyzer.loadCache(from: dir)["ab"] == a)
+    }
+
     @Test("Cache med fel version ignoreras")
     func wrongVersionIgnored() throws {
         let dir = try tempDir()

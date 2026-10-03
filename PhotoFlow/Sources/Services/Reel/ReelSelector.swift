@@ -193,11 +193,14 @@ nonisolated enum ReelSelector {
 
     // MARK: - Feature print-avstånd
 
+    /// Samma avstånd som Visions `FeaturePrintObservation.distance(to:)`: *kvadrerat* euklidiskt
+    /// avstånd (uppmätt: 0,0521 mot 0,2282² på två riktiga bilder), så att
+    /// dubblettgränsen i `PhotoQualityService` gäller oförändrad.
     static func euclidean(_ a: [Float], _ b: [Float]) -> Double? {
         guard a.count == b.count, !a.isEmpty else { return nil }
         var sum = 0.0
         for i in a.indices { let d = Double(a[i] - b[i]); sum += d * d }
-        return sum.squareRoot()
+        return sum
     }
 
     /// Två decimaler med decimalkomma ("0,82").
