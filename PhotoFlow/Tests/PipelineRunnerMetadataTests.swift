@@ -165,9 +165,11 @@ struct ExiftoolProgressParsingTests {
         ======== /x/c.dng [1/1]
         Error: File not found - /x/c.dng
             1 files weren't updated due to errors
-        ======== /x/d.dng [1/1]
+        ======== /x/d.NEF [1/1]
+            1 image files created
+        ======== /x/e.dng [1/1]
         """
-        #expect(PipelineRunner.completedExiftoolCommands(in: output) == 3)
+        #expect(PipelineRunner.completedExiftoolCommands(in: output) == 4)
         #expect(PipelineRunner.completedExiftoolCommands(in: "") == 0)
     }
 }

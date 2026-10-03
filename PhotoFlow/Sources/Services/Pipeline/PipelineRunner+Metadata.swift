@@ -2,12 +2,11 @@ import Foundation
 
 extension PipelineRunner {
     /// Antal färdiga exiftool-kommandon (ett per fil i argfilen) i utdatan —
-    /// varje kommando avslutas med en rad "N image files updated/unchanged" eller
-    /// "N files weren't updated due to errors".
+    /// varje kommando avslutas med en rad "N image files updated/unchanged/created"
+    /// (created = ny XMP-sidecar för en NEF) eller "N files weren't updated due to errors".
     nonisolated static func completedExiftoolCommands(in output: String) -> Int {
         output.split(separator: "\n").filter { line in
-            line.contains("image files updated") || line.contains("image files unchanged")
-                || line.contains("image file updated") || line.contains("image file unchanged")
+            ["updated", "unchanged", "created"].contains { line.contains("image files \($0)") || line.contains("image file \($0)") }
                 || line.contains("weren't updated due to errors")
         }.count
     }
