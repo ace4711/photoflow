@@ -178,17 +178,12 @@ extension PipelineRunner {
         // varje grupp, i preview-filnamnsordning) + alla ogrupperade bilder —
         // håller modellanropen nere. Se FORBATTRINGAR.md för uppmätt tid/bild
         // och varför ett fullständigt urval inte gjordes.
-        var seenGroups: Set<Int> = []
-        var sampleFiles: [URL] = []
-        for file in previewFiles {
-            let base = file.deletingPathExtension().lastPathComponent
-            if stored[base]?.mlCaption != nil { continue }
-            if let groupID = bracketGroupByFilename[base] {
-                if seenGroups.contains(groupID) { continue }
-                seenGroups.insert(groupID)
-            }
-            sampleFiles.append(file)
-        }
+        let previewByBase = Dictionary(
+            previewFiles.map { ($0.deletingPathExtension().lastPathComponent, $0) }, uniquingKeysWith: { a, _ in a }
+        )
+        let sampleFiles = Self.descriptionSample(
+            previewBaseNames: Array(previewByBase.keys), stored: stored, groupByFilename: bracketGroupByFilename
+        ).compactMap { previewByBase[$0] }
 
         guard !sampleFiles.isEmpty else {
             state.appendStepLog(.aiTagging, "Alla urvalsbilder har redan AI-bildbeskrivningar — hoppar över", type: .info)
@@ -229,6 +224,7 @@ extension PipelineRunner {
                 mergeMLDescription(filename: base, entry: entry)
                 state.appendStepLog(.aiTagging, "[\(index + 1)/\(sampleFiles.count)] \(base): \(result.caption) (\(String(format: "%.1f", elapsed))s)")
             } else {
+                entry.mlAttempted = true
                 stored[base] = entry
                 state.appendStepLog(.aiTagging, "[\(index + 1)/\(sampleFiles.count)] \(base): ingen ML-beskrivning (\(String(format: "%.1f", elapsed))s)", type: .warning)
             }
@@ -254,6 +250,29 @@ extension PipelineRunner {
             state.appendStepLog(.aiTagging, "AI-bildbeskrivningar klart: \(durations.count) bilder, snitt \(String(format: "%.2f", avg))s/bild", type: .success)
             state.appendLog("AI-bildbeskrivningar klara (\(durations.count) bilder, snitt \(String(format: "%.2f", avg))s/bild).", type: .success)
         }
+    }
+
+    /// Vilka bilder som ska få en ML-beskrivning: en per bracket-/singelgrupp
+    /// (den första i filnamnsordning) plus alla ogrupperade — men inga grupper
+    /// som redan har en beskrivning eller ett misslyckat försök från en tidigare
+    /// körning. Förut hoppades bara just den beskrivna bilden över, så nästa
+    /// bild i samma grupp valdes och nästan hela steget kördes om varje gång.
+    nonisolated static func descriptionSample(
+        previewBaseNames: [String], stored: [String: AITagsStore.Entry], groupByFilename: [String: Int]
+    ) -> [String] {
+        func done(_ base: String) -> Bool {
+            stored[base]?.mlCaption != nil || stored[base]?.mlAttempted == true
+        }
+        var handledGroups = Set(previewBaseNames.filter(done).compactMap { groupByFilename[$0] })
+        var sample: [String] = []
+        for base in previewBaseNames.sorted() where !done(base) {
+            if let group = groupByFilename[base] {
+                guard !handledGroups.contains(group) else { continue }
+                handledGroups.insert(group)
+            }
+            sample.append(base)
+        }
+        return sample
     }
 
     /// Slår ihop Vision-taggarna för `filename` med Foundation Models

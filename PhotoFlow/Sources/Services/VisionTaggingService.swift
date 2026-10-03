@@ -299,6 +299,9 @@ nonisolated enum AITagsStore {
         /// `description` i IPTC/XMP när den finns (se
         /// `PipelineRunner+AITagging.runPhotoDescriptions`).
         var mlCaption: String?
+        /// Modellen tillfrågades men gav ingen beskrivning. Förut gjordes ett nytt
+        /// försök vid varje omkörning, så steget blev aldrig "klart".
+        var mlAttempted: Bool?
 
         init(tags: [String], description: String, category: String, mlRoom: String? = nil, mlCategory: String? = nil, mlFeatures: [String]? = nil, mlCaption: String? = nil) {
             self.tags = tags
