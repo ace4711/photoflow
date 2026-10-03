@@ -4588,3 +4588,62 @@ självt (`resolveCalendar`/`previewEvents`/`CalendarPickerRow`/
   sedan körs på riktigt. Bedömdes ofarligt (cachen är bara `[adress:
   koordinat]`, ingen sessionsspecifik data) men värt att notera eftersom
   uppdraget bad om striktast möjliga read-only.
+
+## Startkontroll och extern scratch-disk
+
+### Bakgrund
+
+Inputmappen flyttades till en extern disk (`/Volumes/photo-ingestion/PhotoFlow/input`,
+output bredvid i `…/output`). Det avslöjade ett fel, och samtidigt saknades ett
+ställe där man ser om allt appen behöver faktiskt är på plats.
+
+### 1. Kopiering bara från källor utanför inputmappen
+
+`ContentView` avgjorde "SD-kort → kopiera först" med `sourceDir.path.hasPrefix("/Volumes/")`.
+Med inputmappen på en extern disk tolkades bevakningens egna träffar i inputmappen
+(ofta en daterad undermapp, se `WatchService.checkDirectory`) som ett kort och
+rsyncades in i inputmappens rot — varje NEF dubblerades. Nu avgör
+`AppSettings.sourceNeedsCopyToInput(sourceDir:inputDir:)` utifrån om källan ligger
+i inputmappen (sökvägskomponenter, så `input-gammal` räknas inte som inuti `input`).
+Utan vald inputmapp gäller det gamla `/Volumes`-beteendet. 5 tester i
+`AppSettingsSDCardTests`.
+
+### 2. Startkontroll (`Preflight`, `PreflightModel`, `PreflightView`)
+
+En samlad kontroll i sektioner, med en åtgärdsknapp per brist:
+
+- **Mappar:** input/output valda, extern disk ansluten, mappen finns (annars "Skapa
+  mappen" om föräldermappen finns), är en mapp, läs- och skrivbar; input ≠ output;
+  output inuti input (varning); ledigt utrymme mot NEF-mängden × 3,5 (blockerar
+  under 2 GB); minneskort anslutet (info); appens arbetsmapp. Plus ett mappträd
+  som visar input, output och pipelinens undermappar ("finns"/"skapas vid körning").
+- **Kalender:** avstängd (info), åtkomst ej given ("Ge kalenderåtkomst") eller nekad
+  (öppnar Systeminställningar), att de valda kalendrarna finns (ingen → blockerar,
+  några → varning), och att bokningarna de senaste 14 dagarna har läsbar adress
+  (heuristiken; med Apple Intelligence bara info, eftersom modellen tolkar fler vid körning).
+- **Verktyg:** nödvändiga verktyg från `DependencyManager` (OpenCV blir nödvändigt
+  när den motorn är vald). Valfria som saknas visas fortsatt bara under System.
+- **Lightroom:** pluginlänken i `~/Library/Application Support/Adobe/Lightroom/Modules`
+  — trasig länk (varning) med "Välj pluginet…", som bara ersätter en symlänk, aldrig
+  en riktig mapp.
+- **AI:** om Apple Intelligence är tillgängligt (info).
+
+Körs vid appstart (ersätter den tidigare verktygsvarningen; öppnas av sig själv bara
+vid blockerande brist), när en disk ansluts/matas ut, när appen blir aktiv och när
+en inställning ändras (0,5 s debounce). Verktygen kontrolleras bara vid start och
+"Kontrollera igen". Blockerande brister visas som röd banderoll överst på dashboarden,
+rödmarkerar mappknappen det gäller, och stoppar Auto och bevakning (arket öppnas i
+stället, med en rad i loggen). Mappdelen visas även under Inställningar → Mappar.
+Kontrollen läser bara; kalenderåtkomst begärs aldrig automatiskt.
+
+`Preflight.evaluate` är ren och testas mot ett påhittat filsystem: 25 tester i
+`PreflightTests`. Full svit: 291 gröna.
+
+### Kvarstående / inte gjort
+
+- App Intents (`StartPipelineIntent`, `ToggleWatchIntent`) och menyradens start går
+  inte via startkontrollen — bara dashboardens knappar gör det.
+- En ändring som inte ger någon händelse (t.ex. en symlänk som lagas i Terminal medan
+  appen ligger i bakgrunden) syns först när appen blir aktiv eller vid "Kontrollera igen".
+- Bara mappdelen och arkets översta del är kontrollerade visuellt i den riktiga appen;
+  kalender-, verktygs- och AI-sektionerna täcks av tester.
