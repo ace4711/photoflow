@@ -45,6 +45,11 @@ nonisolated enum HDREngine {
     /// - Parameter progress: optional UI progress callback, 0...1, called a
     ///   handful of times (per image rendered, per fusion phase) — not
     ///   throwing; use the caller's own `Task` cancellation to abort.
+    ///
+    /// `@concurrent`: projektet bygger med `NonisolatedNonsendingByDefault`, så
+    /// utan det kördes hela sammanslagningen (sekunder per grupp, pixel för pixel)
+    /// på anroparens aktör — huvudtråden — och appen frös med snurrande färghjul.
+    @concurrent
     static func merge(
         rawURLs: [URL],
         options: Options = Options(),

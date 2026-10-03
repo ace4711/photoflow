@@ -135,6 +135,7 @@ extension PipelineRunner {
             let inputNames = (engine == "opencv" ? group.previewPaths.map { URL(fileURLWithPath: $0).lastPathComponent } : group.rawURLs.map(\.lastPathComponent)).joined(separator: ", ")
             state.appendStepLog(.createHDR, "HDR grupp \(group.groupId): mergar \(inputCount) bilder (\(inputNames))...")
 
+            let groupStarted = Date()
             do {
                 if engine == "opencv" {
                     guard let python3Path else { throw PipelineError.toolNotFound("python3 med OpenCV saknas") }
@@ -143,12 +144,23 @@ extension PipelineRunner {
                         arguments: [scriptPath.path, outputPath] + group.previewPaths
                     )
                 } else {
+                    let groupLabel = "Grupp \(idx + 1)/\(groupsToMerge.count)"
+                    let imageCount = group.rawURLs.count
+                    let state = self.state
+                    let reporter = HDRProgressReporter()
                     try await HDREngine.merge(
                         rawURLs: group.rawURLs,
                         options: hdrOptions,
                         tiffURL: URL(fileURLWithPath: outputPath),
                         jpegURL: URL(fileURLWithPath: previewPath),
-                        exiftoolPath: exiftoolPath
+                        exiftoolPath: exiftoolPath,
+                        progress: { fraction in
+                            guard let phase = reporter.newPhase(for: fraction, imageCount: imageCount) else { return }
+                            Task { @MainActor in
+                                state.statusMessage = "\(engineLabel): \(groupLabel) — \(phase)"
+                                state.appendStepLog(.createHDR, "\(groupLabel): \(phase)")
+                            }
+                        }
                     )
                 }
 
@@ -156,7 +168,9 @@ extension PipelineRunner {
                     successCount += 1
                     let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputPath)[.size] as? Int) ?? 0
                     let sizeMB = String(format: "%.1f", Double(fileSize) / 1_048_576.0)
-                    state.appendStepLog(.createHDR, "HDR grupp \(group.groupId): klar → hdr_group_\(group.groupId).tiff (\(sizeMB) MB)", type: .success)
+                    let took = StepTiming.formatExact(Date().timeIntervalSince(groupStarted))
+                    state.appendStepLog(.createHDR, "HDR grupp \(group.groupId): klar på \(took) → hdr_group_\(group.groupId).tiff (\(sizeMB) MB)", type: .success)
+                    state.appendLog("HDR \(idx + 1)/\(groupsToMerge.count) klar på \(took)", type: .success)
                     // Show JPEG preview in UI
                     let showURL = FileManager.default.fileExists(atPath: previewPath)
                         ? URL(fileURLWithPath: previewPath)
@@ -317,5 +331,33 @@ extension PipelineRunner {
         cv2.imwrite(jpeg_path, result_8, [cv2.IMWRITE_JPEG_QUALITY, 92])
         print(f"Mertens fusion: {len(images)} bilder -> {output_path} + preview")
         """
+    }
+}
+
+/// Gör `HDREngine.merge`s täta förloppsanrop (0…1) till några få läsbara
+/// faser för loggen, och rapporterar bara när fasen byts.
+nonisolated final class HDRProgressReporter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last: String?
+
+    func newPhase(for fraction: Double, imageCount: Int) -> String? {
+        let phase = Self.phase(for: fraction, imageCount: imageCount)
+        lock.lock(); defer { lock.unlock() }
+        guard phase != last else { return nil }
+        last = phase
+        return phase
+    }
+
+    /// Faserna följer `HDREngine.merge`: 5–50 % RAW-rendering per bild,
+    /// 55 % justering klar, 55–90 % exposure fusion, 95 % TIFF/JPEG skrivna.
+    static func phase(for fraction: Double, imageCount: Int) -> String {
+        switch fraction {
+        case ..<0.5:
+            let done = Int(((fraction - 0.05) / 0.45 * Double(imageCount)).rounded(.down))
+            return "renderar RAW \(min(max(done + 1, 1), imageCount))/\(imageCount)"
+        case ..<0.55: return "justerar bilderna mot varandra"
+        case ..<0.9: return "slår ihop exponeringarna"
+        default: return "sparar TIFF och JPEG"
+        }
     }
 }

@@ -109,7 +109,23 @@ nonisolated enum HDRWriter {
         return cgImage
     }
 
+    /// Skrivs först till en dold temporärfil bredvid och byts in när den är
+    /// färdig. `runHDRMerge` räknar en grupp som klar så fort TIFF-filen finns,
+    /// så en halvskriven fil (appen avslutad mitt i) hade annars hoppats över
+    /// för gott vid nästa körning.
     private static func writeTIFF(_ cgImage: CGImage, to url: URL) throws {
+        let partial = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).partial")
+        try? FileManager.default.removeItem(at: partial)
+        defer { try? FileManager.default.removeItem(at: partial) }
+        try writeTIFFDirect(cgImage, to: partial)
+        if FileManager.default.fileExists(atPath: url.path) {
+            _ = try FileManager.default.replaceItemAt(url, withItemAt: partial)
+        } else {
+            try FileManager.default.moveItem(at: partial, to: url)
+        }
+    }
+
+    private static func writeTIFFDirect(_ cgImage: CGImage, to url: URL) throws {
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.tiff.identifier as CFString, 1, nil) else {
             throw WriterError.destinationCreationFailed
         }

@@ -23,6 +23,13 @@ settings:
     # `nonisolated`/a locked box, so this doesn't hide any actual data races.
     SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
     SWIFT_APPROACHABLE_CONCURRENCY: YES
+  configs:
+    # Optimera även Debug: appen körs från Xcode i Debug, och utan optimering
+    # var pixelslingorna i HDR (ExposureFusion/RAWRenderer) många gånger
+    # långsammare — mätt med `sample`: tiden gick till generisk Swift-metadata
+    # i ospecialiserade Range-iterationer. Symbolerna finns kvar.
+    Debug:
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
 
 targets:
   PhotoFlow:
