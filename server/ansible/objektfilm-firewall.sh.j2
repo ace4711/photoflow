@@ -1,0 +1,30 @@
+#!/bin/sh
+# Hanteras av Ansible (server/ansible/firewall-tasks.yml). Ändra inte för hand.
+# Släpper bara in {{ objektfilm_allowed_sources | join(', ') }} till publicerad port {{ objektfilm_port }}.
+# Matchar på ursprunglig destinationsport (conntrack), eftersom Docker DNAT:ar före FORWARD/DOCKER-USER.
+set -eu
+CHAIN=OBJEKTFILM-IN
+PORT={{ objektfilm_port }}
+JUMP="-p tcp -m conntrack --ctorigdstport $PORT --ctdir ORIGINAL -j $CHAIN"
+
+remove() {
+  while iptables -C DOCKER-USER $JUMP 2>/dev/null; do iptables -D DOCKER-USER $JUMP; done
+  iptables -F $CHAIN 2>/dev/null || true
+  iptables -X $CHAIN 2>/dev/null || true
+}
+
+apply() {
+  remove
+  iptables -N $CHAIN
+{% for src in objektfilm_allowed_sources %}
+  iptables -A $CHAIN -s {{ src }} -j RETURN
+{% endfor %}
+  iptables -A $CHAIN -j DROP
+  iptables -I DOCKER-USER 1 $JUMP
+}
+
+case "${1:-}" in
+  apply) apply ;;
+  remove) remove ;;
+  *) echo "Användning: $0 apply|remove" >&2; exit 2 ;;
+esac

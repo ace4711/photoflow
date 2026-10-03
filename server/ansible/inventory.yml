@@ -1,0 +1,15 @@
+---
+# Eget inventarie i photoflow-repot (inte EriksvikSites): repot ska gå att driftsätta utan
+# att EriksvikSite finns utcheckat. Värden är samma maskin som EriksvikSites `server3`.
+# Ingen ansible_become globalt: bara de tasks som behöver root (data-katalogens ägare,
+# brandvägg, age över filer ägda av uid 10470) använder become (sudo -n fungerar på server3).
+all:
+  children:
+    objektfilm:
+      hosts:
+        server3:
+          ansible_host: 10.0.0.37
+          ansible_user: fredrike
+          ansible_python_interpreter: /usr/bin/python3
+          ansible_become_method: sudo
+          ansible_become_flags: "-n"

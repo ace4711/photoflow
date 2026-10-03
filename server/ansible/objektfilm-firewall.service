@@ -1,0 +1,13 @@
+[Unit]
+Description=Objektfilm: begränsa port 8470 i DOCKER-USER
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/objektfilm-firewall.sh apply
+ExecStop=/usr/local/sbin/objektfilm-firewall.sh remove
+
+[Install]
+WantedBy=multi-user.target

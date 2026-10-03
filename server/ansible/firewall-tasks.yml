@@ -1,0 +1,31 @@
+---
+# Valfritt: begränsa 8470 till cheetah (RP), värden själv och Macen. Docker kringgår ufw, därför
+# DOCKER-USER. Reglerna ligger i en egen kedja (OBJEKTFILM-IN) som en systemd-unit lägger upp efter
+# docker.service vid varje boot, så AssetCores kedjor och regler lämnas orörda.
+# VARNING: fel källista låser ute RP:n eller Macen (rensa med: sudo /usr/local/sbin/objektfilm-firewall.sh remove).
+# Ändrar bara kedjan OBJEKTFILM-IN och en hopp-regel i DOCKER-USER, rör inget annat.
+- name: Installera brandväggsskriptet
+  become: true
+  ansible.builtin.template:
+    src: objektfilm-firewall.sh.j2
+    dest: /usr/local/sbin/objektfilm-firewall.sh
+    mode: "0750"
+    owner: root
+    group: root
+  register: fw_script
+
+- name: Installera systemd-unit
+  become: true
+  ansible.builtin.copy:
+    src: objektfilm-firewall.service
+    dest: /etc/systemd/system/objektfilm-firewall.service
+    mode: "0644"
+  register: fw_unit
+
+- name: Aktivera och (om)starta regeln
+  become: true
+  ansible.builtin.systemd:
+    name: objektfilm-firewall.service
+    daemon_reload: "{{ fw_unit.changed }}"
+    enabled: true
+    state: "{{ 'restarted' if (fw_script.changed or fw_unit.changed) else 'started' }}"

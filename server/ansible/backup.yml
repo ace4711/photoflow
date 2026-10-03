@@ -1,0 +1,64 @@
+---
+# Nattlig databasbackup av Objektfilm (plan avsnitt 1). KÖRS INTE än, Rundeck-jobbet läggs i EriksvikSite (steg B5).
+#
+#   <EriksvikSite>/ansible/.venv/bin/ansible-playbook backup.yml
+#
+# 1. `node src/cli.ts backup` i containern (VACUUM INTO + integrity_check) till /data/backups/
+# 2. age-krypterar på värden till den PUBLIKA mottagaren i backup-recipient.txt (objektfilm-backup).
+#    Den privata identiteten finns inte på server3 ("maskinen som skapar backuper ska inte kunna läsa dem").
+# 3. raderar klartextfilen, `scp -O` till cheetah (DSM talar inte SFTP), gallrar kopior äldre än 30 dagar.
+# Obs DSM Auto Block: cheetah får två SSH-anslutningar per körning (mkdir/gallring + scp), inga loopar.
+- name: Backup av Objektfilm-databasen
+  hosts: objektfilm
+  gather_facts: false
+  vars:
+    objektfilm_dir: "/home/{{ ansible_user }}/objektfilm"
+    compose_dir: "{{ objektfilm_dir }}/src/server"
+    backup_recipient: "{{ lookup('ansible.builtin.file', playbook_dir + '/backup-recipient.txt') | trim }}"
+    backup_stamp: "{{ lookup('pipe', 'date +%Y%m%d-%H%M%S') }}"
+    backup_name: "objektfilm-{{ backup_stamp }}.db"
+    backup_remote_dir: /volume1/backups/objektfilm
+    backup_remote_host: "fredrike@10.0.0.5"
+    backup_retention_days: 30
+    stage_dir: "{{ objektfilm_dir }}/backup-out"
+  tasks:
+    - name: Kontrollera att age finns (inga klartextkopior lämnar värden)
+      ansible.builtin.command: command -v age
+      args: { executable: /bin/sh }
+      changed_when: false
+
+    - name: Backup i containern (VACUUM INTO + integrity_check)
+      ansible.builtin.command:
+        cmd: docker compose -f compose.yaml exec -T app node src/cli.ts backup --out /data/backups/{{ backup_name }}
+        chdir: "{{ compose_dir }}"
+      register: db_backup
+      changed_when: true
+
+    - name: Skapa mellanlagringskatalog
+      ansible.builtin.file: { path: "{{ stage_dir }}", state: directory, mode: "0700" }
+
+    - name: age-kryptera till objektfilm-backup (root läser filen som ägs av uid 10470)
+      become: true
+      ansible.builtin.shell: |
+        set -eu
+        age -r {{ backup_recipient }} -o {{ stage_dir }}/{{ backup_name }}.age {{ objektfilm_dir }}/data/backups/{{ backup_name }}
+        chown {{ ansible_user }}:{{ ansible_user }} {{ stage_dir }}/{{ backup_name }}.age
+        rm -f {{ objektfilm_dir }}/data/backups/{{ backup_name }}
+      changed_when: true
+
+    - name: Förbered katalog och gallra på cheetah (anslutning 1)
+      ansible.builtin.shell: >
+        ssh {{ backup_remote_host }}
+        "mkdir -p {{ backup_remote_dir }} && find {{ backup_remote_dir }} -name 'objektfilm-*.db.age' -mtime +{{ backup_retention_days }} -delete"
+      changed_when: true
+
+    - name: Skicka med scp -O (anslutning 2)
+      ansible.builtin.command: scp -O {{ stage_dir }}/{{ backup_name }}.age {{ backup_remote_host }}:{{ backup_remote_dir }}/{{ backup_name }}.age
+      changed_when: true
+
+    - name: Ta bort den lokala krypterade kopian
+      ansible.builtin.file: { path: "{{ stage_dir }}/{{ backup_name }}.age", state: absent }
+
+    - name: Resultat
+      ansible.builtin.debug:
+        msg: "{{ db_backup.stdout_lines }}"

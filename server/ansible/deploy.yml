@@ -1,0 +1,180 @@
+---
+# Driftsättning av Objektfilm-servern till server3 (steg B2 i docs/plan-objektfilm-backend.md).
+#
+#   cd server/ansible
+#   <EriksvikSite>/ansible/.venv/bin/ansible-playbook deploy.yml --check --diff   # torrkörning
+#   <EriksvikSite>/ansible/.venv/bin/ansible-playbook deploy.yml                  # skarp
+#
+# Vad den gör: rsync av server/, web/reel/ och .dockerignore till ~/objektfilm/src,
+# dekrypterar server/secrets/film.sops.env LOKALT och skriver ~/objektfilm/.env (0600),
+# skapar ~/objektfilm/data (uid 10470), kör `docker compose up -d --build` och väntar på /healthz.
+# Idempotent: compose återskapar containern om image eller konfiguration (inkl. .env) ändrats.
+# Ingen with-maintenance (finns inte på server3).
+#
+# Kataloglayout på värden:
+#   ~/objektfilm/.env            hemligheter, 0600 (renderas från sops)
+#   ~/objektfilm/data/           SQLite + blobbar (ägs av 10470:10470), rörs aldrig av rsync
+#   ~/objektfilm/src/            kopia av repot (server/, web/reel/), byggkontext
+#   ~/objektfilm/src/server/.env   -> ../../.env   (compose.yaml läser env_file och ./data relativt sig själv,
+#   ~/objektfilm/src/server/data   -> ../../data    därför symlänkar så att .env och data ligger utanför src)
+- name: Driftsätt Objektfilm-servern
+  hosts: objektfilm
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../.."
+    objektfilm_dir: "/home/{{ ansible_user }}/objektfilm"
+    compose_dir: "{{ objektfilm_dir }}/src/server"
+    sops_file: "{{ repo_root }}/server/secrets/film.sops.env"
+    objektfilm_uid: 10470
+    # Brandväggen (DOCKER-USER) är AV som standard. Se README.md och firewall-tasks.yml.
+    objektfilm_firewall: false
+    objektfilm_port: 8470
+    # Källor som får nå 8470 när brandväggen är på: cheetah (RP), server3 själv (healthz, lokala anrop)
+    # och Macen (10.0.0.153 i dag, DHCP: uppdatera vid behov). Hela 10.0.0.0/22 hade gjort regeln
+    # meningslös (cheetah ligger i den), därför enskilda adresser. Mac via Tailscale går via cheetah.
+    objektfilm_allowed_sources:
+      - 10.0.0.5
+      - 10.0.0.37
+      - 10.0.0.153
+    health_url: "http://10.0.0.37:8470/healthz"
+
+  tasks:
+    - name: Kontrollera att sops-filen finns lokalt
+      ansible.builtin.stat:
+        path: "{{ sops_file }}"
+      delegate_to: localhost
+      become: false
+      register: sops_stat
+      failed_when: not sops_stat.stat.exists
+
+    - name: Kontrollera att docker och compose finns på värden
+      ansible.builtin.command: docker compose version --short
+      changed_when: false
+      check_mode: false
+
+    - name: Skapa katalogerna (ägs av fredrike)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0750"
+      loop:
+        - "{{ objektfilm_dir }}"
+        - "{{ objektfilm_dir }}/src"
+
+    - name: Skapa datakatalogen (ägare 10470:10470, uid i containern)
+      become: true
+      ansible.builtin.file:
+        path: "{{ objektfilm_dir }}/data"
+        state: directory
+        owner: "{{ objektfilm_uid }}"
+        group: "{{ objektfilm_uid }}"
+        mode: "0750"
+
+    # ── Källkod ─────────────────────────────────────────────────────────────
+    # /data och /.env är förankrade undantag: de skyddar värdens symlänkar mot --delete.
+    - name: Synka server/ till src/server
+      ansible.posix.synchronize:
+        src: "{{ repo_root }}/server/"
+        dest: "{{ objektfilm_dir }}/src/server/"
+        delete: true
+        rsync_opts:
+          - "--exclude=/data"
+          - "--exclude=/data-dev"
+          - "--exclude=/.env"
+          - "--exclude=/secrets"
+          - "--exclude=/.sops.yaml"
+          - "--exclude=/ansible"
+          - "--exclude=node_modules"
+          - "--exclude=dist"
+          - "--exclude=.DS_Store"
+          - "--no-perms"
+          - "--no-owner"
+          - "--no-group"
+          - "--chmod=ugo=rwX"
+
+    - name: Synka web/reel till src/web/reel
+      ansible.posix.synchronize:
+        src: "{{ repo_root }}/web/reel/"
+        dest: "{{ objektfilm_dir }}/src/web/reel/"
+        delete: true
+        rsync_opts:
+          - "--exclude=node_modules"
+          - "--exclude=dist"
+          - "--exclude=data"
+          - "--exclude=.env"
+          - "--exclude=.DS_Store"
+          - "--no-perms"
+          - "--no-owner"
+          - "--no-group"
+          - "--chmod=ugo=rwX"
+
+    - name: Kopiera .dockerignore (byggkontexten är src/)
+      ansible.builtin.copy:
+        src: "{{ repo_root }}/.dockerignore"
+        dest: "{{ objektfilm_dir }}/src/.dockerignore"
+        mode: "0644"
+
+    # ── Hemligheter ─────────────────────────────────────────────────────────
+    # Dekrypteringen sker på Macen (privat age-nyckel finns aldrig på server3). Skrivskyddad, så den
+    # körs även i --check för att kunna jämföra .env mot värdens.
+    - name: Dekryptera film.sops.env lokalt
+      ansible.builtin.command: sops -d --input-type dotenv --output-type dotenv "{{ sops_file }}"
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      changed_when: false
+      no_log: true
+      register: film_env
+
+    - name: Skriv ~/objektfilm/.env (0600)
+      ansible.builtin.copy:
+        content: "{{ film_env.stdout }}\n"
+        dest: "{{ objektfilm_dir }}/.env"
+        mode: "0600"
+      no_log: true   # hindrar även --diff från att skriva ut hemligheterna
+
+    - name: Länka .env och data in i compose-katalogen
+      ansible.builtin.file:
+        src: "{{ item.src }}"
+        dest: "{{ compose_dir }}/{{ item.name }}"
+        state: link
+        force: true
+      loop:
+        - { name: ".env", src: "../../.env" }
+        - { name: "data", src: "../../data" }
+      when: not ansible_check_mode   # compose_dir finns inte förrän rsync körts på riktigt
+
+    # ── Bygg och starta ─────────────────────────────────────────────────────
+    - name: Validera compose-konfigurationen
+      ansible.builtin.command:
+        cmd: docker compose -f compose.yaml config --quiet
+        chdir: "{{ compose_dir }}"
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Bygg och starta (docker compose up -d --build)
+      ansible.builtin.command:
+        cmd: docker compose -f compose.yaml up -d --build
+        chdir: "{{ compose_dir }}"
+      register: compose_up
+      # up är idempotent: "Running" = oförändrad, "Recreated/Created/Started" = ändring.
+      changed_when: compose_up.stderr is search('(Recreated|Created|Started)') or compose_up.stdout is search('(Recreated|Created|Started)')
+      when: not ansible_check_mode
+
+    - name: Vänta på /healthz (kropp och X-Objektfilm, anropat från värden själv)
+      ansible.builtin.command: curl -sS -i --max-time 5 {{ health_url }}
+      register: health
+      until: >-
+        health.rc == 0
+        and health.stdout is search('(?m)^HTTP/[^ ]+ 200')
+        and health.stdout is search('(?mi)^x-objektfilm:[ ]1')
+        and health.stdout is search('objektfilm ok')
+      retries: 30
+      delay: 3
+      changed_when: false
+      when: not ansible_check_mode
+
+    # ── Brandvägg (valfri, av som standard) ─────────────────────────────────
+    - name: Brandvägg för 8470 (DOCKER-USER), bara med -e objektfilm_firewall=true
+      ansible.builtin.import_tasks: firewall-tasks.yml
+      when: objektfilm_firewall | bool

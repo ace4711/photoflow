@@ -1,0 +1,11 @@
+# sops-konfiguration för Objektfilm-servern (samma mönster som AssetCore).
+# Mottagare: samma age-nyckel som AssetCores secrets/*.sops.env, så att Fredriks
+# Mac (~/Library/Application Support/sops/age/keys.txt) kan dekryptera utan ny nyckel.
+# Den privata nyckeln finns aldrig på server3: deploy.yml dekrypterar lokalt på Macen.
+#
+#   kryptera:   sops -e --output secrets/film.sops.env /väg/till/.env
+#   dekryptera: sops -d secrets/film.sops.env
+#   redigera:   sops secrets/film.sops.env
+creation_rules:
+  - path_regex: secrets/.*\.sops\.env$
+    age: age1wuc203pjae9e78fqp83wr8p7z92yp7u54mfe37xg97tgqmj29qkscggp5t
