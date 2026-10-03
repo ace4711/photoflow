@@ -67,7 +67,8 @@ nonisolated enum ReelComposer {
         return .init(
             id: id, sha256: a.sha256, width: a.width, height: a.height,
             sources: [.init(kind: .local, path: relativePath(from: specDirectory, to: item.url))],
-            analysis: .init(room: a.room, category: a.category, focus: a.focus, salientWidth: a.salientWidth))
+            analysis: .init(room: a.room, category: a.category, focus: a.focus, salientWidth: a.salientWidth,
+                            focusWidth: a.focusWidth))
     }
 
     /// Sökvägen till `file` relativt mappen `dir` ("../X FÄRDIGA/bild.jpg"). Symlänkar löses inte upp.
@@ -136,6 +137,7 @@ nonisolated enum ReelComposer {
         order: [String],
         newAssets: [ReelSpec.Asset] = [],
         format: ReelFormat? = nil,
+        overrides: [String: ReelMotionPlanner.ClipOverride]? = nil,
         op: String = "reorder",
         by: ReelSpec.UpdatedBy = .init(role: "photographer", name: nil),
         now: Date = Date()
@@ -149,7 +151,9 @@ nonisolated enum ReelComposer {
         if let format { out.outputs = [format.output] }
         let aspect = ReelMotionPlanner.frameAspect(out.outputs.first ?? ReelFormat.vertical.output)
         out.assets = assets
-        out.timeline = ReelMotionPlanner.plan(plannerImages(assets), frameAspect: aspect)
+        // Fotografens val (rörelse, längd) följer med bilden; utan `overrides` läses de ur nuvarande klipp.
+        let kept = overrides ?? Self.overrides(in: spec)
+        out.timeline = ReelMotionPlanner.plan(plannerImages(assets), frameAspect: aspect, overrides: kept)
         out.revision += 1
         out.updatedAt = wholeSeconds(now)
         out.updatedBy = by
@@ -163,12 +167,23 @@ nonisolated enum ReelComposer {
 
     // MARK: - Hjälp
 
+    /// Fotografens val per asset-id, avlästa ur specens klipp (`motionPreset`, `durationLocked`).
+    static func overrides(in spec: ReelSpec) -> [String: ReelMotionPlanner.ClipOverride] {
+        var result: [String: ReelMotionPlanner.ClipOverride] = [:]
+        for clip in spec.timeline {
+            let preset = clip.motionPreset.flatMap(ReelMotionPlanner.Preset.init(rawValue:)) ?? .auto
+            let o = ReelMotionPlanner.ClipOverride(preset: preset, duration: clip.durationLocked == true ? clip.duration : nil)
+            if !o.isDefault { result[clip.asset] = o }
+        }
+        return result
+    }
+
     static func plannerImages(_ assets: [ReelSpec.Asset]) -> [ReelMotionPlanner.Image] {
         assets.map { a in
             let c = ReelCandidate(id: a.id, filename: "", room: a.analysis?.room, category: a.analysis?.category)
             return .init(assetID: a.id, width: a.width, height: a.height,
                          focus: a.analysis?.focus, salientWidth: a.analysis?.salientWidth,
-                         isExterior: ReelSelector.isExterior(c) == true)
+                         isExterior: ReelSelector.isExterior(c) == true, focusWidth: a.analysis?.focusWidth)
         }
     }
 }

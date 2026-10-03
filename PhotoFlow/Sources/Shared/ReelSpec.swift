@@ -93,6 +93,9 @@ nonisolated struct ReelSpec: Codable, Sendable, Equatable {
         var focus: Point?
         /// Motivets sammanlagda bredd som andel av bildbredden (0...1).
         var salientWidth: Double?
+        /// Bredden (andel av bildbredden) på den största saliency-boxen, ett tätare mått
+        /// än `salientWidth` (unionen). Valfritt; används av rörelseplaneringen. Tillägg inom v1.
+        var focusWidth: Double?
     }
 
     /// Punkt i normaliserade bildkoordinater [0,1].
@@ -161,6 +164,12 @@ nonisolated struct ReelSpec: Codable, Sendable, Equatable {
         var motion: Motion
         /// Övergången in från föregående klipp. Ignoreras för det första klippet.
         var transitionIn: Transition?
+        /// Fotografens val av rörelse ("zoomIn", "zoomOut", "panRight", "panLeft", "contain"),
+        /// nil = automatiskt. Bara metadata för redigeraren; renderare läser `motion`.
+        /// Tillägg inom v1.
+        var motionPreset: String?
+        /// true när fotografen satt längden själv, så att en ombyggnad inte räknar om den.
+        var durationLocked: Bool?
     }
 
     /// Reserverad ljudbeskrivning. `audio` är `null` i v1.

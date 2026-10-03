@@ -49,6 +49,13 @@ nonisolated struct ReelImageAnalysis: Codable, Sendable, Equatable {
     /// om svaret blev tomt), "aiTags" (reserv från sessionens ai_tags.json) eller nil.
     var describedBy: String?
 
+    /// Bredden på den största saliency-boxen (andel av bildbredden): ett tätare mått än
+    /// `salientWidth` (unionen), som på interiörer ofta är nästan hela bilden. Nil utan boxar.
+    /// Beräknas ur `saliencyBoxes`, så äldre cachade analyser får det också.
+    var focusWidth: Double? {
+        saliencyBoxes.max { $0.width * $0.height < $1.width * $1.height }.map { min(max($0.width, 0), 1) }
+    }
+
     /// Feature printen som flyttal, för avståndsberäkning.
     var featureVector: [Float]? {
         guard let data = featurePrint, !data.isEmpty, data.count % MemoryLayout<Float>.size == 0 else { return nil }

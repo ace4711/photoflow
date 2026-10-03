@@ -44,7 +44,7 @@ Läsare **ska** ignorera okända fält på alla nivåer. Skrivare **bör** skriv
 - `id` är unikt i reelen och är det `timeline[].asset` pekar på. `width`/`height` är bildens pixelmått *efter* rotation (det visade formatet) och används bara för att räkna `I`; en renderare som laddar en nedskalad variant **ska** behålla `I` från specen.
 - `sha256` är bildens identitet. Hittas ingen källa letar läsaren på hash.
 - `sources[]`: `{kind: "local", path}` (relativ sökväg från spec-filens mapp), `{kind: "url", url}`, `{kind: "store", key}`.
-- `analysis?`: `{room?, category?, focus?{x,y}, salientWidth?}`. Påverkar inte rendering (bara hur förslaget gjordes).
+- `analysis?`: `{room?, category?, focus?{x,y}, salientWidth?, focusWidth?}` (`focusWidth` = bredden på den största saliency-boxen, tätare än unionen `salientWidth`). Påverkar inte rendering (bara hur förslaget gjordes).
 
 ### 2.2 `style`
 
@@ -54,12 +54,13 @@ Läsare **ska** ignorera okända fält på alla nivåer. Skrivare **bör** skriv
 
 ### 2.3 `timeline[]`
 
-`{asset, duration, fit, motion, transitionIn?}`
+`{asset, duration, fit, motion, transitionIn?, motionPreset?, durationLocked?}`
 
 - `duration`: sekunder, > 0.
 - `fit`: `"cover"` eller `"contain-blur"`.
 - `motion`: `{from, to}` där varje nyckel är `{cx, cy, zoom}`. `cx`, `cy` är mittpunkten i bildkoordinater, `zoom` ≥ 1 är relativt basutsnittet (1 = hela cover-utsnittet).
 - `transitionIn`: `{type, direction?, duration}` med `type` ∈ `crossfade`, `cut`, `fadeThroughBlack`, `push`. `direction` ∈ `left`, `right`, `up`, `down` (bara `push`; saknas den används `left`). Ignoreras för klipp 0.
+- `motionPreset?`, `durationLocked?`: fotografens val i redigeraren (`zoomIn`, `zoomOut`, `panRight`, `panLeft`, `contain`; `true` när längden satts för hand). Bara metadata så att en ombyggnad bevarar valen; renderare läser `motion` och `duration`. Tillägg inom v1.
 
 ## 3. Tid
 

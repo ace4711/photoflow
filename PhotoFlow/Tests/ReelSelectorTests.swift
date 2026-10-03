@@ -36,10 +36,10 @@ struct ReelSelectorTests {
          cand("hall", room: "Hall", q: 0.6, axis: 6)]
     }
 
-    @Test("Nyttobilder filtreras bort och får en förklaring")
+    @Test("Nyttobilder med låg kvalitet filtreras bort och får en förklaring")
     func utilityRemoved() {
         var list = villa()
-        list.append(ReelCandidate(id: "kvitto", filename: "kvitto.jpg", quality: 0.99, isUtility: true,
+        list.append(ReelCandidate(id: "kvitto", filename: "kvitto.jpg", quality: 0.2, isUtility: true,
                                   featureVector: vec(9), room: "Kök", category: "Interiör"))
         let sel = ReelSelector.select(list)
         #expect(!sel.picks.contains { $0.candidateID == "kvitto" })
@@ -175,5 +175,58 @@ struct ReelSelectorTests {
         let sel = ReelSelector.select(list)
         #expect(sel.picks.last?.candidateID == "skymning")
         #expect(sel.picks.last?.reason.contains("skymning") == true)
+    }
+
+    @Test("Nyttobild med god kvalitet är ett mjukt avdrag: badrum kan väljas som särdrag")
+    func utilityIsSoft() {
+        var list = villa()
+        list.removeAll { $0.id == "bad" || $0.id == "sov" }
+        list.append(cand("sov", room: "Sovrum", q: 0.6, axis: 4))
+        var bad = cand("bad", room: "Badrum", q: 0.9, axis: 5)
+        bad.isUtility = true
+        list.append(bad)
+        let sel = ReelSelector.select(list)
+        #expect(!sel.excluded.contains { $0.candidateID == "bad" })
+        #expect(sel.picks.contains { $0.candidateID == "bad" })
+        let plain = ReelSelector.baseScore(cand("x", room: "Badrum", q: 0.9, axis: 5), sharpnessPercentile: 0.5, weights: .init())
+        #expect(sel.scores["bad"]! < plain)
+    }
+
+    @Test("Rumstyper normaliseras: synonymer är samma rum")
+    func roomTypeSynonyms() {
+        #expect(ReelSelector.roomType("Köket") == ReelSelector.roomType("Kök"))
+        #expect(ReelSelector.roomType("Allrum") == "vardagsrum")
+        #expect(ReelSelector.roomType("Öppen plan") == "vardagsrum")
+        #expect(ReelSelector.roomType("Sällskapsrum") == "vardagsrum")
+        #expect(ReelSelector.roomType("Kök och vardagsrum") == "kök")
+        #expect(ReelSelector.roomType("Toalett") == "badrum")
+        #expect(ReelSelector.roomType("Fasad") != ReelSelector.roomType("Trädgård"))
+        #expect(ReelSelector.roomType(nil) == nil)
+    }
+
+    @Test("Samma rum flera gånger: högst en bild per rumstyp när det finns andra rum")
+    func oneImagePerRoomType() {
+        // Provkörningens mönster: många kök och vardagsrum (med varierande stavning), några badrum.
+        var list: [ReelCandidate] = []
+        var n = 0
+        func add(_ room: String, _ q: Double) { list.append(cand("c\(n)", room: room, category: "Interiör", q: q, axis: n)); n += 1 }
+        for (room, q) in [("Kök", 0.85), ("Köket", 0.84), ("Kök", 0.83), ("Vardagsrum", 0.82), ("Allrum", 0.81),
+                          ("Öppen plan", 0.80), ("Badrum", 0.7), ("Sovrum", 0.7), ("Kontor", 0.65), ("Hall", 0.6)] {
+            add(room, q)
+        }
+        let sel = ReelSelector.select(list)
+        let types = sel.picks.compactMap { p in ReelSelector.roomType(list.first { $0.id == p.candidateID }?.room) }
+        #expect(sel.picks.count == 5)
+        #expect(Set(types).count == types.count, "rumstyper: \(types)")
+    }
+
+    @Test("Rumsstraffet är mjukt: en klart bättre bild av samma rum får fortfarande användas när alternativen är dåliga")
+    func roomPenaltyIsSoft() {
+        let list = [cand("k1", room: "Kök", q: 0.9, axis: 0), cand("k2", room: "Köket", q: 0.9, axis: 1),
+                    cand("v", room: "Vardagsrum", q: 0.9, axis: 2), cand("b", room: "Badrum", q: 0.05, axis: 3),
+                    cand("s", room: "Sovrum", q: 0.05, axis: 4), cand("h", room: "Hall", q: 0.05, axis: 5)]
+        let sel = ReelSelector.select(list, count: 4)
+        #expect(sel.picks.count == 4)
+        #expect(Set(sel.picks.map(\.candidateID)).count == 4)
     }
 }

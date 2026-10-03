@@ -199,7 +199,7 @@ Regeln (ren funktion `ReelMotionPlanner`):
    - **w < s ≤ 0,85** (motivet är bredare än ramen): *panorera* från ena kanten av motivet till den andra. Riktningen alterneras mellan klippen för rytmens skull.
    - **s > 0,85 och exteriör** (bred fasad eller utsikt): *contain-blur* plus långsam zoom 1,00 → 1,06.
 4. Alternera mellan in- och utzoom och mellan vänster- och högerpanorering mellan intilliggande klipp.
-5. Begränsa tempot: högst cirka 6 % av bildbredden per sekund vid panorering och högst 4 % zoom per sekund. Långsammare än så ser exklusivt ut, snabbare ser billigt ut **[Antagande, kalibreras med fotografen]**.
+5. Begränsa tempot: högst cirka 10 % av bildbredden per sekund vid panorering (höjt från 6 % i 1d: 6 % gav bara ~0,17 av bilden; en panorering ska täcka minst ~0,25) och högst 4 % zoom per sekund. Långsammare än så ser exklusivt ut, snabbare ser billigt ut **[Antagande, kalibreras med fotografen]**.
 6. Utsnittet får aldrig gå utanför bilden. Allt klampas, och kontrollen är en del av den rena logiken med tester.
 
 ### 4.4 Övergångar (v1)

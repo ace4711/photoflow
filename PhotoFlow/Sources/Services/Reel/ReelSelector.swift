@@ -50,6 +50,15 @@ nonisolated enum ReelSelector {
         var duplicateThreshold = PhotoQualityService.duplicateDistanceThreshold
         /// Likhet över detta mellan avslutning och öppning undviks när det finns alternativ.
         var maxClosingSimilarity = 0.85
+        /// Nyttobild (Vision) är ett mjukt avdrag på poängen. Hårt bort filtreras en
+        /// nyttobild bara om kvaliteten också är lägre än `utilityHardMaxQuality`
+        /// (Vision flaggade ~36 % av interiörerna, bland annat badrum och kontor).
+        var utilityPenalty = 0.15
+        var utilityHardMaxQuality = 0.35
+        /// Rumsdiversitet: avdrag i MMR-värdet (λ-viktat) för en bild vars rumstyp redan är
+        /// vald. Med standardvärdena väljs ett andra kök bara om den bästa bilden av ett annat
+        /// rum har ungefär 0,57 lägre grundpoäng (0,4 / λ), dvs. är klart oacceptabel.
+        var roomRepeatPenalty = 0.4
     }
 
     nonisolated enum Template: String, Sendable, Equatable {
@@ -98,7 +107,7 @@ nonisolated enum ReelSelector {
     // MARK: - Rumsklassning
 
     private static let facadeKeywords = ["fasad", "villa", "tomt", "trädgård", "tradgard"]
-    private static let livingKeywords = ["vardagsrum", "allrum", "vardag"]
+    private static let livingKeywords = ["vardagsrum", "allrum", "vardag", "öppen plan", "sällskapsrum", "salong"]
     private static let kitchenKeywords = ["kök"]
     private static let featureRoomKeywords = ["sovrum", "badrum", "matplats", "matsal", "altan", "uteplats", "terrass",
                                               "balkong", "veranda", "bastu", "pool", "tvättstuga", "kontor", "arbetsrum"]
@@ -108,6 +117,25 @@ nonisolated enum ReelSelector {
     private static let bonusKeywords = ["utsikt", "öppen spis", "sjötomt", "terrass", "kakelugn", "bastu", "pool",
                                         "havsutsikt", "sjöutsikt", "brygga", "strand", "kamin", "balkong", "altan",
                                         "takhöjd", "stuckatur", "braskamin"]
+
+    /// Normaliserad rumstyp (synonymer slås ihop: "Köket" = "Kök", "Allrum"/"Öppen plan" =
+    /// "Vardagsrum"). Nil om rummet är okänt. Okända rumsnamn är sin egen typ (gemener).
+    static func roomType(_ room: String?) -> String? {
+        guard let r = room?.lowercased().trimmingCharacters(in: .whitespaces), !r.isEmpty else { return nil }
+        // Kök före vardagsrum: "Kök och vardagsrum" är i första hand ett kök.
+        if matches(r, kitchenKeywords) { return "kök" }
+        if matches(r, livingKeywords) { return "vardagsrum" }
+        if matches(r, ["sovrum"]) { return "sovrum" }
+        if matches(r, ["badrum", "toalett", "dusch", "wc", "tvättrum"]) { return "badrum" }
+        if matches(r, ["matplats", "matsal"]) { return "matplats" }
+        if matches(r, ["hall", "entré", "tamburen"]) { return "hall" }
+        if matches(r, ["kontor", "arbetsrum"]) { return "kontor" }
+        if isFacadeRoom(r) {
+            return matches(r, ["trädgård", "tradgard", "tomt"]) ? "trädgård" : "fasad"
+        }
+        if matches(r, ["altan", "uteplats", "terrass", "balkong", "veranda"]) { return "uteplats" }
+        return r
+    }
 
     private static func matches(_ room: String?, _ keywords: [String]) -> Bool {
         guard let r = room?.lowercased(), !r.isEmpty else { return false }
@@ -189,6 +217,7 @@ nonisolated enum ReelSelector {
             + w.feature * featureBonus(c)
             + w.light * lightBonus(c)
             + w.saliency * saliencyClarity(c)
+            - (c.isUtility ? w.utilityPenalty : 0)
     }
 
     // MARK: - Feature print-avstånd
@@ -233,7 +262,9 @@ nonisolated enum ReelSelector {
             sharpCut = sharpValues[lo] + (sharpValues[hi] - sharpValues[lo]) * (pos - Double(lo))
         }
         for c in candidates {
-            if c.isUtility { exclude(c, .utility, "Nyttobild (kvitto, dokument eller liknande)"); continue }
+            if c.isUtility, (c.quality ?? 0.5) < weights.utilityHardMaxQuality {
+                exclude(c, .utility, "Nyttobild med låg kvalitet (kvitto, dokument eller liknande)"); continue
+            }
             if isExterior(c) == true, let h = c.horizonDegrees, abs(h) > weights.maxHorizonDegrees {
                 exclude(c, .horizon, "Horisonten lutar \(String(format: "%.1f", abs(h)).replacingOccurrences(of: ".", with: ","))° (exteriör)"); continue
             }
@@ -313,6 +344,7 @@ nonisolated enum ReelSelector {
             // Är vardagsrummet/köket redan med (t.ex. som öppning i en lägenhet) blir platsen en
             // särdragsplats, som fylls efter övriga platser så att den inte tar avslutningens bild.
             let have = pickedIDs.compactMap { byID[$0]?.room }
+            let pickedTypes = Set(pickedIDs.compactMap { roomType(byID[$0]?.room) })
             if (slot == .livingRoom && have.contains(where: { matches($0, livingKeywords) }))
                 || (slot == .kitchen && have.contains(where: { matches($0, kitchenKeywords) })) {
                 if !deferred.contains(position) { deferred.insert(position); queue.append(position); continue }
@@ -320,7 +352,7 @@ nonisolated enum ReelSelector {
             }
             let pool = survivors.filter { !pickedIDs.contains($0.id) }
             guard !pool.isEmpty else { break }
-            let pickedRooms = Set(pickedIDs.compactMap { byID[$0]?.room?.lowercased() })
+            let pickedRooms = pickedTypes
             let tiers = tiers(for: slot, template: template, pickedRooms: pickedRooms)
 
             var chosenTier = tiers.count - 1
@@ -339,6 +371,8 @@ nonisolated enum ReelSelector {
                 let maxSim = pickedIDs.map { similarity(c.id, $0) }.max() ?? 0
                 var rel = scores[c.id] ?? 0
                 if slot == .closing && isDusk(c) { rel += 0.08 }
+                // Rumsdiversitet: samma rumstyp en gång till får ett kraftigt avdrag.
+                if let t = roomType(c.room), pickedTypes.contains(t) { rel -= weights.roomRepeatPenalty / weights.lambda }
                 return weights.lambda * rel - (1 - weights.lambda) * maxSim
             }
             guard let best = tierPool.max(by: { mmr($0) < mmr($1) }) else { break }
@@ -370,8 +404,8 @@ nonisolated enum ReelSelector {
     /// Kandidatvillkor i prioritetsordning; sista nivån tar alla (reservlogiken).
     private static func tiers(for slot: Slot, template: Template, pickedRooms: Set<String>) -> [(ReelCandidate) -> Bool] {
         let unpicked: (ReelCandidate) -> Bool = { c in
-            guard let r = c.room?.lowercased(), !r.isEmpty else { return false }
-            return !pickedRooms.contains(r)
+            guard let t = roomType(c.room) else { return false }
+            return !pickedRooms.contains(t)
         }
         let any: (ReelCandidate) -> Bool = { _ in true }
         switch (slot, template) {
