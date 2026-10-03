@@ -181,7 +181,7 @@ struct ReelLibraryTests {
 
     // MARK: Serverstatus
 
-    private func detailJSON(status: String = "proposed", revision: Int = 2, renders: [[String: Any]] = [],
+    private nonisolated func detailJSON(status: String = "proposed", revision: Int = 2, renders: [[String: Any]] = [],
                             links: [[String: Any]] = []) -> [String: Any] {
         ["objectId": "obj-1", "reelId": "r", "address": "Lindvägen 12", "status": status, "currentRevision": revision,
          "approvedRevision": NSNull(), "links": links, "renders": renders]
@@ -190,9 +190,10 @@ struct ReelLibraryTests {
     private func service(host: String = "film-\(UUID().uuidString.prefix(8)).test", ttl: TimeInterval = 30,
                          handler: @escaping MockURLProtocol.Handler) -> ReelStatusService {
         MockURLProtocol.register(host: host, handler: handler)
-        let client = ReelServerClient(baseURL: URL(string: "http://\(host)")!, key: "pf_abc", session: MockURLProtocol.session(),
+        let baseURL = URL(string: "http://\(host)")!
+        let client = ReelServerClient(baseURL: baseURL, key: "pf_abc", session: MockURLProtocol.session(),
                                       maxRetries: 0, backoff: { _ in .zero })
-        return ReelStatusService(ttl: ttl) { id in ReelRemoteInfo(try await client.object(id), baseURL: client.baseURL) }
+        return ReelStatusService(ttl: ttl) { id in ReelRemoteInfo(try await client.object(id), baseURL: baseURL) }
     }
 
     @Test("Statusmärket följer serverns status")
@@ -206,7 +207,7 @@ struct ReelLibraryTests {
 
     @Test("Serversvaret blir status, renderingar med absolut URL och länkar utan token")
     func mapsServerReply() async throws {
-        let reply = detailJSON(
+        nonisolated(unsafe) let reply = detailJSON(
             status: "rendered", revision: 5,
             renders: [["renderId": "rd1", "revision": 5, "outputId": "vertical", "current": true, "width": 1080, "height": 1920,
                        "duration": 21.5, "bytes": 1000, "url": "/media/123/sig/render/rd1"],
@@ -352,7 +353,7 @@ struct ReelLibraryTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("reel_9x16.mp4")
         try Data().write(to: file)
-        let reply = detailJSON(status: "rendered", renders: [
+        nonisolated(unsafe) let reply = detailJSON(status: "rendered", renders: [
             ["renderId": "rd1", "revision": 2, "outputId": "vertical", "current": true, "url": "/media/1/s/render/rd1"]])
         let host = "film-\(UUID().uuidString.prefix(8)).test"
         let counter = ReelServerClientTests.Counter()
