@@ -148,4 +148,29 @@ struct PipelineRunnerEnhanceTests {
         #expect(a == runner.enhanceFingerprint(job: jobs[0], profile: .automatic))
         #expect(a != runner.enhanceFingerprint(job: jobs[0], profile: .neutral))
     }
+
+    @Test("Fingerprintet ändras inte när metadatasteget skriver till källfilen (bara när NEF:erna eller inställningarna ändras)")
+    func fingerprint_stableAcrossMetadataWrites() throws {
+        let dir = tempOutputDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let nef = dir.appendingPathComponent("DSC_0001.NEF")
+        let hdr = dir.appendingPathComponent("hdr_group_1.tiff")
+        write("råfil", to: nef)
+        write("hdr-pixlar", to: hdr)
+        let runner = PipelineRunner(state: PipelineState())
+        let job = PipelineRunner.EnhanceJob(key: "hdr_group_1", kind: .hdr, source: hdr, label: "HDR grupp 1", identity: [nef])
+        let before = runner.enhanceFingerprint(job: job, profile: .automatic)
+
+        // Metadatasteget skriver EXIF/GPS i HDR-filen: ny storlek och ny ändringstid.
+        write("hdr-pixlar + exif + gps, längre fil", to: hdr)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(3600)], ofItemAtPath: hdr.path)
+        #expect(runner.enhanceFingerprint(job: job, profile: .automatic) == before)
+
+        // Ändrad indata (en annan exponering i sammanslagningen) ger nytt fingerprint.
+        let other = dir.appendingPathComponent("DSC_0002.NEF")
+        write("annan råfil", to: other)
+        var changed = job
+        changed.identity = [nef, other]
+        #expect(runner.enhanceFingerprint(job: changed, profile: .automatic) != before)
+    }
 }

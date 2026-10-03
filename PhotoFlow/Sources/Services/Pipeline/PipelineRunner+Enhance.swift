@@ -21,6 +21,11 @@ extension PipelineRunner {
         var label: String
         /// Bilden är taggad som exteriör: bara då rätas horisonten (se `EnhancementEngine`).
         var isExterior: Bool = false
+        /// Filer som identifierar källans innehåll i fingerprintet: original-NEF:erna,
+        /// som aldrig skrivs till. Källan själv (HDR-TIFF, DNG, förhandsbild) duger inte —
+        /// metadatasteget skriver EXIF/GPS i den efteråt, så storlek och ändringstid byts
+        /// och varje omkörning såg alla bilder som ändrade.
+        var identity: [URL] = []
     }
 
     /// Exteriör enligt AI-taggarna (Vision): taggen "Exteriör" och ingen "Interiör".
@@ -41,17 +46,20 @@ extension PipelineRunner {
             if group.isBracket {
                 if !photos.isEmpty, photos.allSatisfy(\.rejected) { rejected += 1; continue }
                 guard let tiff = hdrFiles[group.id]?.tiff, fm.fileExists(atPath: tiff.path) else { noSource += 1; continue }
+                // Exponeringarna som ingick: de godkända om urvalet ändrats i granskningen
+                // (en ny sammanslagning görs då med dem), annars alla i gruppen.
+                let merged = photos.contains(where: \.accepted) ? photos.filter(\.accepted) : photos
                 jobs.append(EnhanceJob(key: "hdr_group_\(group.id)", kind: .hdr, source: tiff, label: "HDR grupp \(group.id)",
-                                      isExterior: Self.isExterior(photos)))
+                                      isExterior: Self.isExterior(photos), identity: merged.map(\.nefURL)))
             } else {
                 for photo in photos {
                     if photo.rejected { rejected += 1; continue }
                     if let dng = photo.dngURL, fm.fileExists(atPath: dng.path) {
                         jobs.append(EnhanceJob(key: photo.displayName, kind: .dng, source: dng, label: photo.displayName,
-                                          isExterior: Self.isExterior([photo])))
+                                          isExterior: Self.isExterior([photo]), identity: [photo.nefURL]))
                     } else if let preview = photo.previewURL, fm.fileExists(atPath: preview.path) {
                         jobs.append(EnhanceJob(key: photo.displayName, kind: .preview, source: preview, label: photo.displayName,
-                                          isExterior: Self.isExterior([photo])))
+                                          isExterior: Self.isExterior([photo]), identity: [photo.nefURL]))
                     } else {
                         noSource += 1
                     }
@@ -61,20 +69,18 @@ extension PipelineRunner {
         return (jobs, rejected, noSource)
     }
 
-    /// Per-bild-fingerprint: källfilens namn, storlek och ändringstid + profilens
-    /// innehåll + motorns version (+ det som ändrar renderingen av källan).
+    /// Per-bild-fingerprint: original-NEF:ernas namn och storlek (de skrivs aldrig
+    /// till — se `EnhanceJob.identity`) + profilens innehåll + motorns version + det
+    /// som ändrar källan (HDR-motorns version och inställningar, DNG-renderingens storlek).
     func enhanceFingerprint(job: EnhanceJob, profile: EnhancementProfile) -> String {
-        let mtime = (try? FileManager.default.attributesOfItem(atPath: job.source.path)[.modificationDate] as? Date)?
-            .timeIntervalSince1970 ?? 0
         let settings = AppSettings.shared
-        return SessionManifestStore.fingerprint(fileURLs: [job.source], settings: [
+        return SessionManifestStore.fingerprint(fileURLs: job.identity.isEmpty ? [job.source] : job.identity, settings: [
             "profile": profile.canonicalJSON,
             "engine": "\(EnhancementEngine.version)",
-            "mtime": "\(Int(mtime))",
             "kind": job.kind.rawValue,
             "straighten": "\(job.isExterior)",
-            "maxDimension": job.kind == .dng ? "\(settings.hdrMaxDimension)" : "-",
-            "hdrSharpen": job.kind == .hdr ? "\(settings.hdrSharpenEnabled)" : "-"
+            "maxDimension": "\(settings.hdrMaxDimension)",
+            "hdr": job.kind == .hdr ? "v\(HDREngine.version) align=\(settings.hdrAlignEnabled) sharpen=\(settings.hdrSharpenEnabled)" : "-"
         ])
     }
 
@@ -92,25 +98,42 @@ extension PipelineRunner {
         state.currentStep = .enhancingPhotos
 
         var log = EnhancementLog.load(from: outputDir) ?? EnhancementLog(engineVersion: EnhancementEngine.version, profileID: profile.id)
+        let previousEngineVersion = log.engineVersion
         log.engineVersion = EnhancementEngine.version
         log.profileID = profile.id
 
         let existing = AddressFolderLayout.locateEnhancedFiles(in: outputDir)
         var fingerprints: [String: String] = [:]
         var pending: [EnhanceJob] = []
+        var migrated = 0
         for job in jobs {
             let fingerprint = enhanceFingerprint(job: job, profile: profile)
             fingerprints[job.key] = fingerprint
             let files = existing[job.key] ?? []
             let hasTiff = files.contains { ["tiff", "tif"].contains($0.pathExtension.lowercased()) }
             let hasJpeg = files.contains { $0.pathExtension.lowercased() == "jpg" }
-            if hasTiff, hasJpeg, log.entries[job.key]?.fingerprint == fingerprint { continue }
+            if hasTiff, hasJpeg, let entry = log.entries[job.key] {
+                if entry.fingerprint == fingerprint { continue }
+                // Engångsövergång från det gamla fingerprintet (källans storlek/tid, som
+                // metadatasteget ändrar): samma motor, samma profil och samma källfil →
+                // resultatet är detsamma; uppdatera fingerprintet i stället för att göra om.
+                if previousEngineVersion == EnhancementEngine.version, entry.profile == profile,
+                   entry.source == job.source.path {
+                    log.entries[job.key]?.fingerprint = fingerprint
+                    migrated += 1
+                    continue
+                }
+            }
             pending.append(job)
+        }
+        if migrated > 0 {
+            log.save(to: outputDir)
+            state.appendStepLog(.enhancePhotos, "\(migrated) redan förbättrade bilder godkända med nytt fingerprint (ingen omräkning)", type: .info)
         }
         let alreadyDone = jobs.count - pending.count
 
         state.setPendingFingerprint(
-            SessionManifestStore.fingerprint(fileURLs: jobs.map(\.source), settings: [
+            SessionManifestStore.fingerprint(fileURLs: jobs.flatMap { $0.identity.isEmpty ? [$0.source] : $0.identity }, settings: [
                 "profile": profile.canonicalJSON, "engine": "\(EnhancementEngine.version)"
             ]),
             for: .enhancePhotos

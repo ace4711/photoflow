@@ -16,6 +16,12 @@ import CoreGraphics
 /// MainActor" behavior the pipeline needs for a multi-second RAW decode +
 /// pyramid fusion, without a manual `Task.detached`.
 nonisolated enum HDREngine {
+    /// Räknas upp när sammanslagningens resultat ändras för samma indata, så att
+    /// det som bygger på HDR-filen (t.ex. "Förbättra bilder") vet att göra om.
+    /// 2 = rimlig justering (3000 px, avvisade orimliga förskjutningar), skärpning
+    /// och rätta kanter i pyramiden.
+    static let version = 2
+
     struct Options: Sendable {
         var maxDimension: Int = 6000
         var alignEnabled: Bool = true
