@@ -60,6 +60,8 @@
       loop:
         - "{{ objektfilm_dir }}"
         - "{{ objektfilm_dir }}/src"
+        # rsync skapar bara sista nivån — web/reel kräver att src/web finns.
+        - "{{ objektfilm_dir }}/src/web"
 
     - name: Skapa datakatalogen (ägare 10470:10470, uid i containern)
       become: true
