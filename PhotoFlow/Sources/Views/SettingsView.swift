@@ -268,6 +268,20 @@ struct PipelineTab: View {
                 EnhanceSettingsRows(settings: settings)
             }
 
+            Section("Filmförslag") {
+                Toggle("Skapa filmförslag automatiskt (Objektfilm per adress)", isOn: $settings.reelProposalEnabled)
+
+                if settings.reelProposalEnabled {
+                    Text("Sist i körningen skapas en film (9:16, 5 bilder) per adress i mappen \"<adress> FILM\", av bilderna i FÄRDIGA, annars FÖRBÄTTRADE, annars TITTBILDER (minst 3 bilder). Rum och kvalitet hämtas ur AI-taggningen. En film som du redigerat eller skickat till mäklaren rörs aldrig. Kräver kalendermatchning (adresserna).")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("Inga filmförslag skapas automatiskt. Du kan fortfarande göra filmer från Bildspel.")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
+
             Section("AI-taggning") {
                 Toggle("Tagga bilder med Apple Vision", isOn: $settings.aiTaggingEnabled)
 

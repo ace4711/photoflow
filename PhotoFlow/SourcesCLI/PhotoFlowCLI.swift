@@ -72,6 +72,8 @@ struct PhotoFlowCLI {
           --no-ai           Stäng av AI-taggning/Vision-analys (på som standard).
           --no-enhance      Stäng av "Förbättra bilder" (automatisk färg-/tonkorrigering
                              efter HDR; på som standard).
+          --no-reel         Stäng av "Filmförslag" (automatisk Objektfilm per adress
+                             sist i körningen; på som standard, kräver kalendermatchning).
           --json            Skriv en maskinläsbar JSON-sammanfattning på
                              slutet (mellan PHOTOFLOW_CLI_JSON_SUMMARY_BEGIN/
                              _END-markörraderna på stdout).
@@ -134,6 +136,7 @@ struct PhotoFlowCLI {
         var noCalendar = false
         var noAI = false
         var noEnhance = false
+        var noReel = false
         var jsonOutput = false
 
         var idx = 0
@@ -156,6 +159,8 @@ struct PhotoFlowCLI {
                 noAI = true
             case "--no-enhance":
                 noEnhance = true
+            case "--no-reel":
+                noReel = true
             case "--json":
                 jsonOutput = true
             case "--help", "-h":
@@ -192,6 +197,7 @@ struct PhotoFlowCLI {
         settings.calendarMatchEnabled = !noCalendar
         settings.aiTaggingEnabled = !noAI
         settings.enhanceEnabled = !noEnhance
+        settings.reelProposalEnabled = !noReel
         // Ljud/tal/systemnotiser stängs alltid av headless: dels är de
         // meningslösa utan en interaktiv session, dels kraschar
         // `NotificationService` numera bara inte längre (se dess
@@ -204,7 +210,7 @@ struct PhotoFlowCLI {
         print("PhotoFlow CLI — startar pipeline")
         print("  input:  \(inputURL.path)")
         print("  output: \(outputURL.path)")
-        print("  HDR: \(settings.hdrMergeEnabled ? "på" : "av"), kalender: \(settings.calendarMatchEnabled ? "på" : "av"), AI-taggning: \(settings.aiTaggingEnabled ? "på" : "av"), förbättra bilder: \(settings.enhanceEnabled ? "på (profil \(settings.enhanceProfileID))" : "av")")
+        print("  HDR: \(settings.hdrMergeEnabled ? "på" : "av"), kalender: \(settings.calendarMatchEnabled ? "på" : "av"), AI-taggning: \(settings.aiTaggingEnabled ? "på" : "av"), förbättra bilder: \(settings.enhanceEnabled ? "på (profil \(settings.enhanceProfileID))" : "av"), filmförslag: \(settings.reelProposalEnabled ? "på" : "av")")
 
         let state = PipelineState()
         let runner = PipelineRunner(state: state)
@@ -275,6 +281,7 @@ struct PhotoFlowCLI {
             previewFiles: countFiles(in: outputURL.appendingPathComponent("previews"), ext: "jpg"),
             hdrTiffFiles: countFilesRecursive(in: outputURL, namePrefix: "hdr_group_", ext: "tiff"),
             enhancedFiles: AddressFolderLayout.locateEnhancedFiles(in: outputURL).count,
+            reelFilms: await ReelLibrary.countFilms(in: outputURL),
             symlinks: countSymlinksRecursive(in: outputURL),
             xmpSidecars: countFilesRecursive(in: outputURL, ext: "xmp")
         )
@@ -289,7 +296,7 @@ struct PhotoFlowCLI {
             let dur = s.durationSeconds.map { String(format: "%.1fs", $0) } ?? "-"
             print("  - \(s.step): \(s.phase) (\(s.processed)/\(s.total), \(dur))")
         }
-        print("  Skapade filer: \(filesCreated.dngFiles) DNG, \(filesCreated.previewFiles) previews, \(filesCreated.hdrTiffFiles) HDR-TIFF, \(filesCreated.enhancedFiles) förbättrade, \(filesCreated.symlinks) symlänkar, \(filesCreated.xmpSidecars) XMP-sidecars")
+        print("  Skapade filer: \(filesCreated.dngFiles) DNG, \(filesCreated.previewFiles) previews, \(filesCreated.hdrTiffFiles) HDR-TIFF, \(filesCreated.enhancedFiles) förbättrade, \(filesCreated.reelFilms) filmer, \(filesCreated.symlinks) symlänkar, \(filesCreated.xmpSidecars) XMP-sidecars")
 
         if jsonOutput {
             let summary = RunSummary(
@@ -300,6 +307,7 @@ struct PhotoFlowCLI {
                 calendarEnabled: settings.calendarMatchEnabled,
                 aiTaggingEnabled: settings.aiTaggingEnabled,
                 enhanceEnabled: settings.enhanceEnabled,
+                reelProposalEnabled: settings.reelProposalEnabled,
                 success: success,
                 errorMessage: state.errorMessage,
                 steps: stepSummaries,
@@ -610,6 +618,7 @@ private struct FilesCreated: Codable {
     let previewFiles: Int
     let hdrTiffFiles: Int
     let enhancedFiles: Int
+    let reelFilms: Int
     let symlinks: Int
     let xmpSidecars: Int
 }
@@ -622,6 +631,7 @@ private struct RunSummary: Codable {
     let calendarEnabled: Bool
     let aiTaggingEnabled: Bool
     let enhanceEnabled: Bool
+    let reelProposalEnabled: Bool
     let success: Bool
     let errorMessage: String?
     let steps: [StepSummary]

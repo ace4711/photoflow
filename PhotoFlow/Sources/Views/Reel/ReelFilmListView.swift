@@ -62,7 +62,7 @@ struct ReelFilmListView: View {
         ContentUnavailableView {
             Label("Inga filmer än", systemImage: "film")
         } description: {
-            Text("Så här gör du en film: kör FÄRDIGA eller FÖRBÄTTRADE bilder genom stegen, öppna Bildspel för adressen och tryck Rendera. Den färdiga MP4:n hamnar i mappen \"<adress> FILM\" och visas här.")
+            Text("Pipelinen skapar ett filmförslag per adress (steget Filmförslag). Du kan också göra en film själv: öppna Bildspel för adressen och tryck Rendera. Den färdiga MP4:n hamnar i mappen \"<adress> FILM\" och visas här.")
         } actions: {
             Button("Nytt bildspel…") { openWindow(id: ReelWindow.id, value: newReelRequest) }
                 .buttonStyle(.borderedProminent)
