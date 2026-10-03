@@ -1,0 +1,14 @@
+# Byggkontexten för server/Dockerfile är repots rot. Bara web/reel och server behövs.
+.git
+.gitignore
+.claude
+PhotoFlow
+docs
+**/node_modules
+**/dist
+**/.DS_Store
+server/data
+server/.env
+server/test
+web/reel/test
+*.md

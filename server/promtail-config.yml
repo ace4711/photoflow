@@ -1,0 +1,24 @@
+# Skickar containerloggar (JSON utan personuppgifter) till Loki med {app="objektfilm", host="server3"}.
+# Aktiveras med: docker compose --profile promtail up -d
+server:
+  disable: true
+positions:
+  filename: /tmp/positions.yaml
+clients:
+  - url: ${LOKI_URL}
+scrape_configs:
+  - job_name: objektfilm
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 15s
+        filters:
+          - name: label
+            values: ["app=objektfilm"]
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: container
+      - target_label: app
+        replacement: objektfilm
+      - target_label: host
+        replacement: server3

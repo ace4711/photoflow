@@ -1,0 +1,51 @@
+# Objektfilm-servern (produktionsform, server3). Byggkontext är repots rot.
+#   cp .env.example .env   (fyll i OBJEKTFILM_SIGNING_KEY, rendera från sops vid deploy, 0600)
+#   mkdir -p data && chown 10470:10470 data
+#   docker compose up -d --build
+# Dev på Macen: lägg till compose.dev.yaml (se den filen).
+name: objektfilm
+
+services:
+  app:
+    build: { context: .., dockerfile: server/Dockerfile }
+    image: objektfilm-app:local
+    container_name: objektfilm-app
+    restart: unless-stopped
+    user: "10470:10470"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: ${OBJEKTFILM_MEM_LIMIT:-512m}
+    cpus: 1.0
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      # Parametriserad bindning: 10.0.0.37 på server3, 127.0.0.1 i dev.
+      - "${OBJEKTFILM_BIND:-10.0.0.37}:${OBJEKTFILM_HTTP_PORT:-8470}:8080"
+      - "${OBJEKTFILM_BIND:-10.0.0.37}:${OBJEKTFILM_METRICS_HOST_PORT:-9471}:9471"   # mätvärden, proxas inte
+    volumes:
+      - ./data:/data        # katalog, inte enskilda filer
+    healthcheck:
+      test: ["CMD", "node", "src/healthcheck.ts"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      app: objektfilm
+
+  promtail:
+    profiles: [promtail]    # av som default (som AssetCores PROMTAIL_PROFILE)
+    image: grafana/promtail:3.4.2
+    container_name: objektfilm-promtail
+    restart: unless-stopped
+    user: "0:0"
+    command: ["-config.file=/etc/promtail/config.yml", "-config.expand-env=true"]
+    environment:
+      LOKI_URL: ${OBJEKTFILM_LOKI_URL:-http://10.0.0.5:3100/loki/api/v1/push}
+    volumes:
+      - ./promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro

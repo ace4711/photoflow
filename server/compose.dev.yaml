@@ -1,0 +1,17 @@
+# Lokal utveckling på Macen:
+#   docker compose -f server/compose.yaml -f server/compose.dev.yaml up --build
+# Servern når du på http://127.0.0.1:8470, mätvärden på http://127.0.0.1:9471/metrics.
+# Ingen promtail och ingen hemlig .env behövs (tillfällig signeringsnyckel i dev-läge).
+services:
+  app:
+    container_name: objektfilm-app-dev
+    ports: !override
+      - "127.0.0.1:8470:8080"
+      - "127.0.0.1:9471:9471"
+    volumes: !override
+      - ./data-dev:/data
+    environment:
+      OBJEKTFILM_ENV: dev
+      OBJEKTFILM_PUBLIC_URL: http://127.0.0.1:8470
+      OBJEKTFILM_EXTRA_ORIGINS: http://localhost:8470
+      OBJEKTFILM_MIN_FREE_BYTES: "0"

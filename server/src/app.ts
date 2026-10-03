@@ -210,6 +210,7 @@ export function createApp(cfg: Config, existingDb?: Db): App {
     route("GET", "/a", "none", (c) => sendPage(c, "archive.html")),
     route("GET", "/robots.txt", "none", (c) => sendText(c.res, 200, "User-agent: *\nDisallow: /\n")),
     route("GET", "/healthz", "none", health),
+    route("GET", "/favicon.ico", "none", (c) => { c.res.writeHead(204, { "Cache-Control": "public, max-age=86400" }); c.res.end(); }),
     route("GET", "/media/.+", "none", media),
     route("GET", "/:name", "none", sendStatic),
 
