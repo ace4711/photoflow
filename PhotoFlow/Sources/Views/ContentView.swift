@@ -208,8 +208,12 @@ class RunnerWrapper: ObservableObject {
     func reMergeHDR(group: BracketGroup) {
         guard let runner else { return }
         Task {
+            state?.reMergeErrors[group.id] = nil
             let rewritten = await runner.reMergeHDR(group: group)
-            guard !rewritten.isEmpty else { return }
+            guard !rewritten.isEmpty else {
+                state?.reMergeErrors[group.id] = "Omgörningen misslyckades – se loggen"
+                return
+            }
             // Samma filnamn som förut: töm cachen och byt vyernas identitet, annars
             // visas den gamla sammanslagningen kvar.
             rewritten.forEach { ImageCache.shared.evict($0) }

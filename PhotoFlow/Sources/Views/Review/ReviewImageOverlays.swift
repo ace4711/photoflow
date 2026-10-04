@@ -227,6 +227,10 @@ struct ReviewFilterBar: View {
                 Button("Alla") { filter = .all }
                 Button("Ej granskade") { filter = .unreviewed }
                 Button("Flaggade/avvisade") { filter = .flagged }
+                Divider()
+                ForEach(1...5, id: \.self) { n in
+                    Button("★ \(n)+") { filter = .minRating(n) }
+                }
                 if !addresses.isEmpty {
                     Divider()
                     ForEach(addresses, id: \.self) { a in

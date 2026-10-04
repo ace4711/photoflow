@@ -15,6 +15,8 @@ struct BracketReviewView: View {
     @State private var filter: ReviewFilter = .all
     @State private var viewOptions = ReviewViewOptions()
     @State private var undoStack = ReviewUndoStack()
+    @State private var ratings = ReviewRatings()
+    @State private var compareMode: ReviewCompareMode = .off
     @FocusState private var isFocused: Bool
 
     private let audio = AudioService.shared
@@ -59,7 +61,8 @@ struct BracketReviewView: View {
                 allReviewed: photos.allSatisfy { $0.accepted || $0.rejected },
                 hasRejected: photos.contains { $0.rejected },
                 hasUserOverride: photos.contains { $0.accepted && !$0.algorithmSuggested },
-                addressFolder: addresses[g.id])
+                addressFolder: addresses[g.id],
+                rating: ratings.rating(for: g.id))
         }
     }
 
@@ -115,6 +118,7 @@ struct BracketReviewView: View {
                 outputDir: pipeline.outputDirectory,
                 address: pipeline.matchedAddress
             )
+            if let dir = pipeline.outputDirectory { ratings = ReviewRatings.load(from: dir) }
             prefetchCurrentGroup()
         }
         .onDisappear {
@@ -148,6 +152,18 @@ struct BracketReviewView: View {
             viewOptions.showClipping.toggle()
             return .handled
         }
+        .onKeyPress(characters: CharacterSet(charactersIn: "012345")) { press in
+            guard !press.modifiers.contains(.command), let n = Int(press.characters) else { return .ignored }
+            rateCurrentGroup(n)
+            return .handled
+        }
+        .onKeyPress(characters: CharacterSet(charactersIn: "x")) { press in
+            guard !press.modifiers.contains(.command) else { return .ignored }
+            compareMode = compareMode.next(hasFinal: currentGroup?.finalPreviewURL != nil,
+                                           hasEnhanced: currentGroup?.enhancedPreviewURL != nil && currentGroup?.mergedHDRPreviewURL != nil)
+            return .handled
+        }
+        .onChange(of: selectedGroupIndex) { _, _ in compareMode = .off }
         .onKeyPress(.tab) { goToUnreviewedGroup(direction: 1); return .handled }
         .onKeyPress(characters: CharacterSet(charactersIn: "u")) { _ in goToUnreviewedGroup(direction: 1); return .handled }
         .onKeyPress(characters: CharacterSet(charactersIn: "j")) { _ in navigateGroup(1); return .handled }
@@ -201,7 +217,7 @@ struct BracketReviewView: View {
                 Text(ReviewNavigation.progressText(reviewed: reviewedCount, total: pipeline.bracketGroups.count))
                     .font(.caption.bold())
                     .foregroundColor(reviewedCount == pipeline.bracketGroups.count ? .green : .secondary)
-                Text("Pilar/J/K: navigera | Mellanslag: välj | Retur/Delete: acceptera/avvisa | ⌘Z: ångra | H: HDR | Tab/U: nästa ogranskade | Z: 100 % | Shift: lupp | C: histogram/klippning")
+                Text("Pilar/J/K: navigera | Mellanslag: välj | Retur/Delete: acceptera/avvisa | ⌘Z: ångra | H: HDR | Tab/U: nästa ogranskade | Z: 100 % | Shift: lupp | C: histogram/klippning | X: jämför | 1–5: betyg (0: ta bort)")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
@@ -309,6 +325,28 @@ struct BracketReviewView: View {
                     }
                     Spacer()
                     VStack(spacing: 2) {
+                        if ratings.rating(for: group.id) > 0 {
+                            Text(ReviewRatings.stars(ratings.rating(for: group.id)))
+                                .font(.system(size: 9))
+                                .foregroundColor(.yellow)
+                                .help("Betyg \(ratings.rating(for: group.id)) av 5")
+                        }
+                        switch ReMergeStatus.resolve(isRunning: pipeline.reMergingGroups.contains(group.id),
+                                                     error: pipeline.reMergeErrors[group.id]) {
+                        case .running:
+                            HStack(spacing: 4) {
+                                ProgressView().controlSize(.mini)
+                                Text("Gör om…").font(.caption2.bold())
+                            }
+                            .foregroundColor(.orange)
+                        case .failed(let message):
+                            Label("Misslyckades", systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption2.bold())
+                                .foregroundColor(.red)
+                                .help(message)
+                        case .idle:
+                            EmptyView()
+                        }
                         if group.finalPreviewURL != nil {
                             Label("HDR", systemImage: "photo.stack")
                                 .font(.system(.caption2, weight: .bold))
@@ -342,7 +380,9 @@ struct BracketReviewView: View {
         ZStack {
             Color(nsColor: .windowBackgroundColor)
 
-            if showHDRPreview, let hdrURL = currentGroup?.finalPreviewURL {
+            if compareMode != .off, let group = currentGroup, let finalURL = group.finalPreviewURL {
+                comparePreview(group: group, finalURL: finalURL)
+            } else if showHDRPreview, let hdrURL = currentGroup?.finalPreviewURL {
                 // Show merged HDR preview
                 VStack(spacing: 12) {
                     LocalImageView(url: hdrURL)
@@ -446,6 +486,43 @@ struct BracketReviewView: View {
                     .foregroundColor(.secondary)
             }
         }
+    }
+
+    /// Sida vid sida: vänster = vald källexponering (eller HDR före förbättring), höger = slutbilden.
+    private func comparePreview(group: BracketGroup, finalURL: URL) -> some View {
+        let leftURL: URL? = compareMode == .merged ? group.mergedHDRPreviewURL : currentPhoto?.previewURL
+        let rightLabel = group.enhancedPreviewURL != nil ? "HDR · förbättrad" : "HDR-sammanslagning"
+        let leftLabel = compareMode == .source && currentPhoto != nil
+            ? "Exponering \(selectedPhotoIndex + 1) av \(currentGroupPhotos.count) (\(currentPhoto?.exposureDisplay ?? ""))"
+            : compareMode.leftLabel
+        return VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                compareSide(url: leftURL, label: leftLabel, tint: .blue, id: "cmp-l-\(compareMode)-\(leftURL?.path ?? "")")
+                compareSide(url: finalURL, label: rightLabel, tint: .orange, id: hdrIdentity)
+            }
+            HStack(spacing: 16) {
+                Text("Jämförelse – pilar höger/vänster byter exponering, X byter läge/stänger")
+                Button("Stäng jämförelse (X)") { compareMode = .off }
+                    .buttonStyle(.bordered)
+            }
+            .font(.caption)
+            .foregroundColor(.secondary)
+        }
+        .padding()
+    }
+
+    private func compareSide(url: URL?, label: String, tint: Color, id: String) -> some View {
+        LocalImageView(url: url)
+            .id(id)
+            .overlay(alignment: .topLeading) {
+                Text(label)
+                    .font(.caption.bold())
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(Capsule().fill(tint.opacity(0.85)))
+                    .padding(8)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
@@ -592,6 +669,11 @@ struct BracketReviewView: View {
 
     private func navigatePhoto(_ direction: Int) {
         guard currentGroup != nil else { return }
+        if compareMode == .source {
+            let newIndex = selectedPhotoIndex + direction
+            if newIndex >= 0 && newIndex < currentGroupPhotos.count { selectedPhotoIndex = newIndex }
+            return
+        }
         // Pil åt höger från HDR-bilden går till första exponeringen, åt vänster stannar kvar.
         if showHDRPreview {
             if direction > 0 { showSources = true; selectedPhotoIndex = 0 }
@@ -665,6 +747,14 @@ struct BracketReviewView: View {
         pipeline.saveCullDecisions()
         navigatePhoto(1)
         scheduleReMerge()
+    }
+
+    // MARK: - Betyg
+
+    private func rateCurrentGroup(_ n: Int) {
+        guard let group = currentGroup else { return }
+        if n == 0 { ratings.clear(group: group.id) } else { ratings.set(n, for: group.id) }
+        if let dir = pipeline.outputDirectory { ratings.save(to: dir) }
     }
 
     // MARK: - Ångra

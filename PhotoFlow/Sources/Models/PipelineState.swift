@@ -85,6 +85,8 @@ class PipelineState: ObservableObject {
     /// Räknas upp när en grupps HDR gjorts om, så att vyerna laddar om bilden
     /// trots att filnamnet är detsamma.
     @Published var hdrRevision: [Int: Int] = [:]
+    /// Felmeddelande per grupp när senaste omgörningen av HDR misslyckades (visas i grupplistan).
+    @Published var reMergeErrors: [Int: String] = [:]
     @Published var allPhotos: [PhotoItem] = [] {
         // Fas 10 (prestanda vid stora sessioner, se FORBATTRINGAR.md): tidigare
         // byggdes `photoIndexByID` om (O(n)) på VARJE mutation av `allPhotos`,

@@ -9,6 +9,8 @@ nonisolated struct ReviewGroupSummary: Equatable {
     var hasUserOverride: Bool
     /// Adressmappen gruppen hamnat i (nil = ingen kalendermatchning).
     var addressFolder: String?
+    /// Stjärnbetyg 0–5 (0 = obetygsatt).
+    var rating: Int = 0
 }
 
 /// Filter för grupplistan i granska-läget.
@@ -17,6 +19,8 @@ nonisolated enum ReviewFilter: Hashable {
     case unreviewed
     case flagged
     case address(String)
+    /// Betyg minst N stjärnor.
+    case minRating(Int)
 
     var title: String {
         switch self {
@@ -24,6 +28,7 @@ nonisolated enum ReviewFilter: Hashable {
         case .unreviewed: return "Ej granskade"
         case .flagged: return "Flaggade/avvisade"
         case .address(let name): return name
+        case .minRating(let n): return "★ \(n)+"
         }
     }
 
@@ -33,6 +38,7 @@ nonisolated enum ReviewFilter: Hashable {
         case .unreviewed: return !s.allReviewed
         case .flagged: return s.hasRejected || s.hasUserOverride
         case .address(let name): return s.addressFolder == name
+        case .minRating(let n): return s.rating >= n
         }
     }
 
