@@ -35,8 +35,8 @@ nonisolated enum StepTiming {
         var diskWriteBytes: Int64? = nil
         /// Toppminne (phys_footprint, samplat ~1 Hz), MB.
         var peakMemoryMB: Double? = nil
-        /// "sequential" (stegen i följd, som i dag). Senare "overlapped" — då ska
-        /// `expectedDuration` inte blanda ihop lägena. `nil` = äldre post (alltid i följd).
+        /// `sequentialMode` (stegen i följd, ett jobb i taget) eller `parallelMode` (fas 1c).
+        /// `expectedDuration` blandar inte lägena. `nil` = äldre post (alltid i följd).
         var mode: String? = nil
 
         var secondsPerPhoto: Double? { photos > 0 && seconds > 0 ? seconds / Double(photos) : nil }
@@ -133,9 +133,28 @@ nonisolated enum StepTiming {
     /// Hur många av de senaste körningarna medianen räknas på.
     static let historyWindow = 5
 
+    /// `Record.mode`: stegen i följd, ett jobb i taget (som före fas 1c, och `maxParallelism == 1`).
+    static let sequentialMode = "sequential"
+    /// `Record.mode`: fas 1c — AI samtidigt med HDR, flera HDR-grupper/förbättringar samtidigt.
+    static let parallelMode = "parallel"
+
+    /// Läget för en körning med inställningen `maxParallelism` (0 = automatiskt).
+    static func mode(maxParallelism: Int) -> String {
+        maxParallelism == 1 ? sequentialMode : parallelMode
+    }
+
     /// Sekunder per bild för ett steg: median av de senaste körningarna.
-    static func secondsPerPhoto(step: String, history: [Record]) -> Double? {
-        let rates = history.filter { $0.step == step }.suffix(historyWindow).compactMap(\.secondsPerPhoto)
+    ///
+    /// Med `mode` räknas bara körningar i samma läge ("sequential"/"parallel", fas 1c; äldre poster
+    /// utan läge räknas som "sequential"), så att tider från seriella och parallella körningar inte
+    /// blandas. Finns ingen körning i läget används alla (bättre än ingen prognos).
+    static func secondsPerPhoto(step: String, history: [Record], mode: String? = nil) -> Double? {
+        var matching = history.filter { $0.step == step }
+        if let mode {
+            let sameMode = matching.filter { ($0.mode ?? Self.sequentialMode) == mode }
+            if !sameMode.isEmpty { matching = sameMode }
+        }
+        let rates = matching.suffix(historyWindow).compactMap(\.secondsPerPhoto)
         guard !rates.isEmpty else { return nil }
         let sorted = rates.sorted()
         let mid = sorted.count / 2
@@ -143,8 +162,8 @@ nonisolated enum StepTiming {
     }
 
     /// Hela stegets förväntade tid för `photos` bilder, om historik finns.
-    static func expectedDuration(step: String, photos: Int, history: [Record]) -> TimeInterval? {
-        guard photos > 0, let rate = secondsPerPhoto(step: step, history: history) else { return nil }
+    static func expectedDuration(step: String, photos: Int, history: [Record], mode: String? = nil) -> TimeInterval? {
+        guard photos > 0, let rate = secondsPerPhoto(step: step, history: history, mode: mode) else { return nil }
         return rate * Double(photos)
     }
 

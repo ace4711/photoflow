@@ -31,6 +31,7 @@
 #                       säkerhetskopiera användarens step_timings.jsonl/sessions.json före körningarna
 #                       och återställ dem efteråt (annars hamnar benchmarkets poster i appens historik).
 #   --prepare-only      Kopiera testmängden och avsluta.
+#   --max-parallel N    Skickas till CLI:t (fas 1c): 0 = automatiskt (standard), 1 = allt i följd.
 #   --calendar-matches FILE
 #                       Kör MED kalender: CLI:t får `--calendar-matches FILE` (en calendar_matches.json,
 #                       t.ex. från en riktig session) i stället för --no-calendar, och --no-reel.
@@ -71,6 +72,7 @@ CLI="${PHOTOFLOW_CLI_BIN:-}"
 PREPARE_ONLY=0
 PROTECT_HISTORY=0
 CALENDAR_MATCHES=""
+MAX_PARALLEL=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -83,7 +85,8 @@ while [ $# -gt 0 ]; do
         --protect-history) PROTECT_HISTORY=1; shift ;;
         --prepare-only) PREPARE_ONLY=1; shift ;;
         --calendar-matches) CALENDAR_MATCHES="$2"; shift 2 ;;
-        -h|--help) sed -n '2,51p' "$0"; exit 0 ;;
+        --max-parallel) MAX_PARALLEL="$2"; shift 2 ;;
+        -h|--help) sed -n '2,52p' "$0"; exit 0 ;;
         *) echo "Okänd flagga: $1" >&2; exit 2 ;;
     esac
 done
@@ -177,6 +180,11 @@ if [ -n "$CALENDAR_MATCHES" ]; then
     cp "$CALENDAR_MATCHES" "$RESULTS/calendar_matches.json"
     echo "kalender: $CALENDAR_MATCHES" >> "$RESULTS/environment.txt"
 fi
+PARALLEL_FLAGS=()
+if [ -n "$MAX_PARALLEL" ]; then
+    PARALLEL_FLAGS=(--max-parallel "$MAX_PARALLEL")
+    echo "max-parallel: $MAX_PARALLEL" >> "$RESULTS/environment.txt"
+fi
 
 if [ "$PROTECT_HISTORY" -eq 1 ]; then
     SUPPORT="$HOME/Library/Application Support/PhotoFlow"
@@ -201,7 +209,7 @@ for ((i = 1; i <= TOTAL; i++)); do
     mkdir -p "$RUN_RESULTS/support" "$OUT"
     echo "=== $NAME ($LABEL) -> $OUT"
     T0=$(date +%s)
-    PHOTOFLOW_SUPPORT_DIR="$RUN_RESULTS/support" "$CLI" run --input "$INPUT_COPY" --output "$OUT" "${CALENDAR_FLAGS[@]}" --json \
+    PHOTOFLOW_SUPPORT_DIR="$RUN_RESULTS/support" "$CLI" run --input "$INPUT_COPY" --output "$OUT" "${CALENDAR_FLAGS[@]}" ${PARALLEL_FLAGS[@]+"${PARALLEL_FLAGS[@]}"} --json \
         > "$RUN_RESULTS/cli.stdout" 2> "$RUN_RESULTS/cli.stderr"
     STATUS=$?
     T1=$(date +%s)

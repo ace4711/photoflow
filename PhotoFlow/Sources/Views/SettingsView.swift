@@ -413,6 +413,19 @@ struct PipelineTab: View {
                     .foregroundColor(.secondary)
             }
 
+            Section("Prestanda") {
+                Picker("Samtidiga jobb", selection: $settings.maxParallelism) {
+                    Text("Automatiskt").tag(0)
+                    Text("1 (i följd, felsökning)").tag(1)
+                    ForEach(2...6, id: \.self) { n in
+                        Text("Högst \(n)").tag(n)
+                    }
+                }
+                Text("Hur många HDR-grupper och förbättringar som körs samtidigt, och om AI-taggningen får köras medan HDR pågår. Automatiskt lämnar minst 2 kärnor och 25 % av minnet fria och sänker takten om datorn får ont om minne. Resultatet blir detsamma i alla lägen; 1 kör allt i följd som förr.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             Section("Progress") {
                 Toggle("Detaljerad progress", isOn: $settings.detailedProgress)
                 Text("Visar input-bilder och HDR-resultat live under bearbetning.")

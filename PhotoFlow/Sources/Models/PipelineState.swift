@@ -513,7 +513,7 @@ class PipelineState: ObservableObject {
             diskReadBytes: resources?.diskReadBytes,
             diskWriteBytes: resources?.diskWriteBytes,
             peakMemoryMB: resources?.peakMemoryMB,
-            mode: "sequential"
+            mode: StepTiming.mode(maxParallelism: settings.maxParallelism)
         )
         timingHistory.append(record)
         StepTiming.Store.shared.append(record)
@@ -541,6 +541,7 @@ class PipelineState: ObservableObject {
         guard isRunning || copying else { return nil }
         let settings = AppSettings.shared
         let photos = runPhotoCount
+        let mode = StepTiming.mode(maxParallelism: settings.maxParallelism)
 
         let active = Self.automaticSteps.filter { stepStatuses[$0]?.phase == .active }
         let current = active.max { (stepStatuses[$0]?.startedAt ?? .distantPast) < (stepStatuses[$1]?.startedAt ?? .distantPast) }
@@ -565,7 +566,7 @@ class PipelineState: ObservableObject {
                 pending = false
             }
             guard pending else { continue }
-            let expected = StepTiming.expectedDuration(step: step.manifestKey, photos: photos, history: timingHistory)
+            let expected = StepTiming.expectedDuration(step: step.manifestKey, photos: photos, history: timingHistory, mode: mode)
             let value: TimeInterval?
             if step == current {
                 let elapsed = status.startedAt.map { now.timeIntervalSince($0) } ?? 0
@@ -577,7 +578,13 @@ class PipelineState: ObservableObject {
             }
             if let value { perStep[step] = value } else { unknown.append(step) }
         }
-        return ETA(current: current, perStep: perStep, remaining: perStep.values.reduce(0, +), unknown: unknown)
+        var remaining = perStep.values.reduce(0, +)
+        // Fas 1c: AI-taggningen körs samtidigt med HDR (se `PipelineRunner.runAITaggingAndHDR`), så
+        // bara den längre av dem ligger på den kritiska vägen.
+        if mode == StepTiming.parallelMode, settings.hdrMergeEnabled, let ai = perStep[.aiTagging], let hdr = perStep[.createHDR] {
+            remaining -= min(ai, hdr)
+        }
+        return ETA(current: current, perStep: perStep, remaining: remaining, unknown: unknown)
     }
 
     // MARK: - Fas 6: sessionsmanifest (photoflow_session.json)

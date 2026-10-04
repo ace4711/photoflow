@@ -81,6 +81,9 @@ struct PhotoFlowCLI {
           --hdr-debug       Skriv felsökningsfiler per HDR-grupp i <output>/hdr_debug/
                              hdr_group_<id>/: mask.png, dark_matched.jpg, fusion.jpg (utan
                              window pull), pull.jpg, dark_raw.jpg och hdr_metrics.json.
+          --max-parallel <n>
+                            Högst n samtidiga HDR-grupper/förbättringar och AI samtidigt
+                            med HDR (fas 1c). 0 = automatiskt (standard), 1 = allt i följd.
           --calendar-matches <fil>
                             Kör MED kalender utan EventKit: filen (en calendar_matches.json)
                              kopieras till outputmappen och används som kalendermatchning.
@@ -154,6 +157,7 @@ struct PhotoFlowCLI {
         var windowPull: Bool?
         var windowStrength: Double?
         var hdrDebug = false
+        var maxParallel: Int?
 
         var idx = 0
         while idx < args.count {
@@ -195,6 +199,10 @@ struct PhotoFlowCLI {
                 windowStrength = value
             case "--hdr-debug":
                 hdrDebug = true
+            case "--max-parallel":
+                idx += 1
+                guard idx < args.count, let n = Int(args[idx]), n >= 0 else { fail("--max-parallel kräver ett heltal >= 0") }
+                maxParallel = n
             case "--help", "-h":
                 printUsage()
                 exit(0)
@@ -249,6 +257,9 @@ struct PhotoFlowCLI {
         settings.hdrWindowPullEnabled = windowPull ?? true
         settings.hdrWindowPullStrength = windowStrength ?? 85
         PipelineRunner.hdrDebugEnabled = hdrDebug
+        // Fas 1c: 0 = automatiskt (standard), 1 = allt i följd. Sätts alltid, så att ett värde från
+        // en tidigare körning (CLI:ns egen defaults-domän) inte hänger kvar.
+        settings.maxParallelism = maxParallel ?? 0
         // Ljud/tal/systemnotiser stängs alltid av headless: dels är de
         // meningslösa utan en interaktiv session, dels kraschar
         // `NotificationService` numera bara inte längre (se dess
@@ -262,7 +273,7 @@ struct PhotoFlowCLI {
         print("  input:  \(inputURL.path)")
         print("  output: \(outputURL.path)")
         print("  window pull: \(settings.hdrWindowPullEnabled ? "på (\(Int(settings.hdrWindowPullStrength)) %)" : "av")\(hdrDebug ? ", HDR-felsökning på" : "")")
-        print("  HDR: \(settings.hdrMergeEnabled ? "på" : "av"), kalender: \(settings.calendarMatchEnabled ? "på" : "av"), AI-taggning: \(settings.aiTaggingEnabled ? "på" : "av"), förbättra bilder: \(settings.enhanceEnabled ? "på (profil \(settings.enhanceProfileID))" : "av"), filmförslag: \(settings.reelProposalEnabled ? "på" : "av")")
+        print("  HDR: \(settings.hdrMergeEnabled ? "på" : "av"), kalender: \(settings.calendarMatchEnabled ? "på" : "av"), AI-taggning: \(settings.aiTaggingEnabled ? "på" : "av"), förbättra bilder: \(settings.enhanceEnabled ? "på (profil \(settings.enhanceProfileID))" : "av"), filmförslag: \(settings.reelProposalEnabled ? "på" : "av"), samtidiga jobb: \(settings.maxParallelism == 0 ? "automatiskt" : "\(settings.maxParallelism)")")
 
         let state = PipelineState()
         let runner = PipelineRunner(state: state)
