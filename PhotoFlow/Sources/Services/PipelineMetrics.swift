@@ -233,7 +233,7 @@ nonisolated struct ResourceSnapshot: Sendable {
 
 /// Disk-I/O från barnprocesser (exiftool, Adobe DNG Converter). `proc_pid_rusage` ger bara
 /// I/O för processen själv och `getrusage(RUSAGE_CHILDREN)` har inga användbara
-/// bytesräknare på macOS, så `runProcess` och `HDRWriter.copyEXIF` låter en
+/// bytesräknare på macOS, så `runProcess` och `HDRWriter.writeMetadata` låter en
 /// `Observer` läsa barnets räknare var 50:e ms medan det körs och lägger sista värdet
 /// till summan när det är klart. Korta processer (några ms) kan därför underskattas något.
 nonisolated final class ChildDiskTracker: @unchecked Sendable {

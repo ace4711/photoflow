@@ -185,16 +185,25 @@ extension PipelineRunner {
         var done = 0, failed = 0
         var finished = 0
 
+        // Fas 1b: adress, GPS och AI-taggar är kända, så metadatan skrivs i samma exiftool-anrop
+        // som EXIF-kopian i stället för att metadatasteget skriver om filen en gång till.
+        let metadataContext = await creationMetadataContext()
+
         func request(for job: EnhanceJob) -> EnhancementEngine.Request {
             let tiff = stagingDir.appendingPathComponent("\(job.key)\(AddressFolderLayout.enhancedFileSuffix).tiff")
             let jpeg = stagingDir.appendingPathComponent("\(job.key)\(AddressFolderLayout.enhancedFileSuffix).jpg")
             let source: EnhancementEngine.Source = job.kind == .dng
                 ? .raw(job.source, maxDimension: settings.hdrMaxDimension)
                 : .image(job.source)
+            // Sorteringen flyttar filerna till `<adress> FÖRBÄTTRADE/` (`moveUnsortedEnhanced`).
+            let folderName = enhancedFolderName(forKey: job.key)
             return EnhancementEngine.Request(
                 source: source, tiffURL: tiff, jpegURL: jpeg, profile: profile,
                 alreadySharpened: job.kind == .hdr && settings.hdrSharpenEnabled,
-                exifSource: job.source, exiftoolPath: exiftoolPath, allowStraighten: job.isExterior
+                exifSource: job.source, exiftoolPath: exiftoolPath,
+                tiffMetadata: Self.creationMetadata(for: tiff, folderName: folderName, context: metadataContext),
+                jpegMetadata: Self.creationMetadata(for: jpeg, folderName: folderName, context: metadataContext),
+                allowStraighten: job.isExterior
             )
         }
 
@@ -240,6 +249,8 @@ extension PipelineRunner {
                 switch result {
                 case .success(let outcome):
                     let req = request(for: job)
+                    recordCreationStamps([(req.tiffURL, req.tiffMetadata), (req.jpegURL, req.jpegMetadata)],
+                                         metadataWritten: outcome.metadataWritten, outputDir: outputDir)
                     log.entries[job.key] = EnhancementLog.Entry(
                         kind: job.kind.rawValue, source: job.source.lastPathComponent,
                         fingerprint: fingerprints[job.key] ?? "", profileID: profile.id, profile: profile,

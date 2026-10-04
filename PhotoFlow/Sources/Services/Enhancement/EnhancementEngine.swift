@@ -433,6 +433,10 @@ nonisolated enum EnhancementEngine {
         /// Fil att kopiera EXIF-grunddata från (datum, kamera, exponering).
         var exifSource: URL
         var exiftoolPath: String?
+        /// IPTC/XMP/GPS för TIFF- respektive JPEG-filen när den redan är känd (fas 1b) — skrivs i
+        /// samma exiftool-anrop som EXIF-kopian. `nil` = bara EXIF, metadatasteget skriver resten.
+        var tiffMetadata: IPTCFileMetadata?
+        var jpegMetadata: IPTCFileMetadata?
         /// Tillåt horisonträtning (bara för exteriörbilder, se klassens dokumentation).
         var allowStraighten: Bool = false
         var jpegMaxDimension: Int = 4000
@@ -445,6 +449,8 @@ nonisolated enum EnhancementEngine {
         var parameters: EnhancementParameters
         var width: Int
         var height: Int
+        /// Sant om metadatan (EXIF + ev. IPTC/XMP/GPS) skrevs utan fel.
+        var metadataWritten = false
     }
 
     enum EngineError: LocalizedError {
@@ -520,11 +526,15 @@ nonisolated enum EnhancementEngine {
             tiffURL: request.tiffURL, jpegURL: request.jpegURL,
             jpegMaxDimension: request.jpegMaxDimension, jpegQuality: request.jpegQuality
         )
+        var metadataWritten = false
         if let exiftoolPath = request.exiftoolPath {
-            PipelineMetrics.phase("exif") {
-                _ = HDRWriter.copyEXIF(from: request.exifSource, to: [request.tiffURL, request.jpegURL], exiftoolPath: exiftoolPath)
+            metadataWritten = PipelineMetrics.phase("exif") {
+                HDRWriter.writeMetadata(from: request.exifSource,
+                                        outputs: [(request.tiffURL, request.tiffMetadata), (request.jpegURL, request.jpegMetadata)],
+                                        exiftoolPath: exiftoolPath)
             }
         }
-        return Outcome(analysis: analysis, autoParameters: auto, parameters: final, width: full.width, height: full.height)
+        return Outcome(analysis: analysis, autoParameters: auto, parameters: final, width: full.width, height: full.height,
+                       metadataWritten: metadataWritten)
     }
 }

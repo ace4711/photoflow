@@ -56,18 +56,25 @@ nonisolated enum HDREngine {
     ///   handful of times (per image rendered, per fusion phase) — not
     ///   throwing; use the caller's own `Task` cancellation to abort.
     ///
+    /// - Parameter metadata: IPTC/XMP/GPS för TIFF- respektive JPEG-filen när den redan är
+    ///   känd (fas 1b) — skrivs i samma exiftool-anrop som EXIF-kopian. `nil` = bara EXIF,
+    ///   metadatasteget skriver resten.
+    /// - Returns: sant om metadatan (EXIF + ev. IPTC/XMP/GPS) skrevs utan fel.
+    ///
     /// `@concurrent`: projektet bygger med `NonisolatedNonsendingByDefault`, så
     /// utan det kördes hela sammanslagningen (sekunder per grupp, pixel för pixel)
     /// på anroparens aktör — huvudtråden — och appen frös med snurrande färghjul.
     @concurrent
+    @discardableResult
     static func merge(
         rawURLs: [URL],
         options: Options = Options(),
         tiffURL: URL,
         jpegURL: URL,
         exiftoolPath: String?,
+        metadata: (tiff: IPTCFileMetadata?, jpeg: IPTCFileMetadata?) = (nil, nil),
         progress: (@Sendable (Double) -> Void)? = nil
-    ) async throws {
+    ) async throws -> Bool {
         guard rawURLs.count >= 2 else { throw EngineError.tooFewImages }
 
         let middleIndex = rawURLs.count / 2
@@ -124,11 +131,16 @@ nonisolated enum HDREngine {
         try HDRWriter.write(pixels: finalPixels, width: width, height: height, tiffURL: tiffURL, jpegURL: jpegURL, jpegMaxDimension: options.jpegMaxDimension, jpegQuality: options.jpegQuality)
         progress?(0.95)
 
+        var metadataWritten = false
         if let exiftoolPath {
-            PipelineMetrics.phase("copyEXIF") {
-                _ = HDRWriter.copyEXIF(from: rawURLs[middleIndex], to: [tiffURL, jpegURL], exiftoolPath: exiftoolPath)
+            // Fasnamnet "copyEXIF" behålls för jämförbarhet i timings.jsonl (fas 1a).
+            metadataWritten = PipelineMetrics.phase("copyEXIF") {
+                HDRWriter.writeMetadata(from: rawURLs[middleIndex],
+                                        outputs: [(tiffURL, metadata.tiff), (jpegURL, metadata.jpeg)],
+                                        exiftoolPath: exiftoolPath)
             }
         }
         progress?(1.0)
+        return metadataWritten
     }
 }

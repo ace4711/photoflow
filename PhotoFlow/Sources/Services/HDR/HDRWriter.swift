@@ -8,7 +8,8 @@ import UniformTypeIdentifiers
 /// [0,1]) to disk as a real 16-bit-per-channel TIFF plus an 8-bit JPEG
 /// preview, and copies EXIF metadata from one of the source RAW files so the
 /// merged file still sorts/calendar-matches correctly (date, camera,
-/// aperture, ISO — the same fields the rest of the pipeline reads).
+/// aperture, ISO — the same fields the rest of the pipeline reads), plus —
+/// when already known — the address/GPS/IPTC metadata (`writeMetadata`).
 ///
 /// Pure/stateless aside from the file writes themselves and the optional
 /// `exiftool` shell-out — no actor isolation, safe to call from a background
@@ -173,28 +174,68 @@ nonisolated enum HDRWriter {
         }
     }
 
-    /// Copies date/camera/exposure EXIF tags from `sourceRAW` (normally the
-    /// bracket's middle exposure) onto the written TIFF/JPEG, via the same
-    /// `exiftool` dependency the rest of the pipeline already requires — far
-    /// simpler and more robust than hand-building `CGImageDestination` EXIF
-    /// property dictionaries, and keeps output byte-for-byte consistent with
-    /// how the pipeline writes metadata everywhere else.
+    /// EXIF-taggarna som kopieras från källan (datum, kamera, exponering — det resten av
+    /// pipelinen läser för sortering och kalendermatchning).
+    static let copiedEXIFTags = [
+        "-DateTimeOriginal", "-CreateDate", "-ModifyDate", "-SubSecTimeOriginal",
+        "-Make", "-Model", "-LensModel",
+        "-FNumber", "-ApertureValue", "-ISO", "-FocalLength", "-ExposureTime"
+    ]
+
+    /// exiftool-argumenten för `writeMetadata`: ett kommando per unik metadata (normalt ett
+    /// enda för TIFF + JPEG, som har samma adress och samma basnamn), åtskilda av `-execute`.
+    /// Varje kommando kopierar EXIF-grunddata från `sourceRAW` (som `copyEXIF` gjorde före
+    /// fas 1b) och lägger, när metadatan är känd, till samma IPTC/XMP/GPS-taggar som
+    /// metadatasteget skriver (`ExiftoolMetadataArguments`).
+    static func metadataArguments(from sourceRAW: URL, outputs: [(url: URL, meta: IPTCFileMetadata?)]) -> [String] {
+        var groups: [(meta: IPTCFileMetadata?, urls: [URL])] = []
+        for output in outputs {
+            if let idx = groups.firstIndex(where: { $0.meta == output.meta }) {
+                groups[idx].urls.append(output.url)
+            } else {
+                groups.append((output.meta, [output.url]))
+            }
+        }
+        var args: [String] = []
+        for (index, group) in groups.enumerated() {
+            if index > 0 { args.append("-execute") }
+            if let meta = group.meta {
+                args += ["-charset", "iptc=UTF8"]
+                args += ExiftoolMetadataArguments.tagLines(for: meta, isNEF: false)
+            }
+            args += ["-TagsFromFile", sourceRAW.path] + copiedEXIFTags
+            args += ["-overwrite_original", "-P"] + group.urls.map(\.path)
+        }
+        return args
+    }
+
+    /// Skriver metadata till de nyss skrivna TIFF/JPEG-filerna i ETT exiftool-anrop (fas 1b,
+    /// steg A): EXIF-grunddata från `sourceRAW` (normalt bracketens mittexponering) och, för de
+    /// utdata som har `meta`, IPTC/XMP/GPS. Förut skrevs filerna om två gånger: först av
+    /// `copyEXIF` och sedan av metadatasteget. Via samma `exiftool` som resten av pipelinen —
+    /// enklare och robustare än handbyggda `CGImageDestination`-egenskaper.
     ///
-    /// Best-effort: returns `false` (without throwing) if `exiftool` fails —
-    /// a missing/incorrect EXIF copy shouldn't fail the whole HDR merge, just
-    /// degrade calendar/date sorting for that one merged file.
+    /// Best-effort: returnerar `false` (utan att kasta) om `exiftool` misslyckas — en saknad
+    /// EXIF-kopia ska inte fälla hela HDR-sammanslagningen, och metadatasteget skriver då
+    /// IPTC/XMP/GPS som förut (ingen stämpel sätts).
     @discardableResult
-    static func copyEXIF(from sourceRAW: URL, to outputs: [URL], exiftoolPath: String) -> Bool {
-        guard FileManager.default.fileExists(atPath: sourceRAW.path) else { return false }
+    static func writeMetadata(from sourceRAW: URL, outputs: [(url: URL, meta: IPTCFileMetadata?)], exiftoolPath: String) -> Bool {
+        guard FileManager.default.fileExists(atPath: sourceRAW.path), !outputs.isEmpty else { return false }
+        // Argumenten går via en argfil (UTF-8, som metadatasteget), inte som processargument:
+        // `Process` skickar argumenten i filsystemsrepresentation, alltså NFD, så "ä" hade
+        // skrivits som "a" + kombinerande trema i IPTC-fälten (upptäckt av MetadataPlanTests).
+        let argfile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("photoflow-exif-\(UUID().uuidString).args")
+        do {
+            try metadataArguments(from: sourceRAW, outputs: outputs).joined(separator: "\n")
+                .write(to: argfile, atomically: true, encoding: .utf8)
+        } catch {
+            return false
+        }
+        defer { try? FileManager.default.removeItem(at: argfile) }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: exiftoolPath)
-        process.arguments = [
-            "-TagsFromFile", sourceRAW.path,
-            "-DateTimeOriginal", "-CreateDate", "-ModifyDate", "-SubSecTimeOriginal",
-            "-Make", "-Model", "-LensModel",
-            "-FNumber", "-ApertureValue", "-ISO", "-FocalLength", "-ExposureTime",
-            "-overwrite_original", "-P"
-        ] + outputs.map(\.path)
+        process.arguments = ["-@", argfile.path]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         do {

@@ -51,7 +51,7 @@ extension PipelineRunner {
         // Build list of groups to merge (skip already-done ones — även de som
         // sorteringen redan flyttat till en adressmapp)
         let existingHDR = AddressFolderLayout.locateHDRFiles(in: outputDir)
-        var groupsToMerge: [(groupId: Int, previewPaths: [String], rawURLs: [URL])] = []
+        var groupsToMerge: [(groupId: Int, previewPaths: [String], rawURLs: [URL], firstPhotoDate: Date?)] = []
         for group in bracketGroups {
             let groupId = (group["group_id"] as? Int) ?? 0
             let files = (group["files"] as? [String]) ?? []
@@ -81,7 +81,8 @@ extension PipelineRunner {
 
             let usable = engine == "opencv" ? previewPaths.count : rawURLs.count
             guard usable >= 2 else { continue }
-            groupsToMerge.append((groupId: groupId, previewPaths: previewPaths, rawURLs: rawURLs))
+            groupsToMerge.append((groupId: groupId, previewPaths: previewPaths, rawURLs: rawURLs,
+                                  firstPhotoDate: Self.firstPhotoDate(ofGroup: group)))
         }
 
         if groupsToMerge.isEmpty {
@@ -109,6 +110,14 @@ extension PipelineRunner {
             alignEnabled: AppSettings.shared.hdrAlignEnabled,
             sharpenEnabled: AppSettings.shared.hdrSharpenEnabled
         )
+
+        // Fas 1b: adress, GPS och bokningsinfo är kända efter kalendersteget, så metadatan skrivs
+        // direkt i samma exiftool-anrop som EXIF-kopian (i stället för en omskrivning till i
+        // metadatasteget). Bilderna är inte inlästa än (`loadBracketGroups` körs efter HDR), så
+        // AI-uppslaget saknas — men en HDR-fil heter aldrig som en bild och får därför inga AI-taggar.
+        let photoBaseNames = Set(groups.flatMap { ($0["files"] as? [String]) ?? [] }
+            .map { $0.replacingOccurrences(of: ".NEF", with: "") })
+        let metadataContext = await creationMetadataContext(photoBaseNames: photoBaseNames)
 
         var successCount = 0
         var failCount = 0
@@ -152,19 +161,29 @@ extension PipelineRunner {
                     let state = self.state
                     let reporter = HDRProgressReporter()
                     let rawURLs = group.rawURLs
-                    try await PipelineMetrics.jobAsync(
+                    let tiffURL = URL(fileURLWithPath: outputPath)
+                    let jpegURL = URL(fileURLWithPath: previewPath)
+                    // Sorteringen flyttar filerna till gruppens adressmapp (första bildens fotodatum).
+                    // Okänt datum → okänd mapp: bara EXIF nu, metadatasteget tar resten.
+                    let folderName = group.firstPhotoDate.map { addressFolderName(forPhotoDate: $0) }
+                    let metadata = (
+                        tiff: folderName.flatMap { Self.creationMetadata(for: tiffURL, folderName: $0, context: metadataContext) },
+                        jpeg: folderName.flatMap { Self.creationMetadata(for: jpegURL, folderName: $0, context: metadataContext) }
+                    )
+                    let metadataWritten = try await PipelineMetrics.jobAsync(
                         step: "hdr", unit: "group:\(group.groupId)",
                         bytesIn: PipelineMetrics.totalSize(of: rawURLs),
-                        bytesOut: { (_: Void) in
+                        bytesOut: { (_: Bool) in
                             PipelineMetrics.totalSize(of: [URL(fileURLWithPath: outputPath), URL(fileURLWithPath: previewPath)])
                         }
                     ) {
                         try await HDREngine.merge(
                             rawURLs: rawURLs,
                             options: hdrOptions,
-                            tiffURL: URL(fileURLWithPath: outputPath),
-                            jpegURL: URL(fileURLWithPath: previewPath),
+                            tiffURL: tiffURL,
+                            jpegURL: jpegURL,
                             exiftoolPath: exiftoolPath,
+                            metadata: metadata,
                             progress: { fraction in
                                 guard let phase = reporter.newPhase(for: fraction, imageCount: imageCount) else { return }
                                 Task { @MainActor in
@@ -174,6 +193,8 @@ extension PipelineRunner {
                             }
                         )
                     }
+                    recordCreationStamps([(tiffURL, metadata.tiff), (jpegURL, metadata.jpeg)],
+                                         metadataWritten: metadataWritten, outputDir: outputDir)
                 }
 
                 if FileManager.default.fileExists(atPath: outputPath) {
@@ -286,13 +307,30 @@ extension PipelineRunner {
                     alignEnabled: AppSettings.shared.hdrAlignEnabled,
                     sharpenEnabled: AppSettings.shared.hdrSharpenEnabled
                 )
-                try await HDREngine.merge(
+                // Samma metadata som metadatasteget skulle skriva (fas 1b): mappen filen redan ligger
+                // i, annars den sorteringen flyttar den till. Saknar adressen GPS ännu, eller är
+                // metadatan okänd, skrivs bara EXIF och stämpeln tas bort så att metadatasteget skriver resten.
+                let metadataContext = await creationMetadataContext()
+                let groupFolder = addressFolderName(forPhotoDate: state.photos(in: group).first?.dateTime)
+                func fileMetadata(for url: URL) -> IPTCFileMetadata? {
+                    Self.creationMetadata(for: url, folderName: Self.addressFolderName(containing: url) ?? groupFolder,
+                                          context: metadataContext)
+                }
+                let metadata = (tiff: fileMetadata(for: hdrTiff), jpeg: fileMetadata(for: hdrJpeg))
+                let metadataWritten = try await HDREngine.merge(
                     rawURLs: rawURLs,
                     options: hdrOptions,
                     tiffURL: hdrTiff,
                     jpegURL: hdrJpeg,
-                    exiftoolPath: try? requireExiftool()
+                    exiftoolPath: try? requireExiftool(),
+                    metadata: metadata
                 )
+                recordCreationStamps([(hdrTiff, metadata.tiff), (hdrJpeg, metadata.jpeg)],
+                                     metadataWritten: metadataWritten, outputDir: outputDir)
+                if metadata.tiff == nil || metadata.jpeg == nil || !metadataWritten {
+                    // Metadatasteget måste köras igen för den här gruppens filer.
+                    try? FileManager.default.removeItem(at: outputDir.appendingPathComponent("metadata_written.json"))
+                }
                 mergeSucceeded = true
             }
         } catch {
@@ -313,6 +351,19 @@ extension PipelineRunner {
             audio.playError()
             return []
         }
+    }
+
+    /// Fotodatumet för gruppens första bild, räknat som `loadBracketGroups` gör (bildens egen
+    /// tid i `datetimes`, annars gruppens `date_start`) — det avgör vilken adressmapp gruppens
+    /// HDR-filer sorteras till (`moveUnsortedHDR`). nil om inget av dem går att tolka
+    /// (`loadBracketGroups` tar då dagens datum, alltså i praktiken "Osorterade").
+    nonisolated static func firstPhotoDate(ofGroup group: [String: Any]) -> Date? {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        if let first = (group["datetimes"] as? [String])?.first, let date = formatter.date(from: first) {
+            return date
+        }
+        return (group["date_start"] as? String).flatMap { formatter.date(from: $0) }
     }
 
     /// Python script for Mertens exposure fusion via OpenCV (the "opencv" engine).
