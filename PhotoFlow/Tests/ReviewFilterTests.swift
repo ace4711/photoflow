@@ -32,8 +32,8 @@ struct ReviewFilterTests {
         }
         st.push(snap("a")); st.push(snap("b")); st.push(snap("c"))
         #expect(st.count == 2)
-        #expect(st.pop()?.photoID == "c")
-        #expect(st.pop()?.photoID == "b")
+        #expect(st.pop()?.decision?.photoID == "c")
+        #expect(st.pop()?.decision?.photoID == "b")
         #expect(st.pop() == nil)
         #expect(st.isEmpty)
     }

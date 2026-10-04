@@ -11,6 +11,8 @@ nonisolated struct ReviewGroupSummary: Equatable {
     var addressFolder: String?
     /// Stjärnbetyg 0–5 (0 = obetygsatt).
     var rating: Int = 0
+    /// Gruppen är vald för extern redigering (minst en fil skickas).
+    var isSending: Bool = false
 }
 
 /// Filter för grupplistan i granska-läget.
@@ -21,6 +23,10 @@ nonisolated enum ReviewFilter: Hashable {
     case address(String)
     /// Betyg minst N stjärnor.
     case minRating(Int)
+    /// Vald för extern redigering.
+    case sending
+    /// Inte vald för extern redigering.
+    case notSending
 
     var title: String {
         switch self {
@@ -29,6 +35,8 @@ nonisolated enum ReviewFilter: Hashable {
         case .flagged: return "Flaggade/avvisade"
         case .address(let name): return name
         case .minRating(let n): return "★ \(n)+"
+        case .sending: return "Skickas"
+        case .notSending: return "Ej vald"
         }
     }
 
@@ -39,6 +47,8 @@ nonisolated enum ReviewFilter: Hashable {
         case .flagged: return s.hasRejected || s.hasUserOverride
         case .address(let name): return s.addressFolder == name
         case .minRating(let n): return s.rating >= n
+        case .sending: return s.isSending
+        case .notSending: return !s.isSending
         }
     }
 
@@ -72,19 +82,37 @@ nonisolated struct ReviewDecisionSnapshot: Equatable {
     var photoIndex: Int
 }
 
+/// En post i ångra-stapeln: ett granskningsbeslut eller en ändring av urvalet till redigering.
+nonisolated enum ReviewUndoEntry: Equatable {
+    case decision(ReviewDecisionSnapshot)
+    case editSelection(EditSelectionUndo)
+
+    var decision: ReviewDecisionSnapshot? {
+        if case .decision(let s) = self { return s }
+        return nil
+    }
+
+    var editSelection: EditSelectionUndo? {
+        if case .editSelection(let u) = self { return u }
+        return nil
+    }
+}
+
 /// Begränsad ångra-stapel (senaste överst).
 nonisolated struct ReviewUndoStack {
-    private(set) var items: [ReviewDecisionSnapshot] = []
+    private(set) var items: [ReviewUndoEntry] = []
     let limit: Int
     init(limit: Int = 200) { self.limit = limit }
 
     var isEmpty: Bool { items.isEmpty }
     var count: Int { items.count }
 
-    mutating func push(_ s: ReviewDecisionSnapshot) {
-        items.append(s)
+    mutating func push(_ entry: ReviewUndoEntry) {
+        items.append(entry)
         if items.count > limit { items.removeFirst(items.count - limit) }
     }
 
-    mutating func pop() -> ReviewDecisionSnapshot? { items.popLast() }
+    mutating func push(_ s: ReviewDecisionSnapshot) { push(.decision(s)) }
+
+    mutating func pop() -> ReviewUndoEntry? { items.popLast() }
 }
