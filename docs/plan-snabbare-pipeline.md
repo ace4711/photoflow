@@ -437,6 +437,28 @@ LZW var alltså **20 % större** och ~20 gånger långsammare att koda; planens 
 
 Baslinje körning 2 mot efter körning 2 (och körning 1 mot körning 1): `bracket_groups.json` värdeidentisk (bytes skiljer p.g.a. slumpad nyckelordning, `JSONSerialization` utan `sortedKeys`, även mellan två baslinjekörningar), `enhancement.json` identisk (92 poster), 230 HDR-/förbättrade bilder med identiska avkodade pixlar, metadata (`exiftool -j -G1 -a -struct`) identisk för 710 filer. Flyktiga taggar som filtreras: `File/System/ExifTool`, XMP-id:n och `MetadataDate`, alla `ModifyDate`, DNG:s `PreviewDateTime`/`PreviewImageStart` och `Composite:SubSecModifyDate`, samt TIFF-strukturtaggarna `Compression`/`StripOffsets`/`StripByteCounts`/`RowsPerStrip`. Två baslinjekörningar mot varandra är identiska med samma filter, så filtret döljer inget som skiljer versionerna åt.
 
+
+## 8b. Uppmätt (fas 1b: metadata när HDR- och förbättrade filer skapas)
+
+Samma testmängd och maskin (intern disk, AI-bildtexter av). Baslinje = commit `81bde1f` (+ samma testväg `--calendar-matches` i CLI:t), efter = fas 1b. Två lägen:
+- **Utan kalender** (`--no-calendar`, som 1a): ingen adress/GPS, så HDR-/förbättrade filer får ingen IPTC och ändringen ska inte märkas.
+- **Med kalender** (`benchmark.sh --calendar-matches`): sessionens riktiga `calendar_matches.json` med koordinater angivna som manuellt rättade. MapKit-geokodningen svarar inte headless, och utan testvägen frågade CLI:t EventKit och hängde (manifestmigreringen skapar ett kalender-record utan fingerprint).
+
+Sekunder. Baslinjen med kalender är medianen av tre körningar (47,3 / 47,7 / 54,5 för metadatasteget), efter är en körning. Datorn gick på batteri under en del av baslinjekörningarna och en mätserie kastades när batteriet tog slut, så räkna med några procents brus i HDR och Förbättra.
+
+| Steg | Baslinje utan kal. | Efter utan kal. | Baslinje med kal. | Efter med kal. |
+|---|---|---|---|---|
+| Skapa HDR | 221,7 | 224,5 | 222,8 | 234,7 |
+| Förbättra bilder | 133,9 | 131,5 | 131,3 | 124,3 |
+| Skriv metadata | 29,1 | 31,5 | **47,5** | **30,0 (−37 %)** |
+| Metadata, skrivet till disk | 15,6 GB | 15,7 GB | **44,1 GB** | **14,5 GB** |
+| Hela körningen | 405,9 | 409,6 | 422,7 | 412,1 |
+
+- Metadatasteget hoppade över 212 av 659 filer tack vare stämplarna (alla HDR- och förbättrade filer i adressmappar). Det som återstår är DNG (in place), förhandsbilder och XMP för NEF: 14,5 GB, lika mycket som utan kalender.
+- Kostnaden i HDR/Förbättra: exiftool-anropet tar 0,37–0,39 s per HDR-grupp (förut `copyEXIF` 0,33 s) och 0,40 s per förbättrad bild (förut 0,38 s). Det blir ungefär +1,5 s HDR och +2 s Förbättra i hela körningen, mot −17 s i metadatasteget. På T5 (diskbundet metadatasteg) bör vinsten bli större, i proportion till de ~30 GB mindre som skrivs.
+- **Verifiering** (`scripts/compare-outputs.sh`): med kalender (baslinje mot efter, två par) är `bracket_groups.json` värdeidentisk, `calendar_matches.json` byte-identisk, `enhancement.json` identisk, 230 bilder har identiska pixlar och metadata är identisk för 699 filer (adress, GPS, IPTC/XMP på HDR, förbättrade, DNG, förhandsbilder och sidecars). Utan kalender: identiskt för 230 bilder och 710 metadatafiler.
+- **Fynd:** `Process` skickar argumenten i filsystemets representation (NFD), så "ä" hade skrivits som "a" + kombinerande trema i IPTC om taggarna gått som processargument. `HDRWriter.writeMetadata` går därför via en argfil, som metadatasteget. Pipelinen skriver IPTC som UTF-8 utan `CodedCharacterSet` (som förut), så verktyg som läser IPTC som Latin-1 visar "LindvÃ¤gen".
+
 ---
 
 ### Critical Files for Implementation
