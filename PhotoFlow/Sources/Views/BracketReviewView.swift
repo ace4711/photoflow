@@ -12,6 +12,9 @@ struct BracketReviewView: View {
     /// färdig HDR visas den som standard (se `ReviewImageSelection`).
     @State private var showSources: Bool = false
     @State private var showNotes: Bool = false
+    @State private var filter: ReviewFilter = .all
+    @State private var viewOptions = ReviewViewOptions()
+    @State private var undoStack = ReviewUndoStack()
     @FocusState private var isFocused: Bool
 
     private let audio = AudioService.shared
@@ -30,6 +33,34 @@ struct BracketReviewView: View {
     private var showHDRPreview: Bool {
         get { currentGroup?.finalPreviewURL != nil && !showSources }
         nonmutating set { showSources = !newValue }
+    }
+
+    /// Bilden som visas i stora bilden just nu (för histogram, zoom och lupp).
+    private var displayedURL: URL? {
+        if showHDRPreview { return currentGroup?.finalPreviewURL }
+        return currentPhoto?.previewURL
+    }
+
+    /// Adressmapp per grupp (efter första bildens tid), via kalendermatchningarna.
+    private var groupAddresses: [Int: String] {
+        guard let mappings = runner.runner?.calendarMappings, !mappings.isEmpty else { return [:] }
+        var result: [Int: String] = [:]
+        for group in pipeline.bracketGroups {
+            guard let first = pipeline.photos(in: group).first else { continue }
+            result[group.id] = PhotoClustering.addressFolder(for: first.dateTime, mappings: mappings) ?? "Osorterade"
+        }
+        return result
+    }
+
+    private func summaries(addresses: [Int: String]) -> [ReviewGroupSummary] {
+        pipeline.bracketGroups.map { g in
+            let photos = pipeline.photos(in: g)
+            return ReviewGroupSummary(
+                allReviewed: photos.allSatisfy { $0.accepted || $0.rejected },
+                hasRejected: photos.contains { $0.rejected },
+                hasUserOverride: photos.contains { $0.accepted && !$0.algorithmSuggested },
+                addressFolder: addresses[g.id])
+        }
     }
 
     var currentPhoto: PhotoItem? {
@@ -107,6 +138,16 @@ struct BracketReviewView: View {
             return .handled
         }
         .onKeyPress(characters: CharacterSet(charactersIn: "d")) { _ in finishReview(); return .handled }
+        .onKeyPress(characters: CharacterSet(charactersIn: "z")) { press in
+            guard !press.modifiers.contains(.command) else { return .ignored }
+            viewOptions.zoom100.toggle()
+            return .handled
+        }
+        .onKeyPress(characters: CharacterSet(charactersIn: "c")) { press in
+            guard !press.modifiers.contains(.command) else { return .ignored }
+            viewOptions.showClipping.toggle()
+            return .handled
+        }
         .onKeyPress(.tab) { goToUnreviewedGroup(direction: 1); return .handled }
         .onKeyPress(characters: CharacterSet(charactersIn: "u")) { _ in goToUnreviewedGroup(direction: 1); return .handled }
         .onKeyPress(characters: CharacterSet(charactersIn: "j")) { _ in navigateGroup(1); return .handled }
@@ -160,10 +201,19 @@ struct BracketReviewView: View {
                 Text(ReviewNavigation.progressText(reviewed: reviewedCount, total: pipeline.bracketGroups.count))
                     .font(.caption.bold())
                     .foregroundColor(reviewedCount == pipeline.bracketGroups.count ? .green : .secondary)
-                Text("Pilar: navigera | Mellanslag: välj | H: HDR | Tab/U: nästa ogranskade")
+                Text("Pilar/J/K: navigera | Mellanslag: välj | Retur/Delete: acceptera/avvisa | ⌘Z: ångra | H: HDR | Tab/U: nästa ogranskade | Z: 100 % | Shift: lupp | C: histogram/klippning")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
+
+            Button(action: undoLastDecision) {
+                Label("Ångra", systemImage: "arrow.uturn.backward")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .keyboardShortcut("z", modifiers: .command)
+            .disabled(undoStack.isEmpty)
+            .help("Ångra senaste granskningsbeslut (⌘Z)")
 
             // Notes toggle
             Button(action: { withAnimation { showNotes.toggle() } }) {
@@ -211,11 +261,24 @@ struct BracketReviewView: View {
     // MARK: - Group list
 
     private var groupList: some View {
+        let addresses = groupAddresses
+        let sums = summaries(addresses: addresses)
+        let visible = ReviewFilter.visibleIndices(sums, filter: filter)
+        return VStack(spacing: 0) {
+            ReviewFilterBar(filter: $filter, addresses: ReviewFilter.addresses(in: sums),
+                            visibleCount: visible.count, totalCount: sums.count)
+            Divider()
+            groupListBody(visible: visible, addresses: addresses)
+        }
+    }
+
+    private func groupListBody(visible: [Int], addresses: [Int: String]) -> some View {
         List(selection: Binding(
             get: { selectedGroupIndex },
             set: { selectedGroupIndex = $0; selectedPhotoIndex = 0; showSources = false }
         )) {
-            ForEach(Array(pipeline.bracketGroups.enumerated()), id: \.element.id) { index, group in
+            ForEach(visible, id: \.self) { index in
+                let group = pipeline.bracketGroups[index]
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 6) {
@@ -226,6 +289,14 @@ struct BracketReviewView: View {
                             }
                             Text(pipeline.label(for: group))
                                 .font(.system(.caption, design: .rounded, weight: .medium))
+                        }
+                        if let address = addresses[group.id] {
+                            Label(address, systemImage: "folder")
+                                .font(.caption2)
+                                .foregroundColor(address == "Osorterade" ? .orange : .secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .help("Adressmapp: \(address)")
                         }
                         HStack(spacing: 8) {
                             Text("\(group.timeStart)")
@@ -276,6 +347,7 @@ struct BracketReviewView: View {
                 VStack(spacing: 12) {
                     LocalImageView(url: hdrURL)
                         .id(hdrIdentity)
+                        .reviewImageOverlays(url: hdrURL, options: viewOptions)
                         .overlay {
                             if isReMergingCurrent { reMergeBadge(large: true) }
                         }
@@ -317,6 +389,7 @@ struct BracketReviewView: View {
             } else if let photo = currentPhoto {
                 VStack(spacing: 12) {
                     ProgressiveImageView(previewURL: photo.previewURL, fullResURL: photo.nefURL, dngURL: photo.dngURL)
+                        .reviewImageOverlays(url: photo.previewURL, options: viewOptions)
                         .overlay(alignment: .topTrailing) {
                             statusBadge(for: photo)
                                 .padding(12)
@@ -536,15 +609,19 @@ struct BracketReviewView: View {
 
     private func goToUnreviewedGroup(direction: Int) {
         let reviewed = pipeline.bracketGroups.map { pipeline.allReviewed($0) }
-        guard let idx = ReviewNavigation.nextUnreviewed(from: selectedGroupIndex, reviewed: reviewed, direction: direction) else { return }
+        let sums = summaries(addresses: groupAddresses)
+        // Med filter aktivt: bara ogranskade bland de synliga.
+        let visible = Set(ReviewFilter.visibleIndices(sums, filter: filter))
+        let masked = reviewed.enumerated().map { visible.contains($0.offset) ? $0.element : true }
+        guard let idx = ReviewNavigation.nextUnreviewed(from: selectedGroupIndex, reviewed: masked, direction: direction) else { return }
         selectedGroupIndex = idx
         selectedPhotoIndex = 0
         showSources = false
     }
 
     private func navigateGroup(_ direction: Int) {
-        let newIndex = selectedGroupIndex + direction
-        if newIndex >= 0 && newIndex < pipeline.bracketGroups.count {
+        let visible = ReviewFilter.visibleIndices(summaries(addresses: groupAddresses), filter: filter)
+        if let newIndex = ReviewFilter.step(from: selectedGroupIndex, direction: direction, visible: visible) {
             selectedGroupIndex = newIndex
             selectedPhotoIndex = 0
             showSources = false
@@ -554,6 +631,7 @@ struct BracketReviewView: View {
     private func toggleCurrentPhoto() {
         guard currentGroup != nil, let photo = currentPhoto else { return }
         let wasAccepted = photo.accepted
+        recordUndo(photo)
         pipeline.setDecision(photoID: photo.id, accepted: !wasAccepted, rejected: false)
         // Mark as user choice (not algorithm)
         if !wasAccepted {
@@ -570,6 +648,7 @@ struct BracketReviewView: View {
 
     private func acceptCurrentPhoto() {
         guard currentGroup != nil, let photo = currentPhoto else { return }
+        recordUndo(photo)
         pipeline.setDecision(photoID: photo.id, accepted: true, rejected: false)
         pipeline.setAlgorithmSuggested(photoID: photo.id, suggested: false)
         audio.playAccept()
@@ -580,10 +659,34 @@ struct BracketReviewView: View {
 
     private func rejectCurrentPhoto() {
         guard currentGroup != nil, let photo = currentPhoto else { return }
+        recordUndo(photo)
         pipeline.setDecision(photoID: photo.id, accepted: false, rejected: true)
         audio.playReject()
         pipeline.saveCullDecisions()
         navigatePhoto(1)
+        scheduleReMerge()
+    }
+
+    // MARK: - Ångra
+
+    private func recordUndo(_ photo: PhotoItem) {
+        undoStack.push(ReviewDecisionSnapshot(
+            photoID: photo.id, accepted: photo.accepted, rejected: photo.rejected,
+            algorithmSuggested: photo.algorithmSuggested,
+            groupIndex: selectedGroupIndex, photoIndex: selectedPhotoIndex))
+    }
+
+    /// Återställer senaste beslutet och hoppar till bilden det gällde.
+    private func undoLastDecision() {
+        guard let snap = undoStack.pop() else { return }
+        pipeline.setDecision(photoID: snap.photoID, accepted: snap.accepted, rejected: snap.rejected)
+        pipeline.setAlgorithmSuggested(photoID: snap.photoID, suggested: snap.algorithmSuggested)
+        pipeline.saveCullDecisions()
+        if snap.groupIndex < pipeline.bracketGroups.count {
+            selectedGroupIndex = snap.groupIndex
+            selectedPhotoIndex = snap.photoIndex
+            showSources = true
+        }
         scheduleReMerge()
     }
 
