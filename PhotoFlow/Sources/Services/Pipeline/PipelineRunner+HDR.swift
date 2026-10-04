@@ -104,7 +104,9 @@ extension PipelineRunner {
         let existingHDR = AddressFolderLayout.locateHDRFiles(in: outputDir)
         var hdrLog = (forceAll ? nil : HDRLog.load(from: outputDir)) ?? HDRLog()
         let policy = HDRLog.RedoPolicy(setting: AppSettings.shared.hdrRedoOnEngineUpdate)
-        let windowPullOn = engine != "opencv" && AppSettings.shared.hdrWindowPullEnabled
+        // Gruppens mörkaste exponering skickas med för window pull — och alltid för radians, som
+        // använder alla exponeringar (fönstren kommer ur de mörka ramarna).
+        let windowPullOn = engine != "opencv" && (AppSettings.shared.hdrWindowPullEnabled || AppSettings.shared.hdrMethodValue == .radiance)
         var adopted = 0
         var groupsToMerge: [HDRMergeJob] = []
         for group in bracketGroups {
@@ -232,7 +234,10 @@ extension PipelineRunner {
         // en grupp (stämplar, hdr.json, loggrader, räknare) görs i gruppordning, som vid seriell körning.
         let hdrLimit: () -> Int = engine == "opencv"
             ? { 1 }
-            : liveConcurrencyLimit(label: "HDR", cost: ResourceGovernor.hdrCost(maxDimension: baseOptions.maxDimension))
+            : liveConcurrencyLimit(label: "HDR", cost: ResourceGovernor.hdrCost(
+                maxDimension: baseOptions.maxDimension, method: baseOptions.method,
+                // Största gruppen: ramarna plus den mörkaste som radians alltid tar med.
+                frames: groupsToMerge.map { $0.frames.count + ($0.windowSource == nil ? 0 : 1) }.max() ?? 4))
         var finished = 0
 
         try await OrderedParallel.run(
@@ -350,10 +355,15 @@ extension PipelineRunner {
                             manualSelection: group.manualSelection,
                             reference: mergeResult.map { $0.referenceFrame.deletingPathExtension().lastPathComponent + ".NEF" },
                             windowSource: mergeResult?.windowSource == nil ? nil : group.windowSourceName,
-                            window: mergeResult?.window, mergedAt: Date(), seconds: outcome.seconds)
+                            window: mergeResult?.window, radiance: mergeResult?.radiance, mergedAt: Date(), seconds: outcome.seconds)
                         hdrLog.updatedAt = Date()
                         hdrLog.save(to: outputDir)
-                        if let window = mergeResult?.window {
+                        if let radiance = mergeResult?.radiance {
+                            state.appendStepLog(.createHDR, String(format: "HDR grupp %d: radians av %d exponeringar (%@ EV), spökskydd %.1f %% av bilden, exponering %+.1f EV",
+                                                                   group.groupId, radiance.exposuresEV.count,
+                                                                   radiance.exposuresEV.map { String(format: "%+.1f", $0) }.joined(separator: " "),
+                                                                   radiance.ghostFraction * 100, radiance.tone.gainEV))
+                        } else if let window = mergeResult?.window {
                             state.appendStepLog(.createHDR, window.applied
                                 ? String(format: "HDR grupp %d: fönster från mörkaste exponeringen (%.1f %% av bilden, gain %+.1f EV)", group.groupId, window.maskFraction * 100, window.gainEV)
                                 : "HDR grupp \(group.groupId): ingen window pull — \(window.reason ?? "inget att hämta")")
@@ -520,7 +530,7 @@ extension PipelineRunner {
                 fingerprint: currentHDRFingerprint(identity: identityNames.compactMap { nefByName[$0] }),
                 frames: frameNames, manualSelection: true,
                 reference: mergeResult.map { $0.referenceFrame.deletingPathExtension().lastPathComponent + ".NEF" },
-                windowSource: windowName, window: mergeResult?.window, mergedAt: Date(),
+                windowSource: windowName, window: mergeResult?.window, radiance: mergeResult?.radiance, mergedAt: Date(),
                 seconds: Date().timeIntervalSince(started))
             hdrLog.updatedAt = Date()
             hdrLog.save(to: outputDir)

@@ -34,6 +34,16 @@ struct ResourceGovernorTests {
         #expect(ResourceGovernor.hdrCost(maxDimension: 3000).memoryBytes < ResourceGovernor.hdrCost(maxDimension: 6000).memoryBytes)
     }
 
+    @Test("Radians: minnet växer med antalet ramar, färre samtidiga grupper på mindre maskiner")
+    func radianceScalesWithFrames() {
+        let few = ResourceGovernor.hdrCost(maxDimension: 6000, method: .radiance, frames: 3)
+        let many = ResourceGovernor.hdrCost(maxDimension: 6000, method: .radiance, frames: 8)
+        #expect(few.memoryBytes == ResourceGovernor.hdrCost(maxDimension: 6000).memoryBytes)
+        #expect(many.memoryBytes > few.memoryBytes)
+        // 32 GB: 20 GB användbart, 8 ramar ≈ 7,2 GB/grupp → 2 grupper (basram: 3).
+        #expect(ResourceGovernor.maxConcurrent(cost: many, budget: budget(memoryGB: 32, cores: 16)) == 2)
+    }
+
     @Test("Två kärnor lämnas alltid fria")
     func reservesTwoCores() {
         let cost = JobCost(memoryBytes: 1, cores: 1, hardCap: 100)

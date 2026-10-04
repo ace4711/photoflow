@@ -43,7 +43,7 @@ nonisolated enum SceneLinearTone {
         /// Grindar: struktur (lokal std av log2-luminans, EV), ljushet (lokalt medel över interiörens
         /// median, EV) och slöjans andel av det lokala medlet.
         var dehazeTexture: ClosedRange<Float> = 0.15...0.35
-        var dehazeBrightEV: ClosedRange<Float> = -0.5...0.5
+        var dehazeBrightEV: ClosedRange<Float> = 0...1
         var dehazeVeil: ClosedRange<Float> = 0.12...0.30
 
         init() {}
@@ -112,49 +112,52 @@ nonisolated enum SceneLinearTone {
     }
 
     /// Tonsätter `linear` (RGBA, scenlinjärt, valfri skala) → RGBA gammakodat 0…1.
-    static func apply(linear input: [Float], width: Int, height: Int, priorEV: Double? = nil,
+    static func apply(linear: [Float], width: Int, height: Int, priorEV: Double? = nil,
                       options: Options = Options()) -> (pixels: [Float], info: Info) {
-        let count = width * height
-        let samples = sampleLuminance(input, width: width, height: height)
+        var pixels = linear
+        let info = applyInPlace(&pixels, width: width, height: height, priorEV: priorEV, options: options)
+        return (pixels, info)
+    }
+
+    /// Som `apply`, men skriver resultatet i samma buffert (sparar två fullstora kopior i HDR-steget).
+    static func applyInPlace(_ linear: inout [Float], width: Int, height: Int, priorEV: Double? = nil,
+                             options: Options = Options()) -> Info {
+        let samples = sampleLuminance(linear, width: width, height: height)
         let median = interiorMedian(samples, excludeAboveMedian: options.excludeAboveMedian)
-        var linear = input
         let dehazed = dehaze(&linear, width: width, height: height, interiorMedian: median, options: options)
         let ev = gainEV(medianLinear: median, priorEV: priorEV, options: options)
         let gain = Float(pow(2.0, ev))
         let white = max(HDRImageOps.percentile(samples, options.whitePercentile) * gain, options.minWhite)
         let knee = min(options.knee, white * 0.9)
 
-        var out = [Float](repeating: 1, count: count * 4)
-        linear.withUnsafeBufferPointer { srcBuf in
-            out.withUnsafeMutableBufferPointer { dstBuf in
-                let src = HDRImageOps.Shared(srcBuf), dst = HDRImageOps.Shared(dstBuf)
-                let rows = 64
-                DispatchQueue.concurrentPerform(iterations: (height + rows - 1) / rows) { block in
-                    let y0 = block * rows, y1 = min(height, y0 + rows)
-                    for i in (y0 * width)..<(y1 * width) {
-                        let p = i * 4
-                        var r = max(src[p], 0) * gain, g = max(src[p + 1], 0) * gain, b = max(src[p + 2], 0) * gain
-                        let y = luminance(r, g, b)
-                        if y > knee {
-                            let s = shoulder(y, knee: knee, white: white) / y
-                            r *= s; g *= s; b *= s
-                        }
-                        // Över 1 i någon kanal: avmätta mot luminansen tills den ryms.
-                        let mx = max(r, g, b)
-                        if mx > 1 {
-                            let ly = min(luminance(r, g, b), 1)
-                            let t = mx - ly > 1e-6 ? (1 - ly) / (mx - ly) : 0
-                            r = ly + (r - ly) * t; g = ly + (g - ly) * t; b = ly + (b - ly) * t
-                        }
-                        dst[p] = HDRImageOps.toGamma(min(r, 1))
-                        dst[p + 1] = HDRImageOps.toGamma(min(g, 1))
-                        dst[p + 2] = HDRImageOps.toGamma(min(b, 1))
-                        dst[p + 3] = 1
+        linear.withUnsafeMutableBufferPointer { buf in
+            let px = HDRImageOps.Shared(buf)
+            let rows = 64
+            DispatchQueue.concurrentPerform(iterations: (height + rows - 1) / rows) { block in
+                let y0 = block * rows, y1 = min(height, y0 + rows)
+                for i in (y0 * width)..<(y1 * width) {
+                    let p = i * 4
+                    var r = max(px[p], 0) * gain, g = max(px[p + 1], 0) * gain, b = max(px[p + 2], 0) * gain
+                    let y = luminance(r, g, b)
+                    if y > knee {
+                        let s = shoulder(y, knee: knee, white: white) / y
+                        r *= s; g *= s; b *= s
                     }
+                    // Över 1 i någon kanal: avmätta mot luminansen tills den ryms.
+                    let mx = max(r, g, b)
+                    if mx > 1 {
+                        let ly = min(luminance(r, g, b), 1)
+                        let t = mx - ly > 1e-6 ? (1 - ly) / (mx - ly) : 0
+                        r = ly + (r - ly) * t; g = ly + (g - ly) * t; b = ly + (b - ly) * t
+                    }
+                    px[p] = HDRImageOps.toGamma(min(r, 1))
+                    px[p + 1] = HDRImageOps.toGamma(min(g, 1))
+                    px[p + 2] = HDRImageOps.toGamma(min(b, 1))
+                    px[p + 3] = 1
                 }
             }
         }
-        return (out, Info(gainEV: ev, medianLinear: Double(median), white: Double(white), priorEV: priorEV, dehazedFraction: dehazed))
+        return Info(gainEV: ev, medianLinear: Double(median), white: Double(white), priorEV: priorEV, dehazedFraction: dehazed)
     }
 
     /// Tar bort slöjan (strålningsslöja från glaset, ströljus i objektivet) i radiansen, linjärt:

@@ -254,11 +254,14 @@ struct PipelineTab: View {
                         }
 
                         Picker("Metod", selection: $settings.hdrMethod) {
-                            Text("Basram (mäklarstil, standard)").tag(HDREngine.Method.baseFrame.rawValue)
+                            Text("Radians (alla exponeringar, standard)").tag(HDREngine.Method.radiance.rawValue)
+                            Text("Basram (en exponering + högdagrar)").tag(HDREngine.Method.baseFrame.rawValue)
                             Text("Exposure fusion (Mertens)").tag(HDREngine.Method.fusion.rawValue)
                         }
                         .pickerStyle(.menu)
-                        Text("Basram: en ljus exponering som bas, bara klippta högdagrar hämtas ur mörkare exponeringar — jämnt ljusa tak och väggar utan fusionens skuggor. Fönstren hämtas ur den mörkaste exponeringen.")
+                        Text(settings.hdrMethodValue == .radiance
+                             ? "Radians: alla exponeringar slås ihop till en scenlinjär bild (som Lightrooms HDR-sammanslagning) med spökskydd för rörliga löv och gardiner, och tonsätts sedan. Rena fönster utan masker — window pull används inte."
+                             : "Basram: en ljus exponering som bas, bara klippta högdagrar hämtas ur mörkare exponeringar — jämnt ljusa tak och väggar utan fusionens skuggor. Fönstren hämtas ur den mörkaste exponeringen.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                         Toggle("Lätt skärpning av HDR-resultatet", isOn: $settings.hdrSharpenEnabled)

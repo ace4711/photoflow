@@ -79,14 +79,21 @@ nonisolated enum HDRAlignment {
         floating: RAWRenderer.RenderedImage,
         reference: RAWRenderer.RenderedImage,
         maxAlignDimension: Int = 800,
-        matchExposure: Bool = true
+        matchExposure: Bool = true,
+        linearInput: Bool = false
     ) throws -> CGPoint {
         guard floating.width == reference.width, floating.height == reference.height else {
             return .zero
         }
 
-        let floatingLuma = downscaledLuma(floating, maxDimension: maxAlignDimension)
-        let referenceLuma = downscaledLuma(reference, maxDimension: maxAlignDimension)
+        // Linjära ramar (radians): luma gammakodas efter nedskalningen, annars hamnar nästan hela
+        // bilden på några få 8-bitarsnivåer.
+        var floatingLuma = downscaledLuma(floating, maxDimension: maxAlignDimension)
+        var referenceLuma = downscaledLuma(reference, maxDimension: maxAlignDimension)
+        if linearInput {
+            floatingLuma.pixels = floatingLuma.pixels.map { HDRImageOps.toGamma($0) }
+            referenceLuma.pixels = referenceLuma.pixels.map { HDRImageOps.toGamma($0) }
+        }
         // Exponeringsmatchning före registreringen: den mörkaste ramen (fönsterkällan i window
         // pull) är ofta 3–5 EV mörkare än referensen, och Vision jämför då nästan svarta
         // väggar mot en ljus interiör — registreringen blev osäker eller misslyckades. Med

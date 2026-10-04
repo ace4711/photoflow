@@ -52,8 +52,8 @@ class AppSettings: ObservableObject {
     @AppStorage("hdrSharpenEnabled") var hdrSharpenEnabled: Bool = true
     /// Sammanslagningsmetod (Core Image-motorn): "base" = basram med högdageråtervinning
     /// (standard sedan HDREngine v6, `BaseFrameMerge`), "fusion" = Mertens exposure fusion.
-    @AppStorage("hdrMethod") var hdrMethod: String = HDREngine.Method.baseFrame.rawValue
-    var hdrMethodValue: HDREngine.Method { HDREngine.Method(rawValue: hdrMethod) ?? .baseFrame }
+    @AppStorage("hdrMethod") var hdrMethod: String = HDREngine.Method.radiance.rawValue
+    var hdrMethodValue: HDREngine.Method { HDREngine.Method(rawValue: hdrMethod) ?? .radiance }
     /// Window pull: fönsterutsikten tas från gruppens mörkaste exponering (se `WindowPull`).
     @AppStorage("hdrWindowPullEnabled") var hdrWindowPullEnabled: Bool = true
     /// Styrka i procent (0–100).

@@ -35,6 +35,8 @@ nonisolated struct HDRLog: Codable, Sendable, Equatable {
         /// Fönsterkällan (gruppens mörkaste exponering) om window pull kördes.
         var windowSource: String?
         var window: WindowPull.Stats?
+        /// Radians (HDREngine v7): exponeringskvoter, spökandel och tonsättning.
+        var radiance: HDREngine.RadianceStats?
         /// När filen senast skrevs om (nil för adopterade poster). "Förbättra bilder" gör om
         /// en förbättring som är äldre än så.
         var mergedAt: Date?
@@ -89,10 +91,10 @@ nonisolated struct HDRLog: Codable, Sendable, Equatable {
     /// Fingerprint av NEF-identiteten (namn + storlek — originalen skrivs aldrig till) och
     /// allt som ändrar HDR-resultatet.
     /// Metoden ingår bara när den är `fusion`: HDR gjorda med fusion före v6 saknar nyckeln och
-    /// ska inte göras om bara för att standarden blev basram — det styrs av motorversionen och
-    /// inställningen "Gör om befintliga HDR när motorn uppdaterats".
+    /// ska inte göras om bara för att standarden blev basram (v6) eller radians (v7) — det styrs av
+    /// motorversionen och inställningen "Gör om befintliga HDR när motorn uppdaterats".
     @MainActor static func fingerprint(identity: [URL], engine: String, maxDimension: Int, align: Bool, sharpen: Bool,
-                            windowPull: WindowPull.Options, method: HDREngine.Method = .baseFrame) -> String {
+                            windowPull: WindowPull.Options, method: HDREngine.Method = .radiance) -> String {
         var settings: [String: String] = [
             "engine": engine, "maxDimension": "\(maxDimension)", "align": "\(align)", "sharpen": "\(sharpen)"
         ]

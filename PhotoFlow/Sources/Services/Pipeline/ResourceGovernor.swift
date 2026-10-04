@@ -75,11 +75,22 @@ nonisolated enum ResourceGovernor {
     /// Taket 3: RAW-renderingen (`CIRAWFilter`, ~75 % av tiden i en grupp) skalar dåligt — med tre
     /// samtidiga grupper tar varje rendering ~2,3 gånger så lång tid — så fler grupper ger lite och
     /// konkurrerar med AI-taggningen som körs samtidigt.
-    static func hdrCost(maxDimension: Int) -> JobCost {
+    static func hdrCost(maxDimension: Int, method: HDREngine.Method = .baseFrame, frames: Int = 4) -> JobCost {
         let side = Double(maxDimension > 0 ? maxDimension : fullResolutionLongSide)
         let scale = max(0.1, (side / 6000) * (side / 6000))
-        return JobCost(memoryBytes: UInt64(Double(hdrBytesAt6000px) * scale), cores: 1.5, hardCap: 3)
+        var bytes = Double(hdrBytesAt6000px)
+        if method == .radiance {
+            // Radians håller alla ramar (inkl. gruppens mörkaste) i minnet samtidigt.
+            bytes = max(bytes, Double(radianceBaseBytesAt6000px) + Double(max(frames, 2)) * Double(radianceFrameBytesAt6000px))
+        }
+        return JobCost(memoryBytes: UInt64(bytes * scale), cores: 1.5, hardCap: 3)
     }
+
+    /// Radians (HDREngine v7) vid 6000 px: en linjär RGBA-ram i flyttal är 6000 × 4000 × 16 B ≈ 0,38 GB;
+    /// räknat med marginal 0,6 GB per ram (avkodning, registrering) plus ~2,5 GB för resultatet,
+    /// tonsättningen, skrivningen och appens andel (uppmätt, se docs/plan-hdr-fonster.md, radians).
+    static let radianceFrameBytesAt6000px: UInt64 = 600 << 20
+    static let radianceBaseBytesAt6000px: UInt64 = 5 * gigabyte / 2
 
     /// Kostnad för en förbättring (RAW-rendering eller HDR-TIFF + Core Image-kedjan).
     ///

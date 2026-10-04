@@ -29,12 +29,18 @@ nonisolated enum HDREngine {
     /// 6 = metoden "basram" (standard): en ljus exponering som bas med pixelvis
     /// högdageråtervinning i stället för Mertens-fusion (`BaseFrameMerge`), ramarna renderade
     /// utan RAW-kurva; fönstrets kärna ersätts helt i window pull.
-    static let version = 6
+    /// 7 = metoden "radians": alla exponeringar slås ihop till en scenlinjär radiansbild med
+    /// spökskydd (`RadianceMerge`) och tonsätts med `SceneLinearTone` — inga fönstermasker.
+    static let version = 7
 
-    /// Sammanslagningsmetod: "basram" (standard sedan v6) eller Mertens exposure fusion.
+    /// Sammanslagningsmetod: "radians" (standard sedan v7), "basram" (v6) eller Mertens exposure fusion.
     enum Method: String, Sendable, CaseIterable {
+        case radiance
         case baseFrame = "base"
         case fusion
+
+        /// Ramarna renderas linjärt (utan RAW-kurva).
+        var linearFrames: Bool { self != .fusion }
     }
 
     /// En exponering: RAW-filen (DNG eller NEF) och exponeringstiden i sekunder
@@ -55,8 +61,10 @@ nonisolated enum HDREngine {
         var sharpenEnabled: Bool = true
         /// Window pull: fönsterutsikten från den mörkaste exponeringen.
         var windowPull = WindowPull.Options()
-        var method: Method = .baseFrame
+        var method: Method = .radiance
         var baseFrame = BaseFrameMerge.Options()
+        var radiance = RadianceMerge.Options()
+        var tone = SceneLinearTone.Options()
         /// Var fönstermasken sparas (PNG, ~1500 px) — `nil` = sparas inte.
         var maskURL: URL?
         /// Felsökningsmapp: mask, mörkMatchad, fusion utan pull och `hdr_metrics.json`.
@@ -71,6 +79,17 @@ nonisolated enum HDREngine {
         var referenceFrame: URL
         var windowSource: URL?
         var window: WindowPull.Stats?
+        /// Radians: exponeringskvoter, spökandel och tonsättningen.
+        var radiance: RadianceStats?
+    }
+
+    /// Vad radianssammanslagningen gjorde — sparas i `hdr.json`.
+    struct RadianceStats: Codable, Sendable, Equatable {
+        /// Exponeringskvot per ram (mörkast först) relativt referensen, i EV.
+        var exposuresEV: [Double]
+        /// Andel av bilden där spökskyddet vägde ned någon ram.
+        var ghostFraction: Double
+        var tone: SceneLinearTone.Info
     }
 
     enum EngineError: LocalizedError {
@@ -153,7 +172,7 @@ nonisolated enum HDREngine {
 
         // Fönsterkällan: en fusionsram om den mörkaste redan ingår, annars en extra rendering.
         var pullSource: Frame?
-        if options.windowPull.enabled, let candidate = windowSource ?? frames.first {
+        if options.windowPull.enabled || options.method == .radiance, let candidate = windowSource ?? frames.first {
             let darkestFused = frames[0]
             if candidate.url == darkestFused.url || (candidate.exposureSeconds > 0 && darkestFused.exposureSeconds > 0
                                                       && candidate.exposureSeconds >= darkestFused.exposureSeconds) {
@@ -172,8 +191,11 @@ nonisolated enum HDREngine {
             try Task.checkCancellation()
             progress?(0.05 + 0.45 * Double(i) / Double(renderCount))
             rendered.append(try PipelineMetrics.phase("render", bytesIn: PipelineMetrics.totalSize(of: [url])) {
-                try RAWRenderer.render(url: url, whiteBalance: whiteBalance, maxDimension: options.maxDimension,
-                                       boostAmount: options.method == .baseFrame ? 0 : 1)
+                options.method == .radiance
+                    ? try RAWRenderer.render(url: url, whiteBalance: whiteBalance, maxDimension: options.maxDimension,
+                                             boostAmount: 0, shadowBias: 0, linearOutput: true)
+                    : try RAWRenderer.render(url: url, whiteBalance: whiteBalance, maxDimension: options.maxDimension,
+                                             boostAmount: options.method == .baseFrame ? 0 : 1)
             })
         }
 
@@ -183,6 +205,7 @@ nonisolated enum HDREngine {
             throw EngineError.sizeMismatch
         }
         let windowIndex: Int? = pullSource == nil ? nil : (extraWindowFrame ? rendered.count - 1 : 0)
+        let linearAlign = options.method == .radiance
 
         var darkShift: CGPoint?
         var appliedWindowShift: CGPoint?
@@ -194,7 +217,8 @@ nonisolated enum HDREngine {
                 try Task.checkCancellation()
                 let measured = try PipelineMetrics.phase("align") {
                     try HDRAlignment.computeShift(
-                        floating: rendered[i], reference: reference, maxAlignDimension: HDRAlignment.refinedAlignDimension
+                        floating: rendered[i], reference: reference, maxAlignDimension: HDRAlignment.refinedAlignDimension,
+                        linearInput: linearAlign
                     )
                 }
                 // Orimliga förskjutningar avvisas, små rundas till hela pixlar — se sanitizedShift.
@@ -214,7 +238,8 @@ nonisolated enum HDREngine {
                 if HDRAlignment.needsVerification(shift) {
                     let residual = try PipelineMetrics.phase("align.verify") {
                         try HDRAlignment.computeShift(floating: RAWRenderer.RenderedImage(width: width, height: height, pixels: shifted),
-                                                      reference: reference, maxAlignDimension: HDRAlignment.refinedAlignDimension)
+                                                      reference: reference, maxAlignDimension: HDRAlignment.refinedAlignDimension,
+                                                      linearInput: linearAlign)
                     }
                     if !HDRAlignment.verifiedShift(shift, residual: residual) {
                         if i == windowIndex { darkShiftRejected = true }
@@ -227,19 +252,51 @@ nonisolated enum HDREngine {
             // Felsökning: kvarvarande förskjutning för fönsterkällan efter justeringen.
             if options.debugDir != nil, let windowIndex, windowIndex != middleIndex {
                 let residual = try HDRAlignment.computeShift(floating: rendered[windowIndex], reference: reference,
-                                                             maxAlignDimension: HDRAlignment.refinedAlignDimension)
+                                                             maxAlignDimension: HDRAlignment.refinedAlignDimension,
+                                                             linearInput: linearAlign)
                 residualShift = residual
             }
         }
         progress?(0.55)
         try Task.checkCancellation()
 
-        let images = rendered.prefix(rawURLs.count).map(\.pixels)
+        var images = rendered.prefix(rawURLs.count).map(\.pixels)
         let fused: [Float]
-        // Referensen för window pull: medianexponeringen (båda metoderna).
-        let pullReference = rendered[middleIndex].pixels
+        // Referensen för window pull: medianexponeringen (basram och fusion; radians har ingen pull).
+        let pullReference = options.method == .radiance ? [] : rendered[middleIndex].pixels
         var referenceURL = rawURLs[middleIndex]
+        var radianceStats: RadianceStats?
+        var radianceGhost: ExposureFusion.Plane?
         switch options.method {
+        case .radiance:
+            // Alla renderade exponeringar mörkast först (en extra ram är gruppens mörkaste).
+            var ordered = Array(images)
+            var seconds = frames.map { Float($0.exposureSeconds) }
+            var reference = middleIndex
+            if extraWindowFrame, let last = rendered.last, let source = pullSource {
+                ordered.insert(last.pixels, at: 0)
+                seconds.insert(Float(source.exposureSeconds), at: 0)
+                reference += 1
+            }
+            // Ramarna finns nu bara i `ordered` — släpps direkt efter sammanslagningen (minnet).
+            rendered.removeAll()
+            images.removeAll()
+            var merged = PipelineMetrics.phase("radiance") {
+                RadianceMerge.merge(images: ordered, width: width, height: height, reference: reference,
+                                    fallbackExposures: seconds.allSatisfy { $0 > 0 } ? seconds : nil,
+                                    options: options.radiance, keepGhostMap: options.debugDir != nil)
+            }
+            ordered.removeAll()
+            progress?(0.75)
+            let toneInfo = PipelineMetrics.phase("tone") {
+                SceneLinearTone.applyInPlace(&merged.pixels, width: width, height: height, options: options.tone)
+            }
+            fused = merged.pixels
+            merged.pixels = []
+            radianceStats = RadianceStats(exposuresEV: merged.ratios.map { Double(log2($0)) }, ghostFraction: merged.ghostFraction,
+                                          tone: toneInfo)
+            radianceGhost = merged.ghostMap
+            progress?(0.85)
         case .fusion:
             fused = try ExposureFusion.fuse(images: Array(images), width: width, height: height) { fraction in
                 try Task.checkCancellation()
@@ -267,7 +324,7 @@ nonisolated enum HDREngine {
         var pulled = fused
         var windowStats: WindowPull.Stats?
         var pullResult: WindowPull.Result?
-        if let windowIndex {
+        if let windowIndex, options.method != .radiance, options.windowPull.enabled {
             // Basram: utsikten hämtas ur fönsterramen med RAW-filtrets vanliga tonkurva (som i
             // fusionen) — den linjära renderingen gav en platt, mjölkig utsikt. Samma förskjutning.
             var pullDark = rendered[windowIndex].pixels
@@ -306,6 +363,7 @@ nonisolated enum HDREngine {
                 }
             }
         } else if let maskURL = options.maskURL {
+            // Ingen fönstermask (radians, eller window pull av): en gammal mask får inte ligga kvar.
             try? FileManager.default.removeItem(at: maskURL)
         }
         progress?(0.9)
@@ -320,7 +378,17 @@ nonisolated enum HDREngine {
         try HDRWriter.write(pixels: finalPixels, width: width, height: height, tiffURL: tiffURL, jpegURL: jpegURL, jpegMaxDimension: options.jpegMaxDimension, jpegQuality: options.jpegQuality)
         progress?(0.95)
 
-        if let debugDir = options.debugDir {
+        if let debugDir = options.debugDir, options.method == .radiance {
+            let dir = debugDir.appendingPathComponent(tiffURL.deletingPathExtension().lastPathComponent, isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            if let ghost = radianceGhost { try? HDRImageOps.writeGrayPNG(ghost, to: dir.appendingPathComponent("ghost.png")) }
+            try? HDRImageOps.writeJPEG(fused, width: width, height: height, to: dir.appendingPathComponent("radiance.jpg"))
+            if let radianceStats {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                try? encoder.encode(radianceStats).write(to: dir.appendingPathComponent("radiance.json"))
+            }
+        } else if let debugDir = options.debugDir {
             try? writeDebug(to: debugDir, group: tiffURL.deletingPathExtension().lastPathComponent,
                             fused: fused, output: pulled, rendered: rendered, middleIndex: middleIndex, windowIndex: windowIndex,
                             width: width, height: height, pull: pullResult, frames: rawURLs, windowSource: pullSource?.url,
@@ -339,7 +407,8 @@ nonisolated enum HDREngine {
         }
         progress?(1.0)
         return MergeResult(metadataWritten: metadataWritten, orderedFrames: rawURLs, referenceFrame: referenceURL,
-                           windowSource: pullSource?.url, window: windowStats)
+                           windowSource: pullSource?.url, window: windowStats,
+                           radiance: radianceStats)
     }
 
     /// Felsökningsfiler per grupp i `<debugDir>/<grupp>/`: `mask.png`, `dark_matched.jpg`,

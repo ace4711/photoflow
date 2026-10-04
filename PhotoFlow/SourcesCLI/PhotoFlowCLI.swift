@@ -82,8 +82,9 @@ struct PhotoFlowCLI {
                              maklarstil eller en egen profils id). Standard: maklarstil.
           --upright on|off  Räta lodlinjer i förbättringen (standard on).
           --sky on|off      Syntetisk blå himmel i exteriörer, Mäklarstil (standard off).
-          --hdr-method base|fusion
-                            HDR-metod: basram med högdageråtervinning (standard) eller
+          --hdr-method radiance|base|fusion
+                            HDR-metod: radians (alla exponeringar, scenlinjärt, standard),
+                             basram med högdageråtervinning eller
                              Mertens exposure fusion.
           --window-pull on|off
                             Fönster från mörkaste exponeringen i HDR (standard on).
@@ -204,7 +205,7 @@ struct PhotoFlowCLI {
                 calendarMatchesPath = args[idx]
             case "--hdr-method":
                 idx += 1
-                guard idx < args.count, ["base", "fusion"].contains(args[idx]) else { fail("--hdr-method kräver base eller fusion") }
+                guard idx < args.count, HDREngine.Method(rawValue: args[idx]) != nil else { fail("--hdr-method kräver radiance, base eller fusion") }
                 hdrMethod = args[idx]
             case "--window-pull":
                 idx += 1
@@ -286,7 +287,7 @@ struct PhotoFlowCLI {
         // Window pull: standard på, 85 % (samma som appen) om inget anges — CLI:ns egen
         // UserDefaults-domän kan annars ha kvar värden från en tidigare körning.
         settings.hdrWindowPullEnabled = windowPull ?? true
-        settings.hdrMethod = hdrMethod ?? HDREngine.Method.baseFrame.rawValue
+        settings.hdrMethod = hdrMethod ?? HDREngine.Method.radiance.rawValue
         settings.hdrWindowPullStrength = windowStrength ?? 85
         PipelineRunner.hdrDebugEnabled = hdrDebug
         // Fas 1c: 0 = automatiskt (standard), 1 = allt i följd. Sätts alltid, så att ett värde från
