@@ -27,6 +27,9 @@ nonisolated struct EnhancementAnalysis: Codable, Sendable, Equatable {
     /// Fönstermaskens andel av bilden (viktad, 0…1) när en mask fanns (HDR med window pull).
     /// `nil` = ingen mask — statistiken gäller då hela bilden.
     var windowMaskFraction: Double?
+    /// Scenlinjär källa (Lightrooms HDR-DNG): exponering och vitpunkt i tonsättningen före
+    /// Mäklarstilen (`SceneLinearTone`). `nil` = vanlig källa.
+    var sceneLinear: SceneLinearTone.Info?
 }
 
 /// Automatisk förbättring av färdiga bilder (fastighetsfoto): analyserar en
@@ -100,10 +103,15 @@ nonisolated struct EnhancementAnalysis: Codable, Sendable, Equatable {
 /// - Blå himmel (`SkyReplacement`, valfri, av som standard): vit/grå himmel mot överkanten
 ///   byts mot en syntetisk blå gradient (andelen sparas som `skyFraction`).
 ///   Se `BrokerLook` och docs/plan-maklarstil.md ("v2").
+///
+/// ## Scenlinjära källor (version 5)
+/// - En linjär DNG (Lightrooms HDR-sammanslagning) renderas utan RAW-kurva och utan CIRAWFilters
+///   skuggförskjutning och tonsätts med `SceneLinearTone` före Mäklarstilen (exponering ur bildens
+///   statistik, högdagerskuldra, slöja bort i utsikten) — se `loadSource`. Övriga källor oförändrade.
 nonisolated enum EnhancementEngine {
     /// Höjs när algoritmen/renderingen ändras — del av fingerprintet så gamla
     /// förbättringar görs om.
-    static let version = 4
+    static let version = 5
 
     /// Fönstervarianten (se "Fönstermask"): andel av en positiv exponeringshöjning,
     /// lägsta högdagsdämpning och knät (linjärt) för den mjuka roll-offen.
@@ -683,21 +691,47 @@ nonisolated enum EnhancementEngine {
     }
 
     /// Läser `source` till en `CIImage` (sRGB-taggad).
-    static func loadImage(_ source: Source) throws -> CIImage {
+    static func loadImage(_ source: Source) throws -> CIImage { try loadSource(source).image }
+
+    /// En källa som lästs in: bilden och tonsättningen (scenlinjär källa).
+    struct LoadedSource {
+        var image: CIImage
+        var sceneLinear: SceneLinearTone.Info?
+    }
+
+    /// Som `loadImage`, plus tonsättningen när källan är scenlinjär (Förbättra v5): en linjär DNG
+    /// (Lightrooms HDR-sammanslagning, PhotometricInterpretation = LinearRaw) renderas utan
+    /// RAW-kurva och utan skuggförskjutning och tonsätts med `SceneLinearTone` (exponering ur
+    /// bildens statistik med BaselineExposure som prior, högdagerskuldra, slöja bort) — förut fick den
+    /// CIRAWFilters kurva och låg ~2 EV mörkt, och Mäklarstilens kurva lyfte brus och ett orange
+    /// stick ur skuggorna.
+    static func loadSource(_ source: Source) throws -> LoadedSource {
         switch source {
         case .image(let url):
             guard let image = CIImage(contentsOf: url, options: [.applyOrientationProperty: true]) else {
                 throw EngineError.cannotRead(url)
             }
-            return image
+            return LoadedSource(image: image)
         case .raw(let url, let maxDimension):
-            let rendered = try RAWRenderer.render(url: url, whiteBalance: nil, maxDimension: maxDimension)
+            var info: SceneLinearTone.Info?
+            var rendered: RAWRenderer.RenderedImage
+            if RAWRenderer.isSceneLinearDNG(url: url) {
+                rendered = try RAWRenderer.render(url: url, whiteBalance: nil, maxDimension: maxDimension,
+                                                  boostAmount: 0, shadowBias: 0, linearOutput: true)
+                let toned = SceneLinearTone.apply(linear: rendered.pixels, width: rendered.width, height: rendered.height,
+                                                  priorEV: RAWRenderer.baselineExposure(url: url))
+                rendered.pixels = toned.pixels
+                info = toned.info
+            } else {
+                rendered = try RAWRenderer.render(url: url, whiteBalance: nil, maxDimension: maxDimension)
+            }
             let data = rendered.pixels.withUnsafeBufferPointer { Data(buffer: $0) }
-            return CIImage(
+            let image = CIImage(
                 bitmapData: data, bytesPerRow: rendered.width * 16,
                 size: CGSize(width: rendered.width, height: rendered.height), format: .RGBAf,
                 colorSpace: CGColorSpace(name: CGColorSpace.sRGB)
             )
+            return LoadedSource(image: image, sceneLinear: info)
         }
     }
 
@@ -708,7 +742,8 @@ nonisolated enum EnhancementEngine {
     @concurrent
     static func enhance(_ request: Request) async throws -> Outcome {
         try Task.checkCancellation()
-        let source = try PipelineMetrics.phase("load", bytesIn: sourceSize(request.source)) { try loadImage(request.source) }
+        let loaded = try PipelineMetrics.phase("load", bytesIn: sourceSize(request.source)) { try loadSource(request.source) }
+        let source = loaded.image, sceneLinear = loaded.sceneLinear
         let context = makeContext()
 
         guard let small = PipelineMetrics.phase("decodeAndDownscale", { renderPixels(source, context: context, maxDimension: analysisMaxDimension) }) else {
@@ -722,12 +757,13 @@ nonisolated enum EnhancementEngine {
         let horizon = (request.profile.straighten && request.allowStraighten)
             ? await PipelineMetrics.phaseAsync("horizon") { await measureHorizon(pixels: small.pixels, width: small.width, height: small.height) }
             : nil
-        let (auto, analysis) = PipelineMetrics.phase("analysis") {
+        var (auto, analysis) = PipelineMetrics.phase("analysis") {
             automaticParameters(Input(
                 pixels: small.pixels, width: small.width, height: small.height,
                 horizonDegrees: horizon, alreadySharpened: request.alreadySharpened, mask: analysisMask
             ))
         }
+        analysis.sceneLinear = sceneLinear
         var final = request.profile.finalParameters(auto: auto)
         if request.profile.look == BrokerLook.profileLookID {
             final = BrokerLook.parameters(base: final, pixels: small.pixels, width: small.width, height: small.height,

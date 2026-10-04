@@ -1,6 +1,7 @@
 import Foundation
 import CoreImage
 import CoreGraphics
+import ImageIO
 
 /// Renders a single RAW file (DNG or NEF) to a linear-in-name-only, but
 /// actually display-referred, sRGB-gamma-encoded RGBA float32 buffer using
@@ -90,7 +91,9 @@ nonisolated enum RAWRenderer {
         url: URL,
         whiteBalance: WhiteBalance?,
         maxDimension: Int,
-        boostAmount: Float = 1.0
+        boostAmount: Float = 1.0,
+        shadowBias: Float? = nil,
+        linearOutput: Bool = false
     ) throws -> RenderedImage {
         guard let filter = CIRAWFilter(imageURL: url) else {
             throw RendererError.cannotOpenRAW(url)
@@ -116,20 +119,43 @@ nonisolated enum RAWRenderer {
         // HDR "basram" renders with 0 so the exposures are proportional in linear light.
         filter.boostAmount = boostAmount
         filter.extendedDynamicRangeAmount = 0
+        // Skuggförskjutningen (CIRAWFilter drar av ett svartvärde, 3 för NEF, 5 för Lightrooms
+        // flyttals-DNG) gör en linjär rendering olinjär i skuggorna och kan ge negativa kanaler:
+        // i LR:s HDR-DNG blev blå kanal < 0 i mörka partier → orange stick och krossade skuggor.
+        // Med 0 är LR-DNG:n exakt proportionell mot NEF-ramarna (uppmätt, samma färg i alla nivåer).
+        if let shadowBias { filter.shadowBias = shadowBias }
         if filter.isLensCorrectionSupported {
             filter.isLensCorrectionEnabled = true
         }
 
         let nativeSize = filter.nativeSize
+        var postScale: CGFloat = 1
         if maxDimension > 0 {
             let longSide = max(nativeSize.width, nativeSize.height)
             if longSide > CGFloat(maxDimension) {
-                filter.scaleFactor = Float(CGFloat(maxDimension) / longSide)
+                let scale = CGFloat(maxDimension) / longSide
+                // CIRAWFilter avkodar Lightrooms flyttals-DNG fel vid scaleFactor ≤ 0,5 (ett
+                // förstorat utsnitt i stället för hela bilden, uppmätt på HDR-DNG:erna; 0,727 och
+                // 1 är rätt) — för DNG avkodas då i 0,75 och skalas ned efteråt. NEF påverkas inte.
+                if scale < 0.6, url.pathExtension.lowercased() == "dng" {
+                    filter.scaleFactor = Float(minimumScaleFactor)
+                    postScale = scale / minimumScaleFactor
+                } else {
+                    filter.scaleFactor = Float(scale)
+                }
             }
         }
 
-        guard let outputImage = filter.outputImage else {
+        guard var outputImage = filter.outputImage else {
             throw RendererError.noOutputImage(url)
+        }
+        if postScale < 1 {
+            outputImage = outputImage.applyingFilter("CILanczosScaleTransform", parameters: [
+                kCIInputScaleKey: postScale, kCIInputAspectRatioKey: 1.0
+            ])
+            let e = outputImage.extent
+            outputImage = outputImage.transformed(by: CGAffineTransform(translationX: -e.minX, y: -e.minY))
+                .cropped(to: CGRect(x: 0, y: 0, width: floor(e.width), height: floor(e.height)))
         }
 
         let renderExtent = outputImage.extent
@@ -143,8 +169,9 @@ nonisolated enum RAWRenderer {
         // highlight headroom through the pipeline; the *destination* space of
         // the bitmap render below (sRGB) is what actually applies the gamma
         // encoding the fusion math needs.
+        // `linearOutput`: scenlinjära värden (extendedLinearSRGB, inget tak) för radianssammanslagningen.
         guard let workingSpace = CGColorSpace(name: CGColorSpace.extendedLinearSRGB),
-              let outputSpace = CGColorSpace(name: CGColorSpace.sRGB) else {
+              let outputSpace = CGColorSpace(name: linearOutput ? CGColorSpace.extendedLinearSRGB : CGColorSpace.sRGB) else {
             throw RendererError.renderFailed(url)
         }
         let context = CIContext(options: [.workingColorSpace: workingSpace])
@@ -163,6 +190,28 @@ nonisolated enum RAWRenderer {
         }
 
         return RenderedImage(width: width, height: height, pixels: pixels)
+    }
+
+    /// Minsta `scaleFactor` som CIRAWFilter får avkoda med (se `render`).
+    static let minimumScaleFactor: CGFloat = 0.75
+
+    /// Sant för en scenlinjär, redan demosaicerad DNG (PhotometricInterpretation = LinearRaw,
+    /// t.ex. Lightrooms HDR-/panoramasammanslagning): ingen tonkurva, ofta flera stopp mörk
+    /// (BaselineExposure +2…+2,5) — Förbättra tonsätter den med `SceneLinearTone`.
+    static func isSceneLinearDNG(url: URL) -> Bool {
+        guard url.pathExtension.lowercased() == "dng",
+              let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [String: Any],
+              let dng = props[kCGImagePropertyDNGDictionary as String] as? [String: Any] else { return false }
+        let photometric = (dng["PhotometricInterpretation"] as? NSNumber)?.intValue
+            ?? ((props[kCGImagePropertyTIFFDictionary as String] as? [String: Any])?["PhotometricInterpretation"] as? NSNumber)?.intValue
+        return photometric == 34892
+    }
+
+    /// DNG:ns BaselineExposure (EV), 0 om den saknas.
+    static func baselineExposure(url: URL) -> Double {
+        guard let filter = CIRAWFilter(imageURL: url) else { return 0 }
+        return Double(filter.baselineExposure)
     }
 
     /// Shifts an RGBA float image by `(dx, dy)` pixels using bilinear

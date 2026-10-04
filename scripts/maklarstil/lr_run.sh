@@ -11,7 +11,7 @@ export PY=${PY:-/private/tmp/claude-501/-Users-fredrik-Developer-photo-preproces
 export GRID=${GRID:-$HERE/grid4.py}
 mkdir -p "$B/lr-hdr/jamforelse"
 shopt -s nullglob nocaseglob
-for lr in "$B"/lr-hdr/*.dng; do
+for lr in "$B"/lr-hdr/*.dng "$B"/lr-hdr/src/*.dng; do
   n=$(basename "$lr")
   case "$n" in
     *905[1-4]*) del="$B/pilvinge/red/DSC_9053.JPG"; ours="$B/pilvinge/out-$OURS_LABEL/Osorterade FÖRBÄTTRADE/hdr_group_3_enh.tiff" ;;
