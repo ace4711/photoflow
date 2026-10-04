@@ -27,6 +27,7 @@
 		0DA02DBD56174A0784297599 /* PipelineRunner+Culling.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E415E22A558BC52CAA2A98E /* PipelineRunner+Culling.swift */; };
 		0E27EA59CF734D312A7CDE23 /* PipelineState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78FB5F4124C051FBCF5BAA73 /* PipelineState.swift */; };
 		0E36275775AEBFF86EB634B4 /* ReelRemoteState.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2B96CDC3A8B5DE770688817 /* ReelRemoteState.swift */; };
+		0E50515ADCE89C73C4D4E302 /* ResourceGovernor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09B47BC27882B3758FAD132 /* ResourceGovernor.swift */; };
 		0E932B2E3A045584EA686AF2 /* PipelineRunner+Relocate.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC50553079593BFD753FCA7A /* PipelineRunner+Relocate.swift */; };
 		0F6B2A6A185C80AEDD89611B /* PhotoItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81818FB45B057F04C0487565 /* PhotoItem.swift */; };
 		0F80E6F85550AF9B6387D636 /* ProcessCancellationBoxTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F5619320F3617DDF430B6C8 /* ProcessCancellationBoxTests.swift */; };
@@ -40,6 +41,7 @@
 		149BED252667E61DEF70E867 /* ReelTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82DA82609223D132AE596B80 /* ReelTimeline.swift */; };
 		16C90AED671A5389182B8CED /* FieldNoteBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C9C601A9BD9772BFB405246 /* FieldNoteBundle.swift */; };
 		16E4F2B124398CEDA374CDF1 /* PhotoDescriptionServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FFE0FA0AB9D91699FB3FE5C /* PhotoDescriptionServiceTests.swift */; };
+		1734CC1CA645E13978481071 /* PipelineRunner+Overlap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32B258E880659DF266524420 /* PipelineRunner+Overlap.swift */; };
 		174656081DFEADC83F0F77FD /* ObjektfilmConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = A69233A07ECE9D8B2F97ECC3 /* ObjektfilmConfig.swift */; };
 		18B335A21CF9526A0B5FF264 /* PipelineRunnerFieldNotesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 753AD375D184F1492B4E6A5E /* PipelineRunnerFieldNotesTests.swift */; };
 		1AFF966D2C5667ACE1F566E6 /* AITagsStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC882BFAAABBA22B86CEBFCB /* AITagsStoreTests.swift */; };
@@ -53,6 +55,7 @@
 		21E827738CD6D915967960CB /* ReelFilmListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AA78C5668CD04C90B856025 /* ReelFilmListView.swift */; };
 		220473BEF62812870BB7435C /* ShowReviewIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A0A7827D86EA12C4E5D679B /* ShowReviewIntent.swift */; };
 		224FC95A88E35A47D4DF444E /* example-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = 0FD18A61B9724ADC78082242 /* example-v1.json */; };
+		22A63D4B1BFE4D95B0D0150F /* OrderedParallel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01BDA3B6B8DC8DFDA9E57193 /* OrderedParallel.swift */; };
 		22B9C393978DBD2196A0A622 /* ObjektfilmConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = A69233A07ECE9D8B2F97ECC3 /* ObjektfilmConfig.swift */; };
 		23134ED041F475A5ACEF63B3 /* ReviewFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D988370053B2F239504C0EE9 /* ReviewFilter.swift */; };
 		2426E63F1EF24FE42444257F /* PipelineRunner+Metadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18FEAA9B84EC62BC44C9AEB6 /* PipelineRunner+Metadata.swift */; };
@@ -123,6 +126,7 @@
 		568133390BEFCB9706281CAF /* ExposureFusionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 978DD40E7E34CA9166DB1C9D /* ExposureFusionTests.swift */; };
 		574387D13632F5447C4A94A0 /* PhotoItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81818FB45B057F04C0487565 /* PhotoItem.swift */; };
 		5769A31F9F44841B25F54DDE /* timeline-vectors.json in Resources */ = {isa = PBXBuildFile; fileRef = 021B848F61D8295ECE12EB76 /* timeline-vectors.json */; };
+		57AED155B7486E8F965F53EC /* OrderedParallel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01BDA3B6B8DC8DFDA9E57193 /* OrderedParallel.swift */; };
 		57D2A984CB59C9E5C3C6BA2E /* PipelineRunnerCullSafetyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6654743264C7D9CD239497D /* PipelineRunnerCullSafetyTests.swift */; };
 		58270F09AD730A6401804A02 /* WindowPullMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A02F70B6B4D8ECBFAA932DFF /* WindowPullMetrics.swift */; };
 		58966C64E8FB2BC7A9681D24 /* PipelineStateLoggingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59790CA706990AC3AC474EB2 /* PipelineStateLoggingTests.swift */; };
@@ -141,6 +145,7 @@
 		6831F9C524D84D26C0A67446 /* AppSettingsCalendarNamesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ED048B0E21E2830A6817B4E /* AppSettingsCalendarNamesTests.swift */; };
 		68699E34360BE0D07D58EB95 /* PipelineRunnerLightroomTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 106C92FF5EFA871572809B65 /* PipelineRunnerLightroomTests.swift */; };
 		6929F60C15C14E43E138F4AA /* PhotoFlowFieldApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9194C289AA128559AB08EC6 /* PhotoFlowFieldApp.swift */; };
+		6967F046992B53DA22259633 /* ResourceGovernor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09B47BC27882B3758FAD132 /* ResourceGovernor.swift */; };
 		697AD790BAFB2EC4F9081715 /* AddressFolderLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5679D93E6E18C8F178CFC636 /* AddressFolderLayoutTests.swift */; };
 		6B1BE61674959138552BFE8C /* HDRImageOps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 701FB4D645D0284EBA3E75BA /* HDRImageOps.swift */; };
 		6BC71D8156DE0503F2CABA9E /* ReelUploadPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3949C70C7BA7535942D7E805 /* ReelUploadPlanner.swift */; };
@@ -338,6 +343,7 @@
 		F7D60C991BFFF8DFE2C8AF55 /* SessionVerifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = C980DE95A08AA0E1086E34B2 /* SessionVerifier.swift */; };
 		F8F289B627B89178C2F705E2 /* PhotoDescriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29BD20E600D143019797F30D /* PhotoDescriptionService.swift */; };
 		FA497D8851D429850EF87A22 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9CA38B372E1E952057138D8D /* Assets.xcassets */; };
+		FB530652870FE23ED15DA571 /* PipelineRunner+Overlap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32B258E880659DF266524420 /* PipelineRunner+Overlap.swift */; };
 		FB5B7BD738EC6D7B6EF4F95D /* ReviewFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C42C11F422C0DBD0466B798 /* ReviewFilterTests.swift */; };
 		FDAB8D9D1195911BC4878438 /* EnhancementEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5183565A389E58271C903BF /* EnhancementEngineTests.swift */; };
 		FEC5BFF1850289A0D6530DDC /* BracketGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80B78757C80052743BF6680B /* BracketGroup.swift */; };
@@ -355,6 +361,7 @@
 
 /* Begin PBXFileReference section */
 		01B8DD6E89E2EB246C06AA2F /* AppSettingsSDCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsSDCardTests.swift; sourceTree = "<group>"; };
+		01BDA3B6B8DC8DFDA9E57193 /* OrderedParallel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrderedParallel.swift; sourceTree = "<group>"; };
 		021B848F61D8295ECE12EB76 /* timeline-vectors.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "timeline-vectors.json"; sourceTree = "<group>"; };
 		0264E2771F1F365950FADCDE /* AppIntents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppIntents.framework; path = System/Library/Frameworks/AppIntents.framework; sourceTree = SDKROOT; };
 		04F7EB11531DBB10EA697354 /* PipelineRunner+Lightroom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+Lightroom.swift"; sourceTree = "<group>"; };
@@ -389,6 +396,7 @@
 		2A3FC2DB9406841FF32D7631 /* ReelWebVariantTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelWebVariantTests.swift; sourceTree = "<group>"; };
 		2C5178E7FDBFF282DF4C28EC /* ReelShareModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelShareModel.swift; sourceTree = "<group>"; };
 		2FB4B0BD9A6392975829D662 /* bracket3_subsec.expected.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = bracket3_subsec.expected.json; sourceTree = "<group>"; };
+		32B258E880659DF266524420 /* PipelineRunner+Overlap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+Overlap.swift"; sourceTree = "<group>"; };
 		34E6CD8744670D864F6EE6C3 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
 		34F9FCB4579FF92CB23EE797 /* ToolLocatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolLocatorTests.swift; sourceTree = "<group>"; };
 		35FBC4BAC7ED6F6C2846AB8F /* FieldNoteMatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldNoteMatcherTests.swift; sourceTree = "<group>"; };
@@ -536,6 +544,7 @@
 		BF76551DB89F2DEB9DAB95F2 /* ReelEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelEditorView.swift; sourceTree = "<group>"; };
 		BFB3593ABA79CEDA6F6A39B2 /* ReelServerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelServerClient.swift; sourceTree = "<group>"; };
 		BFD5B346502FAFFEF722B677 /* HDRWriterTIFFTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRWriterTIFFTests.swift; sourceTree = "<group>"; };
+		C09B47BC27882B3758FAD132 /* ResourceGovernor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceGovernor.swift; sourceTree = "<group>"; };
 		C0B3F0C52E9F93DB7285FCE3 /* PipelineRunner+SortFolders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+SortFolders.swift"; sourceTree = "<group>"; };
 		C0CB9F8F402094288E8307CB /* PipelineRunner+Brackets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+Brackets.swift"; sourceTree = "<group>"; };
 		C5394CD3AAAE982C026575E0 /* ReelEditorModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelEditorModelTests.swift; sourceTree = "<group>"; };
@@ -952,6 +961,7 @@
 		DACD201DC6D34DC5C53AE346 /* Pipeline */ = {
 			isa = PBXGroup;
 			children = (
+				01BDA3B6B8DC8DFDA9E57193 /* OrderedParallel.swift */,
 				E5DB3A99AD7128B30E2F8B89 /* PipelineRunner.swift */,
 				705897AC201BF6521922250B /* PipelineRunner+AddressCorrection.swift */,
 				EFE1925080EB1C0287843A6E /* PipelineRunner+AITagging.swift */,
@@ -965,11 +975,13 @@
 				04F7EB11531DBB10EA697354 /* PipelineRunner+Lightroom.swift */,
 				641FF12CDBCFCA494956CF3A /* PipelineRunner+LoadSession.swift */,
 				18FEAA9B84EC62BC44C9AEB6 /* PipelineRunner+Metadata.swift */,
+				32B258E880659DF266524420 /* PipelineRunner+Overlap.swift */,
 				D339827929C97F1ECCE40F1B /* PipelineRunner+Previews.swift */,
 				A54FC2F994160BC9F6653EE6 /* PipelineRunner+ReelProposal.swift */,
 				BC50553079593BFD753FCA7A /* PipelineRunner+Relocate.swift */,
 				C0B3F0C52E9F93DB7285FCE3 /* PipelineRunner+SortFolders.swift */,
 				786C7DA81AF1DAB9E76EF216 /* ProcessRunner.swift */,
+				C09B47BC27882B3758FAD132 /* ResourceGovernor.swift */,
 			);
 			path = Pipeline;
 			sourceTree = "<group>";
@@ -1239,6 +1251,7 @@
 				9A4636EA257ACAC3AE3AED76 /* NotesManager.swift in Sources */,
 				E3DB9F266C43C4FFCAE2F4BB /* NotificationService.swift in Sources */,
 				174656081DFEADC83F0F77FD /* ObjektfilmConfig.swift in Sources */,
+				57AED155B7486E8F965F53EC /* OrderedParallel.swift in Sources */,
 				6433623595769A45EA6F33F9 /* PhotoClustering.swift in Sources */,
 				08F872DBB621F74255E9CF94 /* PhotoDescriptionService.swift in Sources */,
 				2D48F62FB5E961246BC44080 /* PhotoFlowCLI.swift in Sources */,
@@ -1258,6 +1271,7 @@
 				B3F4F3DA9483683D56861784 /* PipelineRunner+Lightroom.swift in Sources */,
 				C23210B590F0A2FE542A28BD /* PipelineRunner+LoadSession.swift in Sources */,
 				D931380D5317BD2B8732208C /* PipelineRunner+Metadata.swift in Sources */,
+				FB530652870FE23ED15DA571 /* PipelineRunner+Overlap.swift in Sources */,
 				D84846F37D94E5BD4D6D33D3 /* PipelineRunner+Previews.swift in Sources */,
 				82A8C1A550A0564313342452 /* PipelineRunner+ReelProposal.swift in Sources */,
 				902725A0960C95FF454842A8 /* PipelineRunner+Relocate.swift in Sources */,
@@ -1285,6 +1299,7 @@
 				727650ECC301BAD8AAEEF284 /* ReelUploadPlanner.swift in Sources */,
 				0C9123D0C252617FCAA8388B /* ReelWebVariant.swift in Sources */,
 				6644CB7C5A4AAC4896B917B1 /* ReelWorkerController.swift in Sources */,
+				6967F046992B53DA22259633 /* ResourceGovernor.swift in Sources */,
 				3A633B3F9800CCB5051FFAE8 /* ReviewFilter.swift in Sources */,
 				28AFCCB40692181FE8BE5007 /* ReviewImageAnalysis.swift in Sources */,
 				C430019C7AC35FEEBBD62559 /* ReviewImageSelection.swift in Sources */,
@@ -1439,6 +1454,7 @@
 				356136488F9E61973450A2FB /* NotificationService.swift in Sources */,
 				22B9C393978DBD2196A0A622 /* ObjektfilmConfig.swift in Sources */,
 				7A9668ACCF8ECC390EFB1CA5 /* ObjektfilmSettingsTab.swift in Sources */,
+				22A63D4B1BFE4D95B0D0150F /* OrderedParallel.swift in Sources */,
 				061FB476DF9B0B33F673FA51 /* PhotoClustering.swift in Sources */,
 				F8F289B627B89178C2F705E2 /* PhotoDescriptionService.swift in Sources */,
 				D4E8B25EF56984E792860C17 /* PhotoFlowApp.swift in Sources */,
@@ -1459,6 +1475,7 @@
 				E7E42A0887D9258A3FCE7B8C /* PipelineRunner+Lightroom.swift in Sources */,
 				2C5BBA7F4AD7146E61BDC6A6 /* PipelineRunner+LoadSession.swift in Sources */,
 				2426E63F1EF24FE42444257F /* PipelineRunner+Metadata.swift in Sources */,
+				1734CC1CA645E13978481071 /* PipelineRunner+Overlap.swift in Sources */,
 				1C3E7FBDFF194E6627C3610B /* PipelineRunner+Previews.swift in Sources */,
 				DFF899E0BF8464B8FEEB1317 /* PipelineRunner+ReelProposal.swift in Sources */,
 				0E932B2E3A045584EA686AF2 /* PipelineRunner+Relocate.swift in Sources */,
@@ -1499,6 +1516,7 @@
 				6BC71D8156DE0503F2CABA9E /* ReelUploadPlanner.swift in Sources */,
 				F1F9FFB8315B1848A2075EFC /* ReelWebVariant.swift in Sources */,
 				F59EEB31AA3EF918E2598F9A /* ReelWorkerController.swift in Sources */,
+				0E50515ADCE89C73C4D4E302 /* ResourceGovernor.swift in Sources */,
 				23134ED041F475A5ACEF63B3 /* ReviewFilter.swift in Sources */,
 				7A9B7AFDDC326932C0A19252 /* ReviewImageAnalysis.swift in Sources */,
 				E5C047D2A9D448E4861C3241 /* ReviewImageOverlays.swift in Sources */,

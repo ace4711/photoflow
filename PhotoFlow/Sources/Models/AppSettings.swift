@@ -81,6 +81,10 @@ class AppSettings: ObservableObject {
     @AppStorage("reelProposalEnabled") var reelProposalEnabled: Bool = true
     @AppStorage("enhanceProfileID") var enhanceProfileID: String = EnhancementProfile.automaticID
     @AppStorage("detailedProgress") var detailedProgress: Bool = true
+    /// Fas 1c: högsta antal tunga jobb (HDR-grupper, förbättringar) som körs samtidigt, och om
+    /// AI-taggningen får köras samtidigt med HDR. 0 = automatiskt (`ResourceGovernor`: lämnar
+    /// 2 kärnor och 25 % av minnet fria, sänker vid minnestryck), 1 = allt i följd (felsökning).
+    @AppStorage("maxParallelism") var maxParallelism: Int = 0
     @AppStorage("calendarMatchEnabled") var calendarMatchEnabled: Bool = true
     /// DEPRECERAD läsväg (flera kalendrar): ersatt av `calendarNames` nedan,
     /// som stödjer att välja FLERA kalendrar samtidigt. Kvar bara som
