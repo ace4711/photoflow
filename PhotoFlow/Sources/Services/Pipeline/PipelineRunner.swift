@@ -308,31 +308,9 @@ class PipelineRunner: ObservableObject {
             }
             pipelineLog("<<< Kalendermatchning klar")
 
-            // Step: AI-tag photos + Vision-baserad kvalitetsanalys (Fas 3b)
-            try await checkCancellationAndWaitIfPaused()
-            pipelineLog(">>> Steg: AI-taggning / Vision-analys")
-            if AppSettings.shared.aiTaggingEnabled {
-                state.updateStep(.aiTagging, phase: .active)
-                try await runAITagging()
-                state.completeStep(.aiTagging, count: aiTagResults.count)
-            } else {
-                state.updateStep(.aiTagging, phase: .disabled)
-                state.appendStepLog(.aiTagging, "AI-taggning/Vision-analys avaktiverad i inställningar", type: .info)
-            }
-            pipelineLog("<<< AI-taggning / Vision-analys klar")
-
-            try await checkCancellationAndWaitIfPaused()
-            if hdrEnabled {
-                // Step: Merge HDR brackets. Startar om stegets klocka: kortet har
-                // stått som aktivt sedan bracket-analysen, och utan omstart hade
-                // previews, kalender och AI räknats in i HDR-tiden.
-                state.updateStep(.createHDR, phase: .active)
-                try await runHDRMerge()
-                state.completeStep(.createHDR)
-            } else {
-                state.updateStep(.createHDR, phase: .disabled)
-                state.appendStepLog(.createHDR, "HDR-merge avaktiverad i inställningar", type: .info)
-            }
+            // Steg: AI-taggning/Vision-analys och HDR. De beror inte på varandra (HDR läser bara
+            // DNG/NEF och bracket-grupperna), så fas 1c kör dem samtidigt — se PipelineRunner+Overlap.swift.
+            try await runAITaggingAndHDR(hdrEnabled: hdrEnabled)
 
             pipelineLog(">>> Steg: Laddar bracket-grupper")
             try await loadBracketGroups()

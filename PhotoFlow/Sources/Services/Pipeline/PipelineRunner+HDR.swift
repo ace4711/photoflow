@@ -225,75 +225,89 @@ extension PipelineRunner {
         state.updateStepProgress(.createHDR, processed: 0, total: groupsToMerge.count)
         if groupsToMerge.count < bracketGroups.count { state.markStepUntimed(.createHDR) }
 
-        for (idx, group) in groupsToMerge.enumerated() {
-            try await checkCancellationAndWaitIfPaused()
-            state.statusMessage = "\(engineLabel): grupp \(group.groupId) (\(idx + 1)/\(groupsToMerge.count))..."
-            state.currentFileIndex = idx
-            state.progress = Double(idx) / Double(groupsToMerge.count)
-            state.updateStepProgress(.createHDR, processed: idx, total: groupsToMerge.count)
+        // Fas 1c: flera grupper samtidigt (taket från `ResourceGovernor`, läst om före varje grupp
+        // så att minnestryck sänker det). Grupperna är oberoende och skriver var sin fil; allt efter
+        // en grupp (stämplar, hdr.json, loggrader, räknare) görs i gruppordning, som vid seriell körning.
+        let hdrLimit: () -> Int = engine == "opencv"
+            ? { 1 }
+            : liveConcurrencyLimit(label: "HDR", cost: ResourceGovernor.hdrCost(maxDimension: baseOptions.maxDimension))
+        var finished = 0
 
-            let inputCount = engine == "opencv" ? group.previewPaths.count : group.frames.count
-            state.appendLog("HDR grupp \(group.groupId): \(inputCount) bilder (\(engineLabel))...", type: .info)
+        try await OrderedParallel.run(
+            count: groupsToMerge.count,
+            limit: hdrLimit,
+            gate: { try await checkCancellationAndWaitIfPaused() },
+            isPaused: { [state] in state.isPaused },
+            prepare: { idx -> @Sendable () async throws -> HDRGroupOutcome in
+                let group = groupsToMerge[idx]
+                state.statusMessage = "\(engineLabel): grupp \(group.groupId) (\(idx + 1)/\(groupsToMerge.count))..."
+                state.currentFileIndex = idx
 
-            // Update detailed progress
-            state.currentMergeGroupId = group.groupId
-            state.currentMergeInputURLs = engine == "opencv"
-                ? group.previewPaths.map { URL(fileURLWithPath: $0) }
-                : group.frames.map(\.url)
-            state.currentMergeOutputURL = nil
+                let inputCount = engine == "opencv" ? group.previewPaths.count : group.frames.count
+                state.appendLog("HDR grupp \(group.groupId): \(inputCount) bilder (\(engineLabel))...", type: .info)
 
-            let outputPath = group.tiffURL.path
-            let previewPath = group.jpegURL.path
-            // TIFF:en byts in först när den är färdigskriven, så en misslyckad omgörning lämnar den gamla.
-            try? FileManager.default.createDirectory(at: group.tiffURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? FileManager.default.createDirectory(at: group.jpegURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                // Update detailed progress
+                state.currentMergeGroupId = group.groupId
+                state.currentMergeInputURLs = engine == "opencv"
+                    ? group.previewPaths.map { URL(fileURLWithPath: $0) }
+                    : group.frames.map(\.url)
+                state.currentMergeOutputURL = nil
 
-            let inputNames = (engine == "opencv" ? group.previewPaths.map { URL(fileURLWithPath: $0).lastPathComponent } : group.frames.map(\.url.lastPathComponent)).joined(separator: ", ")
-            let windowNote = group.windowSourceName.map { group.frameNames.contains($0) ? "" : ", fönster från \($0)" } ?? ""
-            state.appendStepLog(.createHDR, "HDR grupp \(group.groupId) (\(group.reason)): mergar \(inputCount) bilder (\(inputNames)\(windowNote))...")
-            var mergeResult: HDREngine.MergeResult?
+                let outputPath = group.tiffURL.path
+                // TIFF:en byts in först när den är färdigskriven, så en misslyckad omgörning lämnar den gamla.
+                try? FileManager.default.createDirectory(at: group.tiffURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? FileManager.default.createDirectory(at: group.jpegURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
-            let groupStarted = Date()
-            do {
+                let inputNames = (engine == "opencv" ? group.previewPaths.map { URL(fileURLWithPath: $0).lastPathComponent } : group.frames.map(\.url.lastPathComponent)).joined(separator: ", ")
+                let windowNote = group.windowSourceName.map { group.frameNames.contains($0) ? "" : ", fönster från \($0)" } ?? ""
+                state.appendStepLog(.createHDR, "HDR grupp \(group.groupId) (\(group.reason)): mergar \(inputCount) bilder (\(inputNames)\(windowNote))...")
+
                 if engine == "opencv" {
                     guard let python3Path else { throw PipelineError.toolNotFound("python3 med OpenCV saknas") }
-                    _ = try await runProcess(
-                        executablePath: python3Path,
-                        arguments: [scriptPath.path, outputPath] + group.previewPaths
-                    )
-                } else {
-                    let groupLabel = "Grupp \(idx + 1)/\(groupsToMerge.count)"
-                    let imageCount = group.frames.count + (group.windowSourceName.map { group.frameNames.contains($0) ? 0 : 1 } ?? 0)
-                    let state = self.state
-                    let reporter = HDRProgressReporter()
-                    let rawURLs = group.frames.map(\.url)
-                    let tiffURL = group.tiffURL
-                    let jpegURL = group.jpegURL
-                    // Sorteringen flyttar filerna till gruppens adressmapp (första bildens fotodatum);
-                    // ligger filen redan i en adressmapp gäller den. Okänt datum → okänd mapp: bara
-                    // EXIF nu, metadatasteget tar resten.
-                    let groupFolder = group.firstPhotoDate.map { addressFolderName(forPhotoDate: $0) }
-                    func fileMetadata(for url: URL) -> IPTCFileMetadata? {
-                        guard let folder = Self.addressFolderName(containing: url) ?? groupFolder else { return nil }
-                        return Self.creationMetadata(for: url, folderName: folder, context: metadataContext)
+                    let arguments = [scriptPath.path, outputPath] + group.previewPaths
+                    return { [self] in
+                        let started = Date()
+                        _ = try await self.runProcess(executablePath: python3Path, arguments: arguments)
+                        return HDRGroupOutcome(metadata: (nil, nil), result: nil, seconds: Date().timeIntervalSince(started))
                     }
-                    let metadata = (tiff: fileMetadata(for: tiffURL), jpeg: fileMetadata(for: jpegURL))
-                    var hdrOptions = baseOptions
-                    hdrOptions.maskURL = Self.hdrMaskURL(outputDir: outputDir, groupId: group.groupId)
-                    hdrOptions.debugDir = debugDir
-                    let frames = group.frames
-                    let windowSource = group.windowSource
+                }
+
+                let groupLabel = "Grupp \(idx + 1)/\(groupsToMerge.count)"
+                let imageCount = group.frames.count + (group.windowSourceName.map { group.frameNames.contains($0) ? 0 : 1 } ?? 0)
+                let state = self.state
+                let reporter = HDRProgressReporter()
+                let rawURLs = group.frames.map(\.url)
+                let tiffURL = group.tiffURL
+                let jpegURL = group.jpegURL
+                // Sorteringen flyttar filerna till gruppens adressmapp (första bildens fotodatum);
+                // ligger filen redan i en adressmapp gäller den. Okänt datum → okänd mapp: bara
+                // EXIF nu, metadatasteget tar resten.
+                let groupFolder = group.firstPhotoDate.map { addressFolderName(forPhotoDate: $0) }
+                func fileMetadata(for url: URL) -> IPTCFileMetadata? {
+                    guard let folder = Self.addressFolderName(containing: url) ?? groupFolder else { return nil }
+                    return Self.creationMetadata(for: url, folderName: folder, context: metadataContext)
+                }
+                let metadata = (tiff: fileMetadata(for: tiffURL), jpeg: fileMetadata(for: jpegURL))
+                var hdrOptions = baseOptions
+                hdrOptions.maskURL = Self.hdrMaskURL(outputDir: outputDir, groupId: group.groupId)
+                hdrOptions.debugDir = debugDir
+                let frames = group.frames
+                let windowSource = group.windowSource
+                let groupId = group.groupId
+                let options = hdrOptions
+                return {
+                    let started = Date()
                     let result = try await PipelineMetrics.jobAsync(
-                        step: "hdr", unit: "group:\(group.groupId)",
+                        step: "hdr", unit: "group:\(groupId)",
                         bytesIn: PipelineMetrics.totalSize(of: rawURLs),
                         bytesOut: { (_: HDREngine.MergeResult) in
-                            PipelineMetrics.totalSize(of: [URL(fileURLWithPath: outputPath), URL(fileURLWithPath: previewPath)])
+                            PipelineMetrics.totalSize(of: [tiffURL, jpegURL])
                         }
                     ) {
                         try await HDREngine.merge(
                             frames: frames,
                             windowSource: windowSource,
-                            options: hdrOptions,
+                            options: options,
                             tiffURL: tiffURL,
                             jpegURL: jpegURL,
                             exiftoolPath: exiftoolPath,
@@ -307,56 +321,70 @@ extension PipelineRunner {
                             }
                         )
                     }
-                    recordCreationStamps([(tiffURL, metadata.tiff), (jpegURL, metadata.jpeg)],
-                                         metadataWritten: result.metadataWritten, outputDir: outputDir)
-                    let rewroteSorted = Self.addressFolderName(containing: tiffURL) != nil || Self.addressFolderName(containing: jpegURL) != nil
-                    if rewroteSorted && (metadata.tiff == nil || metadata.jpeg == nil || !result.metadataWritten) {
-                        // En levererad fil skrevs om utan full metadata: metadatasteget måste köras igen.
-                        try? FileManager.default.removeItem(at: outputDir.appendingPathComponent("metadata_written.json"))
-                    }
-                    mergeResult = result
+                    return HDRGroupOutcome(metadata: metadata, result: result, seconds: Date().timeIntervalSince(started))
                 }
-
-                if FileManager.default.fileExists(atPath: outputPath) {
-                    hdrLog.entries[HDRLog.key(groupId: group.groupId)] = HDRLog.Entry(
-                        engineVersion: HDREngine.version, fingerprint: group.fingerprint, frames: group.frameNames,
-                        manualSelection: group.manualSelection,
-                        reference: mergeResult.map { $0.referenceFrame.deletingPathExtension().lastPathComponent + ".NEF" },
-                        windowSource: mergeResult?.windowSource == nil ? nil : group.windowSourceName,
-                        window: mergeResult?.window, mergedAt: Date(), seconds: Date().timeIntervalSince(groupStarted))
-                    hdrLog.updatedAt = Date()
-                    hdrLog.save(to: outputDir)
-                    if let window = mergeResult?.window {
-                        state.appendStepLog(.createHDR, window.applied
-                            ? String(format: "HDR grupp %d: fönster från mörkaste exponeringen (%.1f %% av bilden, gain %+.1f EV)", group.groupId, window.maskFraction * 100, window.gainEV)
-                            : "HDR grupp \(group.groupId): ingen window pull — \(window.reason ?? "inget att hämta")")
+            },
+            finish: { idx, outcome in
+                let group = groupsToMerge[idx]
+                let outputPath = group.tiffURL.path
+                let previewPath = group.jpegURL.path
+                switch outcome {
+                case .success(let outcome):
+                    let mergeResult = outcome.result
+                    if let result = mergeResult {
+                        let tiffURL = group.tiffURL, jpegURL = group.jpegURL, metadata = outcome.metadata
+                        recordCreationStamps([(tiffURL, metadata.tiff), (jpegURL, metadata.jpeg)],
+                                             metadataWritten: result.metadataWritten, outputDir: outputDir)
+                        let rewroteSorted = Self.addressFolderName(containing: tiffURL) != nil || Self.addressFolderName(containing: jpegURL) != nil
+                        if rewroteSorted && (metadata.tiff == nil || metadata.jpeg == nil || !result.metadataWritten) {
+                            // En levererad fil skrevs om utan full metadata: metadatasteget måste köras igen.
+                            try? FileManager.default.removeItem(at: outputDir.appendingPathComponent("metadata_written.json"))
+                        }
                     }
-                    successCount += 1
-                    let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputPath)[.size] as? Int) ?? 0
-                    let sizeMB = String(format: "%.1f", Double(fileSize) / 1_048_576.0)
-                    let took = StepTiming.formatExact(Date().timeIntervalSince(groupStarted))
-                    state.appendStepLog(.createHDR, "HDR grupp \(group.groupId): klar på \(took) → hdr_group_\(group.groupId).tiff (\(sizeMB) MB)", type: .success)
-                    state.appendLog("HDR \(idx + 1)/\(groupsToMerge.count) klar på \(took)", type: .success)
-                    // Show JPEG preview in UI
-                    let showURL = FileManager.default.fileExists(atPath: previewPath)
-                        ? URL(fileURLWithPath: previewPath)
-                        : URL(fileURLWithPath: outputPath)
-                    state.currentMergeOutputURL = showURL
-                    pipelineLog("  Grupp \(group.groupId): \(engineLabel) klar (16-bit TIFF)")
-                } else {
+
+                    if FileManager.default.fileExists(atPath: outputPath) {
+                        hdrLog.entries[HDRLog.key(groupId: group.groupId)] = HDRLog.Entry(
+                            engineVersion: HDREngine.version, fingerprint: group.fingerprint, frames: group.frameNames,
+                            manualSelection: group.manualSelection,
+                            reference: mergeResult.map { $0.referenceFrame.deletingPathExtension().lastPathComponent + ".NEF" },
+                            windowSource: mergeResult?.windowSource == nil ? nil : group.windowSourceName,
+                            window: mergeResult?.window, mergedAt: Date(), seconds: outcome.seconds)
+                        hdrLog.updatedAt = Date()
+                        hdrLog.save(to: outputDir)
+                        if let window = mergeResult?.window {
+                            state.appendStepLog(.createHDR, window.applied
+                                ? String(format: "HDR grupp %d: fönster från mörkaste exponeringen (%.1f %% av bilden, gain %+.1f EV)", group.groupId, window.maskFraction * 100, window.gainEV)
+                                : "HDR grupp \(group.groupId): ingen window pull — \(window.reason ?? "inget att hämta")")
+                        }
+                        successCount += 1
+                        let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputPath)[.size] as? Int) ?? 0
+                        let sizeMB = String(format: "%.1f", Double(fileSize) / 1_048_576.0)
+                        let took = StepTiming.formatExact(outcome.seconds)
+                        state.appendStepLog(.createHDR, "HDR grupp \(group.groupId): klar på \(took) → hdr_group_\(group.groupId).tiff (\(sizeMB) MB)", type: .success)
+                        state.appendLog("HDR \(idx + 1)/\(groupsToMerge.count) klar på \(took)", type: .success)
+                        // Show JPEG preview in UI
+                        let showURL = FileManager.default.fileExists(atPath: previewPath)
+                            ? URL(fileURLWithPath: previewPath)
+                            : URL(fileURLWithPath: outputPath)
+                        state.currentMergeOutputURL = showURL
+                        pipelineLog("  Grupp \(group.groupId): \(engineLabel) klar (16-bit TIFF)")
+                    } else {
+                        failCount += 1
+                        state.appendStepLog(.createHDR, "HDR grupp \(group.groupId): ingen output skapad", type: .error)
+                        pipelineLog("  Grupp \(group.groupId): Ingen output skapad.")
+                    }
+                case .failure(let error):
                     failCount += 1
-                    state.appendStepLog(.createHDR, "HDR grupp \(group.groupId): ingen output skapad", type: .error)
-                    pipelineLog("  Grupp \(group.groupId): Ingen output skapad.")
+                    state.appendStepLog(.createHDR, "HDR grupp \(group.groupId): misslyckades — \(error.localizedDescription)", type: .error)
+                    pipelineLog("  Grupp \(group.groupId): Fusion misslyckades: \(error.localizedDescription)")
                 }
-            } catch {
-                failCount += 1
-                state.appendStepLog(.createHDR, "HDR grupp \(group.groupId): misslyckades — \(error.localizedDescription)", type: .error)
-                pipelineLog("  Grupp \(group.groupId): Fusion misslyckades: \(error.localizedDescription)")
-            }
 
-            state.currentFileIndex = idx + 1
-            state.progress = Double(idx + 1) / Double(groupsToMerge.count)
-        }
+                finished += 1
+                state.currentFileIndex = finished
+                state.progress = Double(finished) / Double(groupsToMerge.count)
+                state.updateStepProgress(.createHDR, processed: finished, total: groupsToMerge.count)
+            }
+        )
 
         // Clear detailed progress
         state.currentMergeInputURLs = []

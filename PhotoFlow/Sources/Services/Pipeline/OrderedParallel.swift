@@ -88,7 +88,8 @@ enum OrderedParallel {
 /// Resultatet av en HDR-grupp i `runHDRMerge` (lämnas till `finish` i gruppordning).
 nonisolated struct HDRGroupOutcome: Sendable {
     var metadata: (tiff: IPTCFileMetadata?, jpeg: IPTCFileMetadata?)
-    var metadataWritten: Bool
+    /// nil för OpenCV-motorn.
+    var result: HDREngine.MergeResult?
     var seconds: Double
 }
 

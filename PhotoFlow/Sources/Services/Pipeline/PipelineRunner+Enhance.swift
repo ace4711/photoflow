@@ -301,47 +301,40 @@ extension PipelineRunner {
                            exiftoolPath: exiftoolPath, metadataContext: metadataContext)
         }
 
-        // RAW-rendering/Core Image-kedjan per bild är till stor del enkeltrådad, så några bilder körs
-        // samtidigt. Tre räcker: minnet är ~0,5 GB per bild. (HDR-TIFF:erna är okomprimerade sedan
-        // fas 1a, så avkodningen är försumbar; tidigare LZW kostade ~0,3 s per bild.)
-        let maxConcurrent = min(3, max(1, ProcessInfo.processInfo.activeProcessorCount / 3))
-        try await withThrowingTaskGroup(of: (Int, Result<EnhancementEngine.Outcome, Error>, Double).self) { @MainActor group in
-            var next = 0
-            var running = 0
-            @MainActor func launchNext() async throws {
-                try await checkCancellationAndWaitIfPaused()
-                let idx = next
-                next += 1
-                running += 1
+        // RAW-rendering/Core Image-kedjan per bild är till stor del enkeltrådad (och delvis GPU-bunden),
+        // så flera bilder körs samtidigt. Fas 1c: taket kommer från `ResourceGovernor` (kärnor, minne,
+        // minnestryck, inställningen `maxParallelism`) i stället för fasta 3, och resultaten lämnas i
+        // jobbordning så att loggen och `enhancement.json` skrivs som vid seriell körning.
+        let enhanceLimit = liveConcurrencyLimit(label: "Förbättra", cost: ResourceGovernor.enhanceCost(maxDimension: settings.hdrMaxDimension))
+        try await OrderedParallel.run(
+            count: pending.count,
+            limit: enhanceLimit,
+            gate: { try await checkCancellationAndWaitIfPaused() },
+            isPaused: { [state] in state.isPaused },
+            prepare: { idx -> @Sendable () async throws -> EnhanceJobOutcome in
                 let job = pending[idx]
                 let req = request(for: job)
                 state.statusMessage = "Förbättrar \(job.label) (\(idx + 1)/\(pending.count))..."
                 state.currentFileIndex = idx
-                group.addTask {
+                return {
                     let started = Date()
-                    do {
-                        let outcome = try await PipelineMetrics.jobAsync(
-                            step: "enhance", unit: job.key,
-                            bytesIn: PipelineMetrics.totalSize(of: [job.source]),
-                            bytesOut: { (_: EnhancementEngine.Outcome) in PipelineMetrics.totalSize(of: [req.tiffURL, req.jpegURL]) }
-                        ) {
-                            try await EnhancementEngine.enhance(req)
-                        }
-                        return (idx, .success(outcome), Date().timeIntervalSince(started))
-                    } catch is CancellationError {
-                        throw CancellationError()
-                    } catch {
-                        return (idx, .failure(error), Date().timeIntervalSince(started))
+                    let outcome = try await PipelineMetrics.jobAsync(
+                        step: "enhance", unit: job.key,
+                        bytesIn: PipelineMetrics.totalSize(of: [job.source]),
+                        bytesOut: { (_: EnhancementEngine.Outcome) in PipelineMetrics.totalSize(of: [req.tiffURL, req.jpegURL]) }
+                    ) {
+                        try await EnhancementEngine.enhance(req)
                     }
+                    return EnhanceJobOutcome(outcome: outcome, seconds: Date().timeIntervalSince(started))
                 }
-            }
-            while next < pending.count && running < maxConcurrent { try await launchNext() }
-            while let (idx, result, seconds) = try await group.next() {
-                running -= 1
+            },
+            finish: { idx, result in
                 finished += 1
                 let job = pending[idx]
                 switch result {
-                case .success(let outcome):
+                case .success(let jobOutcome):
+                    let outcome = jobOutcome.outcome
+                    let seconds = jobOutcome.seconds
                     let req = request(for: job)
                     recordCreationStamps([(req.tiffURL, req.tiffMetadata), (req.jpegURL, req.jpegMetadata)],
                                          metadataWritten: outcome.metadataWritten, outputDir: outputDir)
@@ -365,9 +358,8 @@ extension PipelineRunner {
                 }
                 state.progress = Double(finished) / Double(pending.count)
                 state.updateStepProgress(.enhancePhotos, processed: finished, total: pending.count)
-                if next < pending.count { try await launchNext() }
             }
-        }
+        )
 
         state.progress = 1.0
         logDecision(step: "enhance", decision: "done", details: [
