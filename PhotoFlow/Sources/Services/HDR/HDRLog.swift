@@ -88,11 +88,15 @@ nonisolated struct HDRLog: Codable, Sendable, Equatable {
 
     /// Fingerprint av NEF-identiteten (namn + storlek — originalen skrivs aldrig till) och
     /// allt som ändrar HDR-resultatet.
+    /// Metoden ingår bara när den är `fusion`: HDR gjorda med fusion före v6 saknar nyckeln och
+    /// ska inte göras om bara för att standarden blev basram — det styrs av motorversionen och
+    /// inställningen "Gör om befintliga HDR när motorn uppdaterats".
     @MainActor static func fingerprint(identity: [URL], engine: String, maxDimension: Int, align: Bool, sharpen: Bool,
-                            windowPull: WindowPull.Options) -> String {
+                            windowPull: WindowPull.Options, method: HDREngine.Method = .baseFrame) -> String {
         var settings: [String: String] = [
             "engine": engine, "maxDimension": "\(maxDimension)", "align": "\(align)", "sharpen": "\(sharpen)"
         ]
+        if engine != "opencv", method == .fusion { settings["method"] = method.rawValue }
         if engine != "opencv" {
             settings["windowPull"] = windowPull.enabled
                 ? String(format: "on s=%.2f b=%.2f", windowPull.strength, windowPull.brightnessEV)

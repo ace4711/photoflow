@@ -55,10 +55,10 @@ nonisolated enum BrokerLook {
     static let curveStrength = 1.0
     /// Fönsterkurvans andel av vägen mot målet: leveransernas utsikt är ljus (median ≈ 0,86,
     /// ~1,08 × väggarna), se planen.
-    static let windowStrength = 0.7
-    /// Förbättra v4: ingen extra avmättning i fönstret — leveransernas utsikt är ren och mättad
-    /// (krominans 8,2 mot vår 5,8 med × 0,8, träningsmängden), som genom ett rent glas.
-    static let windowSaturation = 1.0
+    static let windowStrength = 0.35
+    /// Förbättra v4: utsikten mättare än resten (× 1,5 × 0,8 = 1,2 mot neutral rendering) —
+    /// leveransernas utsikt är ren, mörkgrön och mättad (krominans 8,2 mot vår 5,8 med × 0,8).
+    static let windowSaturation = 1.5
     /// Kontrastpressning kring fönstrets median: prövad (× 0,8 gav lägre ΔE i fönstret) men
     /// förkastad efter visuell granskning — utsikten ska ha naturlig kontrast. 1 = av.
     static let windowContrast = 1.0

@@ -89,7 +89,8 @@ nonisolated enum RAWRenderer {
     static func render(
         url: URL,
         whiteBalance: WhiteBalance?,
-        maxDimension: Int
+        maxDimension: Int,
+        boostAmount: Float = 1.0
     ) throws -> RenderedImage {
         guard let filter = CIRAWFilter(imageURL: url) else {
             throw RendererError.cannotOpenRAW(url)
@@ -111,7 +112,9 @@ nonisolated enum RAWRenderer {
             filter.neutralTint = whiteBalance.tint
         }
         filter.exposure = 0
-        filter.boostAmount = 1.0 // full global tone curve, explicit rather than relying on the (image-dependent) default
+        // Full global tone curve (1, explicit rather than relying on the image-dependent default);
+        // HDR "basram" renders with 0 so the exposures are proportional in linear light.
+        filter.boostAmount = boostAmount
         filter.extendedDynamicRangeAmount = 0
         if filter.isLensCorrectionSupported {
             filter.isLensCorrectionEnabled = true

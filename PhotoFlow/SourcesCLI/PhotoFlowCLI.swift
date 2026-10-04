@@ -78,6 +78,9 @@ struct PhotoFlowCLI {
                             Stilprofil för "Förbättra bilder" (auto, neutral, warm-bright,
                              maklarstil eller en egen profils id). Standard: maklarstil.
           --upright on|off  Räta lodlinjer i förbättringen (standard on).
+          --hdr-method base|fusion
+                            HDR-metod: basram med högdageråtervinning (standard) eller
+                             Mertens exposure fusion.
           --window-pull on|off
                             Fönster från mörkaste exponeringen i HDR (standard on).
           --window-strength <N>
@@ -159,6 +162,7 @@ struct PhotoFlowCLI {
         var jsonOutput = false
         var calendarMatchesPath: String?
         var windowPull: Bool?
+        var hdrMethod: String?
         var windowStrength: Double?
         var hdrDebug = false
         var maxParallel: Int?
@@ -193,6 +197,10 @@ struct PhotoFlowCLI {
                 idx += 1
                 guard idx < args.count else { fail("--calendar-matches kräver ett värde") }
                 calendarMatchesPath = args[idx]
+            case "--hdr-method":
+                idx += 1
+                guard idx < args.count, ["base", "fusion"].contains(args[idx]) else { fail("--hdr-method kräver base eller fusion") }
+                hdrMethod = args[idx]
             case "--window-pull":
                 idx += 1
                 guard idx < args.count, ["on", "off"].contains(args[idx]) else { fail("--window-pull kräver on eller off") }
@@ -269,6 +277,7 @@ struct PhotoFlowCLI {
         // Window pull: standard på, 85 % (samma som appen) om inget anges — CLI:ns egen
         // UserDefaults-domän kan annars ha kvar värden från en tidigare körning.
         settings.hdrWindowPullEnabled = windowPull ?? true
+        settings.hdrMethod = hdrMethod ?? HDREngine.Method.baseFrame.rawValue
         settings.hdrWindowPullStrength = windowStrength ?? 85
         PipelineRunner.hdrDebugEnabled = hdrDebug
         // Fas 1c: 0 = automatiskt (standard), 1 = allt i följd. Sätts alltid, så att ett värde från
@@ -289,7 +298,7 @@ struct PhotoFlowCLI {
         print("PhotoFlow CLI — startar pipeline")
         print("  input:  \(inputURL.path)")
         print("  output: \(outputURL.path)")
-        print("  window pull: \(settings.hdrWindowPullEnabled ? "på (\(Int(settings.hdrWindowPullStrength)) %)" : "av")\(hdrDebug ? ", HDR-felsökning på" : "")")
+        print("  HDR-metod: \(settings.hdrMethod), window pull: \(settings.hdrWindowPullEnabled ? "på (\(Int(settings.hdrWindowPullStrength)) %)" : "av")\(hdrDebug ? ", HDR-felsökning på" : "")")
         print("  HDR: \(settings.hdrMergeEnabled ? "på" : "av"), kalender: \(settings.calendarMatchEnabled ? "på" : "av"), AI-taggning: \(settings.aiTaggingEnabled ? "på" : "av"), förbättra bilder: \(settings.enhanceEnabled ? "på (profil \(settings.enhanceProfileID), lodlinjer \(settings.enhanceUprightEnabled ? "på" : "av"))" : "av"), filmförslag: \(settings.reelProposalEnabled ? "på" : "av"), samtidiga jobb: \(settings.maxParallelism == 0 ? "automatiskt" : "\(settings.maxParallelism)")")
 
         let state = PipelineState()

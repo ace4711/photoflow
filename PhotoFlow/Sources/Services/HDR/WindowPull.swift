@@ -48,7 +48,9 @@ nonisolated enum WindowPull {
         /// p99-tak (≤ 0,97) gav i praktiken bara +0,1 EV: p99 i utsikten ligger nästan alltid vid
         /// 0,94–0,95 (nästan vit himmel), så taket band i 14 av 22 grupper. Uppmätt 2026-10-04,
         /// se docs/plan-hdr-fonster.md ("Ljusare utsikt").
-        var targetMedian: Float = 0.72
+        /// HDREngine v6: 0,62 — leveransernas utsikt är klar och mörkare (ungefär väggarnas
+        /// ljushet före Förbättra eller något under), inte ljus och blek.
+        var targetMedian: Float = 0.62
         /// Högsta tillåtna p99 (max-kanal, gammakodad) i masken efter gain men *före*
         /// högdagerskuldran — får vara över 1: skuldran komprimerar toppen mjukt.
         var maxP99: Float = 1.12
@@ -66,6 +68,9 @@ nonisolated enum WindowPull {
         var guidedEps: Float = 1e-2
         /// Dilatation efter guided filter (px vid 6000 px långsida).
         var dilatePixels: Double = 1.5
+        /// Kärnan = detekteringen krympt så här mycket (px vid 6000 px långsida); där är masken 1
+        /// och styrkan full vid standardstyrkan (HDREngine v6).
+        var coreErodePixels: Double = 6
         /// Längsta avstånd (px vid 6000 px långsida) som masken får sprida sig utanför
         /// den detekterade ytan.
         var maxSpreadPixels: Double = 4
@@ -92,8 +97,20 @@ nonisolated enum WindowPull {
         /// Ett slätt delområde (minst `glowMinFraction` av bilden) som når komponentens kant
         /// där mörka ramen saknar kanter (andel kantpixlar < `glowMaxEdgeFraction`) är ljusfall
         /// — fönster avgränsas av karmar, ljusfall av en isolinje — och tas bort ur masken.
-        var glowMinFraction: Double = 0.0015
+        var glowMinFraction: Double = 0.0005
+        /// Rutfyllnad (HDREngine v6): komponentens konvexa hölje fylls där scenluminansen är minst
+        /// `paneMinScene` × interiörens median (mörka föremål framför fönstret lämnas), om höljet
+        /// högst är `paneMaxHullRatio` × komponentens yta.
+        var paneFill = true
+        var paneMinScene: Float = 0.5
+        var paneMaxHullRatio: Double = 8
         var glowMaxEdgeFraction: Double = 0.3
+        /// Ett slätt delområde vars scenluminans (median) är under så här många gånger
+        /// interiörens median är en solbelyst vägg, inte himmel, och tas bort (HDREngine v6).
+        var wallMaxScene: Float = 8
+        /// Gräns för planhet (medel |Laplace| vid 1500 px) i ljusfalls-/väggtestet: vägg med
+        /// ljusfall 0,005, himmel ≤ 0,003, lövverk 0,02–0,2.
+        var flatLaplacian: Float = 0.01
         /// Gradient (gammaluma per pixel vid 1500 px) som räknas som kant.
         var edgeGradient: Float = 0.02
 
@@ -124,6 +141,8 @@ nonisolated enum WindowPull {
         var darkToReferenceEV: Double = 0
         /// Gain som lades på den mörka ramen, i EV.
         var gainEV: Double = 0
+        /// Andel av bilden där slöjan i fönsterrutor togs bort (`dehazeWindows`).
+        var dehazedFraction: Double = 0
         /// Andel av masken som spökskyddet drog in.
         var ghostFraction: Double = 0
         var seconds: Double = 0
@@ -218,6 +237,12 @@ nonisolated enum WindowPull {
         var fullMask = Plane(width: width, height: height, data: mask)
         let dilateRadius = max(1, Int((options.dilatePixels * Double(longSide) / 6000).rounded()))
         fullMask = HDRImageOps.morph(fullMask, radius: dilateRadius, dilate: true)
+        // Kärnan (detekteringen krympt `coreErodePixels`): helt 1 i masken — guided filter
+        // sänkte annars masken i mörka partier av utsikten (träd), så fusionens slöja syntes där.
+        let coreG = HDRImageOps.morph(Plane(width: g.width, height: g.height, data: maskG.data.map { $0 >= 0.5 ? 1 : 0 }),
+                                      radius: max(1, Int((options.coreErodePixels * Double(longSide) / 6000 / factor).rounded())), dilate: false)
+        let core = HDRImageOps.bilinear(coreG, toWidth: width, toHeight: height)
+        for i in 0..<fullMask.data.count where core.data[i] > fullMask.data[i] { fullMask.data[i] = core.data[i] }
 
         // 3. Spökskydd i bandet kring maskkanten (på guideupplösningen).
         let ghost = ghostMap(reference: refG, dark: darkG, mask: maskG, ratio: detection.ratio,
@@ -243,17 +268,20 @@ nonisolated enum WindowPull {
 
         // 5. Blandning.
         let strength = min(max(options.strength, 0), 1)
+        // I kärnan ersätts utsikten helt vid standardstyrkan (85 %); lägre styrka skalar ned.
+        let coreStrength = min(strength / 0.85, 1)
         var out = fused
         var maskCount = 0
         for v in fullMask.data where v >= 0.5 { maskCount += 1 }
         out.withUnsafeMutableBufferPointer { oBuf in
             dark.withUnsafeBufferPointer { dBuf in
                 fullMask.data.withUnsafeBufferPointer { mBuf in
-                    let o = HDRImageOps.Shared(oBuf), d = HDRImageOps.Shared(dBuf), m = HDRImageOps.Shared(mBuf)
+                  core.data.withUnsafeBufferPointer { cBuf in
+                    let o = HDRImageOps.Shared(oBuf), d = HDRImageOps.Shared(dBuf), m = HDRImageOps.Shared(mBuf), k = HDRImageOps.Shared(cBuf)
                     DispatchQueue.concurrentPerform(iterations: height) { y in
                         for x in 0..<width {
                             let p = y * width + x
-                            let w = m[p] * strength
+                            let w = m[p] * (strength + (coreStrength - strength) * min(max(k[p], 0), 1))
                             guard w > 1e-4 else { continue }
                             for c in 0..<3 {
                                 let matched = matchedValue(d[p * 4 + c], gain: gain, options: options)
@@ -261,6 +289,7 @@ nonisolated enum WindowPull {
                             }
                         }
                     }
+                  }
                 }
             }
         }
@@ -305,6 +334,89 @@ nonisolated enum WindowPull {
             }
         }
         return out
+    }
+
+    // MARK: - Slöja i fönsterrutor (HDREngine v6)
+
+    /// Rutor (andelar x0, y0, x1, y1) runt fönsterkomponenterna, utvidgade `margin` — där
+    /// `dehazeWindows` får verka.
+    /// Rutan växer med en fjärdedel av sin egen storlek plus `margin` åt varje håll: den
+    /// detekterade (klippta) delen täcker ofta bara en kant av rutan; släta väggar skyddas av
+    /// strukturkravet i `dehazeWindows`.
+    static func windowBoxes(_ components: [ComponentInfo], margin: Double = 0.02) -> [[Double]] {
+        components.filter { $0.verdict == "fönster" && $0.box.count == 4 }.map { c in
+            let mx = 0.25 * (c.box[2] - c.box[0]) + margin, my = 0.25 * (c.box[3] - c.box[1]) + margin
+            return [max(0, c.box[0] - mx), max(0, c.box[1] - my), min(1, c.box[2] + mx), min(1, c.box[3] + my)]
+        }
+    }
+
+    /// Tar bort slöjan (strålningsslöja från ljust glas, lyfta svarta) i utsikter som inte var
+    /// klippta i referensen och därför inte drogs in — t.ex. träd som är lika ljusa som väggen.
+    /// Mörka kanalens prior: slöjan V = lokalt minimum av min-kanalen (kantbevarande utjämnat),
+    /// bara där det finns struktur (lokal std) och en tydlig slöja, och bara inom `boxes` —
+    /// utanför fönstren skulle släta vita ytor med fogar (kakel) mörkna. `ut = (in − V)/(1 − V)`.
+    /// `weight` = verkansgraden (0…1, ~`detectDimension` px), för felsökning. (Att lägga in den i
+    /// fönstermasken prövades: den mjuka vikten spillde över karmarna, som då mörknade i Förbättra.)
+    static func dehazeWindows(_ pixels: [Float], width: Int, height: Int, boxes: [[Double]],
+                              detectDimension: Int = 1500) -> (pixels: [Float], fraction: Double, weight: Plane?) {
+        guard !boxes.isEmpty else { return (pixels, 0, nil) }
+        let s = HDRImageOps.scaledSize(width: width, height: height, maxDimension: detectDimension)
+        let small = HDRImageOps.scaleRGBA(pixels, width: width, height: height, toWidth: s.width, toHeight: s.height)
+        let n = s.width * s.height
+        var minC = [Float](repeating: 0, count: n), luma = [Float](repeating: 0, count: n), lumaSq = [Float](repeating: 0, count: n)
+        for i in 0..<n {
+            minC[i] = min(small[i * 4], small[i * 4 + 1], small[i * 4 + 2])
+            luma[i] = HDRImageOps.luma(small[i * 4], small[i * 4 + 1], small[i * 4 + 2])
+            lumaSq[i] = luma[i] * luma[i]
+        }
+        let scale = Double(max(s.width, s.height)) / 1600
+        let patch = max(2, Int((7 * scale).rounded()))
+        let dark = HDRImageOps.morph(Plane(width: s.width, height: s.height, data: minC), radius: patch, dilate: false)
+        let guide = Plane(width: s.width, height: s.height, data: luma)
+        let coeffs = HDRImageOps.guidedCoefficients(guide: guide, input: dark, radius: patch * 2, eps: 1e-3)
+        let mean = HDRImageOps.boxMean(guide, radius: patch)
+        let meanSq = HDRImageOps.boxMean(Plane(width: s.width, height: s.height, data: lumaSq), radius: patch)
+        var q = [Float](repeating: 0, count: n), veil = [Float](repeating: 0, count: n)
+        for y in 0..<s.height {
+            let fy = (Double(y) + 0.5) / Double(s.height)
+            for x in 0..<s.width {
+                let fx = (Double(x) + 0.5) / Double(s.width)
+                guard boxes.contains(where: { fx >= $0[0] && fx <= $0[2] && fy >= $0[1] && fy <= $0[3] }) else { continue }
+                let i = y * s.width + x
+                let v = min(max(coeffs.a.data[i] * luma[i] + coeffs.b.data[i], 0), 0.95)
+                let sd = max(meanSq.data[i] - mean.data[i] * mean.data[i], 0).squareRoot()
+                let texture = min(max((sd - 0.03) / 0.04, 0), 1)
+                let strong = min(max((v - 0.12) / 0.18, 0), 1)
+                q[i] = texture * strong
+                veil[i] = v
+            }
+        }
+        // Mjuka övergångar (två boxpass ≈ gauss) så att rutans kant inte syns.
+        let soft = HDRImageOps.boxMean(HDRImageOps.boxMean(Plane(width: s.width, height: s.height, data: q), radius: patch), radius: patch)
+        var vq = [Float](repeating: 0, count: n)
+        var touched = 0
+        for i in 0..<n {
+            vq[i] = soft.data[i] * veil[i]
+            if vq[i] > 0.02 { touched += 1 }
+        }
+        guard touched > 0 else { return (pixels, 0, nil) }
+        let full = HDRImageOps.bilinear(Plane(width: s.width, height: s.height, data: vq), toWidth: width, toHeight: height)
+        var out = pixels
+        out.withUnsafeMutableBufferPointer { oBuf in
+            full.data.withUnsafeBufferPointer { vBuf in
+                let o = HDRImageOps.Shared(oBuf), vv = HDRImageOps.Shared(vBuf)
+                DispatchQueue.concurrentPerform(iterations: height) { y in
+                    for x in 0..<width {
+                        let p = y * width + x
+                        let v = vv[p]
+                        guard v > 1e-3 else { continue }
+                        let k = 1 / max(1 - v, 0.05)
+                        for c in 0..<3 { o[p * 4 + c] = min(max((o[p * 4 + c] - v) * k, 0), 1) }
+                    }
+                }
+            }
+        }
+        return (out, Double(touched) / Double(n), soft)
     }
 
     // MARK: - Detektering
@@ -542,12 +654,15 @@ nonisolated enum WindowPull {
         }
         // Ljusfall tas bort efter tillväxten, så att en del som är klippt även i mörka ramen
         // (solen, glödande lampskärm) räknas som slät och hör till samma delområde.
-        var smoothOrClipped = smooth
-        for p in 0..<n where clippedBoth[p] > 0.5 { smoothOrClipped[p] = 1 }
+        // Här räknas även jämna ljusgradienter som släta (medel |Laplace| i stället för std):
+        // en solbelyst vägg intill fönstret har ett starkt ljusfall men ingen struktur.
+        var smoothOrClipped = flatMask(darkLuma, width: width, height: height, radius: smoothR, threshold: options.flatLaplacian)
+        for p in 0..<n where clippedBoth[p] > 0.5 || smooth[p] > 0.5 { smoothOrClipped[p] = 1 }
         let (finalLabels, finalCount) = labelComponents(detection.mask.data, width: width, height: height)
         if finalCount > 0 {
+            let sceneRelative = darkLuma.map { HDRImageOps.toLinear($0) * ratio / interiorMedian }
             let glowPixels = glowRegions(labels: finalLabels, keep: [Bool](repeating: true, count: finalCount + 1),
-                                         smooth: smoothOrClipped, darkLuma: darkLuma,
+                                         smooth: smoothOrClipped, darkLuma: darkLuma, sceneRelative: sceneRelative,
                                          width: width, height: height, scale: scale, options: options)
             detection.glow = glowPixels.regions
             if glowPixels.regions > 0 {
@@ -573,8 +688,138 @@ nonisolated enum WindowPull {
                 }
             }
         }
+        if options.paneFill {
+            // Släta ytor (vägg intill fönstret) fylls inte; slät himmel inne i rutan fylls ändå som hål.
+            detection.mask.data = fillPanes(detection.mask.data, width: width, height: height, minFraction: options.minComponentFraction,
+                                            maxHullRatio: options.paneMaxHullRatio, groupRadius: max(1, Int((8 * scale).rounded())),
+                                            growFraction: 0) { p in
+                // (Krav på färg i mörka ramen prövades: mörka löv har låg kroma → fläckig ruta.)
+                smooth[p] < 0.5 && HDRImageOps.toLinear(darkLuma[p]) * ratio >= options.paneMinScene * interiorMedian
+            }
+        }
         detection.components = infos.compactMap { $0 }
         return detection
+    }
+
+    /// Fyller varje komponents konvexa hölje (hela glasrutan, inte bara den klippta delen) med
+    /// de pixlar som `allowed` godkänner — mörka föremål framför fönstret (blommor, vaser) har
+    /// låg scenluminans och lämnas. Komponenter vars hölje är mer än `maxHullRatio` × ytan
+    /// (L-formade, sträcker sig över väggen) fylls inte. Hål fylls efteråt.
+    static func fillPanes(_ mask: [Float], width: Int, height: Int, minFraction: Double, maxHullRatio: Double,
+                          groupRadius: Int = 0, growFraction: Double = 0, allowed: (Int) -> Bool) -> [Float] {
+        let n = width * height
+        // Delar av samma ruta (klippta remsor längs karmarna) grupperas via en utvidgning;
+        // höljet räknas på gruppens egna pixlar.
+        let grouping = groupRadius > 0 ? HDRImageOps.morph(Plane(width: width, height: height, data: mask), radius: groupRadius, dilate: true).data : mask
+        var (labels, count) = labelComponents(grouping, width: width, height: height)
+        for p in 0..<n where mask[p] < 0.5 { labels[p] = 0 }
+        guard count > 0 else { return mask }
+        var rowMin = [[Int]](repeating: [], count: count + 1), rowMax = [[Int]](repeating: [], count: count + 1)
+        var rows = [[Int]](repeating: [], count: count + 1), area = [Int](repeating: 0, count: count + 1)
+        for y in 0..<height {
+            var lo = [Int: Int](), hi = [Int: Int]()
+            for x in 0..<width {
+                let l = Int(labels[y * width + x])
+                guard l > 0 else { continue }
+                area[l] += 1
+                if lo[l] == nil { lo[l] = x }
+                hi[l] = x
+            }
+            for (l, x0) in lo { rows[l].append(y); rowMin[l].append(x0); rowMax[l].append(hi[l]!) }
+        }
+        var out = mask
+        for l in 1...count where Double(area[l]) >= minFraction * Double(n) {
+            // Konvext hölje (monotona kedjan) av radernas ändpunkter.
+            var pts: [(Double, Double)] = []
+            for (i, y) in rows[l].enumerated() { pts.append((Double(rowMin[l][i]), Double(y))); pts.append((Double(rowMax[l][i]), Double(y))) }
+            let hull = convexHull(pts)
+            guard hull.count >= 3 else { continue }
+            var hullArea = 0.0
+            for i in 0..<hull.count { let a = hull[i], b = hull[(i + 1) % hull.count]; hullArea += a.0 * b.1 - b.0 * a.1 }
+            hullArea = abs(hullArea) / 2
+            // Smala remsor längs karmen får ett stort hölje i förhållande till ytan; släta väggar
+            // fylls ändå inte (`allowed`). Höljen över en fjärdedel av bilden fylls aldrig.
+            guard hullArea <= maxHullRatio * Double(area[l]), hullArea <= 0.25 * Double(n) else { continue }
+            let y0 = Int(hull.map(\.1).min()!), y1 = Int(hull.map(\.1).max()!)
+            for y in y0...y1 {
+                // Höljets skärning med raden (konvext → ett intervall).
+                var xs: [Double] = []
+                let fy = Double(y)
+                for i in 0..<hull.count {
+                    let a = hull[i], b = hull[(i + 1) % hull.count]
+                    if (a.1 <= fy && b.1 >= fy) || (b.1 <= fy && a.1 >= fy) {
+                        if a.1 == b.1 { xs.append(a.0); xs.append(b.0) } else { xs.append(a.0 + (fy - a.1) / (b.1 - a.1) * (b.0 - a.0)) }
+                    }
+                }
+                guard let xa = xs.min(), let xb = xs.max() else { continue }
+                for x in max(0, Int(xa.rounded(.up)))...min(width - 1, Int(xb.rounded(.down))) {
+                    let p = y * width + x
+                    if out[p] < 0.5 && allowed(p) { out[p] = 1 }
+                }
+            }
+        }
+        // Rester av rutan utanför höljet (t.ex. översta remsan ovanför de klippta partierna; av som
+        // standard — även uppåt kröp fyllningen ut på karm och persienn i några bilder):
+        // fyll vidare genom godkända pixlar, högst `growFraction` av gruppens ruta utanför den —
+        // släta karmar och väggar (inte godkända) stoppar.
+        if growFraction > 0 {
+            for l in 1...count where Double(area[l]) >= minFraction * Double(n) && !rows[l].isEmpty {
+                let x0 = rowMin[l].min()!, x1 = rowMax[l].max()!, y0 = rows[l].first!, y1 = rows[l].last!
+                let mx = Int(Double(x1 - x0) * growFraction) + 1, my = Int(Double(y1 - y0) * growFraction) + 1
+                // Inte nedåt: under rutan finns fönsterbänk och solbelysta ytor, aldrig mer glas.
+                // Bara uppåt inom rutans bredd (den översta remsan av glaset): i sidled kröp fyllningen
+                // längs karmarnas kanter (prövat), nedåt finns fönsterbänken.
+                _ = mx
+                let bx0 = x0, bx1 = x1, by0 = max(0, y0 - my), by1 = y1
+                var queue: [Int] = []
+                for y in by0...by1 { for x in bx0...bx1 where out[y * width + x] > 0.5 && labels[y * width + x] == Int32(l) || (out[y * width + x] > 0.5 && mask[y * width + x] < 0.5 && y >= y0 && y <= y1 && x >= x0 && x <= x1) { queue.append(y * width + x) } }
+                var head = 0
+                while head < queue.count {
+                    let p = queue[head]; head += 1
+                    let x = p % width, y = p / width
+                    for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                        let nx = x + dx, ny = y + dy
+                        guard nx >= bx0, nx <= bx1, ny >= by0, ny <= by1 else { continue }
+                        let q = ny * width + nx
+                        if out[q] < 0.5 && allowed(q) { out[q] = 1; queue.append(q) }
+                    }
+                }
+            }
+        }
+        return fillHoles(out, width: width, height: height)
+    }
+
+    /// Konvext hölje (Andrews monotona kedja), moturs, utan kolinjära punkter.
+    static func convexHull(_ points: [(Double, Double)]) -> [(Double, Double)] {
+        let p = points.sorted { $0.0 != $1.0 ? $0.0 < $1.0 : $0.1 < $1.1 }
+        guard p.count >= 3 else { return p }
+        func cross(_ o: (Double, Double), _ a: (Double, Double), _ b: (Double, Double)) -> Double {
+            (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+        }
+        var lower: [(Double, Double)] = [], upper: [(Double, Double)] = []
+        for q in p {
+            while lower.count >= 2 && cross(lower[lower.count - 2], lower[lower.count - 1], q) <= 0 { lower.removeLast() }
+            lower.append(q)
+        }
+        for q in p.reversed() {
+            while upper.count >= 2 && cross(upper[upper.count - 2], upper[upper.count - 1], q) <= 0 { upper.removeLast() }
+            upper.append(q)
+        }
+        return Array(lower.dropLast() + upper.dropLast())
+    }
+
+    /// Planhetsmask (1 = plan): medel av |Laplace| i en (2r+1)²-ruta under `threshold` — linjära
+    /// ljusgradienter räknas som plana, struktur (löv, spröjs, fasader) inte.
+    static func flatMask(_ luma: [Float], width: Int, height: Int, radius: Int, threshold: Float) -> [Float] {
+        var lap = [Float](repeating: 0, count: width * height)
+        for y in 1..<max(1, height - 1) {
+            for x in 1..<max(1, width - 1) {
+                let p = y * width + x
+                lap[p] = abs(4 * luma[p] - luma[p - 1] - luma[p + 1] - luma[p - width] - luma[p + width])
+            }
+        }
+        let mean = HDRImageOps.boxMean(Plane(width: width, height: height, data: lap), radius: radius)
+        return mean.data.map { $0 < threshold ? 1 : 0 }
     }
 
     /// Släthetsmask (1 = slät): lokal standardavvikelse av `luma` i en (2r+1)²-ruta under `threshold`.
@@ -593,7 +838,7 @@ nonisolated enum WindowPull {
     /// Ljusfall i godkända komponenter: släta delområden (öppnade, minst `glowMinFraction`) vars
     /// angränsande yttre ring (utanför alla kandidater) nästan saknar kanter i mörka ramen.
     /// Returnerar pixlarna att ta bort (delområdet något utvidgat, inom komponenterna).
-    static func glowRegions(labels: [Int32], keep: [Bool], smooth: [Float], darkLuma: [Float],
+    static func glowRegions(labels: [Int32], keep: [Bool], smooth: [Float], darkLuma: [Float], sceneRelative: [Float]? = nil,
                             width: Int, height: Int, scale: Double, options: Options) -> (remove: [Bool], regions: Int) {
         let n = width * height
         var remove = [Bool](repeating: false, count: n)
@@ -628,7 +873,15 @@ nonisolated enum WindowPull {
                 ring += 1
                 if gradient(p) > options.edgeGradient { edges += 1 }
             }
-            guard ring >= 20, Double(edges) / Double(ring) < options.glowMaxEdgeFraction else { continue }
+            // Ljusfall: ingen karm runt. Solbelyst vägg intill fönstret: slät och mycket mörkare
+            // i scenen än en himmel (median < `wallMaxScene` × interiörens median) — oavsett kanter.
+            var wall = false
+            if let sceneRelative {
+                var values: [Float] = []
+                for p in 0..<n where sub[p] == Int32(r) { values.append(sceneRelative[p]) }
+                wall = HDRImageOps.percentile(values, 0.5) < options.wallMaxScene
+            }
+            guard ring >= 20, wall || Double(edges) / Double(ring) < options.glowMaxEdgeFraction else { continue }
             regions += 1
             let cut = HDRImageOps.morph(region, radius: max(1, ringR - 1), dilate: true)
             for p in 0..<n where cut.data[p] > 0.5 && labels[p] > 0 { remove[p] = true }

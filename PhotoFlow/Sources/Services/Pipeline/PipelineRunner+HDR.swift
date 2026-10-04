@@ -39,7 +39,8 @@ extension PipelineRunner {
             maxDimension: AppSettings.shared.hdrMaxDimension,
             alignEnabled: AppSettings.shared.hdrAlignEnabled,
             sharpenEnabled: AppSettings.shared.hdrSharpenEnabled,
-            windowPull: AppSettings.shared.hdrEngine == "opencv" ? WindowPull.Options(enabled: false) : AppSettings.shared.windowPullOptions
+            windowPull: AppSettings.shared.hdrEngine == "opencv" ? WindowPull.Options(enabled: false) : AppSettings.shared.windowPullOptions,
+            method: AppSettings.shared.hdrMethodValue
         )
     }
 
@@ -48,7 +49,8 @@ extension PipelineRunner {
         let settings = AppSettings.shared
         return HDRLog.fingerprint(identity: identity, engine: settings.hdrEngine, maxDimension: settings.hdrMaxDimension,
                                   align: settings.hdrAlignEnabled, sharpen: settings.hdrSharpenEnabled,
-                                  windowPull: settings.hdrEngine == "opencv" ? WindowPull.Options(enabled: false) : settings.windowPullOptions)
+                                  windowPull: settings.hdrEngine == "opencv" ? WindowPull.Options(enabled: false) : settings.windowPullOptions,
+                                  method: settings.hdrMethodValue)
     }
 
     /// Fönstermasken för en grupp (`hdr_masks/hdr_group_<id>.png` i outputroten).

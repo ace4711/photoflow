@@ -224,7 +224,7 @@ struct PipelineTab: View {
                 Toggle("Aktivera HDR-merge (Mertens exposure fusion)", isOn: $settings.hdrMergeEnabled)
 
                 if settings.hdrMergeEnabled {
-                    Text("Bracket-grupper slås ihop automatiskt med Mertens exposure fusion. Resultatet visas i granskningsvyn.")
+                    Text("Bracket-grupper slås ihop automatiskt (basram eller Mertens exposure fusion, se Metod). Resultatet visas i granskningsvyn.")
                         .font(.caption)
                         .foregroundColor(.secondary)
 
@@ -249,6 +249,14 @@ struct PipelineTab: View {
                             }
                         }
 
+                        Picker("Metod", selection: $settings.hdrMethod) {
+                            Text("Basram (mäklarstil, standard)").tag(HDREngine.Method.baseFrame.rawValue)
+                            Text("Exposure fusion (Mertens)").tag(HDREngine.Method.fusion.rawValue)
+                        }
+                        .pickerStyle(.menu)
+                        Text("Basram: en ljus exponering som bas, bara klippta högdagrar hämtas ur mörkare exponeringar — jämnt ljusa tak och väggar utan fusionens skuggor. Fönstren hämtas ur den mörkaste exponeringen.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                         Toggle("Lätt skärpning av HDR-resultatet", isOn: $settings.hdrSharpenEnabled)
                         Toggle("Justera brackets mot varandra (Vision-bildregistrering)", isOn: $settings.hdrAlignEnabled)
                         Text("Justeringen rättar små rörelser mellan exponeringarna (även på stativ) och avvisar orimliga mätningar. Påverkar bara HDR som skapas härefter.")
