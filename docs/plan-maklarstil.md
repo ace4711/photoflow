@@ -79,3 +79,47 @@ Bättre ΔE i 44 av 51 bilder. Som jämförelse ligger en neutral rendering av d
 - Större lokal tonutjämning (tak och hörn ljusare än en global kurva ger; prövat med negativ storskalig kontrast utan säker vinst).
 - Bildval och beskärningskomposition utöver upright-beskärningen.
 - Exteriörernas mycket mättade himmel/grönska varierar mellan adresser (Pilottorget/Bergstigen) — ett fast recept träffar inte alla.
+
+## v2 (2026-10-04): standard, basram och hela fönsterrutor
+
+**Mäklarstil är standardprofil** (`EnhancementProfile.defaultID`, app och CLI; okänt profil-id → Mäklarstil). `@AppStorage` sparar bara aktiva val: den som aldrig valt profil får Mäklarstil, ett sparat val (även "auto") behålls — ett aktivt "auto" går inte att skilja från ett gammalt standardvärde och migreras inte.
+
+Mått: `ev.py` (scratch) = `analyze.py` på alla 51 par + fönstermått i en fast mask (out-base-masken via HDR:ens homografi). Brus/skärpa mäts nu efter areanedskalning till leveransens upplösning (förut jämfördes 6000 px mot 2048–5315 px — vårt brus såg för högt ut). Krominansbruset i leveranserna (0,003–0,05) är lägre än i någon 16-bit-version av våra bilder: 8-bit-kvantisering + 4:4:4-JPEG ger ~0,03, så måttet är inte jämförbart rakt av (leveranserna är 4:4:4, ingen subsampling).
+
+| Grupp | n | ΔE median nuv. → v1 → **v2** | ΔE p90 | Hist.avst. | Väggar L* (lev.) | Brus L* (lev.) | Glöd 4–10 px vid fönster (lev.) |
+|---|---|---|---|---|---|---|---|
+| Träning | 36 | 12,15 → 8,82 → **7,97** | 21,9 → 19,3 → 19,6 | 0,102 → 0,047 → 0,044 | 72,8 → 83,6 → 84,3 (87,6) | 0,30 → 0,11 → 0,07 (0,30) | 6,1 → 8,2 → 0,8 (3,8) |
+| **Test, alla** | 15 | 13,93 → 7,05 → **6,54** | 21,1 → 17,2 → **15,3** | 0,134 → 0,049 → 0,052 | 69,8 → 84,4 → 84,8 (85,2) | 0,25 → 0,19 → 0,08 (0,25) | 5,6 → 5,0 → 0,4 (1,6) |
+| Test Pilvingegatan | 7 | 13,97 → 7,05 → 6,69 | 23,1 → 17,2 → 17,3 | | 83,3 (85,4) | | |
+| Test Varmfrontsgatan (hållen) | 8 | 13,75 → 7,07 → **6,31** | 20,6 → 17,3 → 15,3 | | 85,9 (84,7) | | |
+| Interiörer | 36 | 13,96 → 7,54 → **6,22** | 21,4 → 16,3 → 15,1 | | | | |
+| Exteriörer | 15 | 11,12 → 10,22 → 10,75 | 23,5 → 20,9 → 21,2 | | | | |
+
+Lodlinjer oförändrade (test 0,22°, leverans 0,28°; Pilottorget fortfarande 0,84°, inte åtgärdat).
+
+### Per förbättring (helkörningar, test / träning ΔE median)
+
+| Steg | Test | Träning | Behållen? |
+|---|---|---|---|
+| Mäklarstil v1 (utgångsläge) | 7,05 | 8,82 | |
+| Window pull: släta ytor/ljusfall bort (HDR v5) — grå fläcken i taket i DSC_9053 borta (fönster-ΔE där 15,5 → 5,3) | 7,07 | 8,82 | ja (visuellt) |
+| Fönstervariant: kontrast × 0,8 kring median, +0,02, b* +2, tak 0,99 | 7,06 | 8,81 | kontrasten **nej** (visuellt sämre: utsikten ska vara klar), värme/tak ja |
+| Ljusa ytor avmättade × 0,8 (L* ≥ 85, interiörer) | 7,06 (int. 6,86) | 8,67 (int. 7,23) | ja |
+| **HDR v6 "basram"** (ljus exponering + pixelvis högdageråtervinning i stället för Mertens) | 6,73 | 7,92 | ja — tak/väggar jämnt ljusa, ingen fusionsskugga |
+| Utsikt ur mörka ramen med RAW-kurva, mål 0,62, mättnad × 1,5, rektangulära rutor (v2f) | **6,54** | **7,97** | ja |
+
+### Prövat och förkastat
+
+- Lokal tonutjämning (guided-filter-bas, kompression 0,5–0,7, radie 20–80 px, med histogramåtermatchning) i prototyp på v1: ±0,0–0,3 ΔE, oftast sämre på test → inte infört. Basramen gav i stället jämnt ljusa tak.
+- Ljusberoende mättnad (mellantoner × 1,15) och "dra varmt stick i ljusa ytor mot neutralt": sämre eller lika på test.
+- Global mättnad × 1,1–1,4 på v2 (exteriörerna har klart mer krominans i leveranserna): ± 0,05 test, sämre träning.
+- EV-baserad exteriörvikt (scenljus ur EXIF): hjälper exteriör-träningen, men DSC_9160 (test) blir sämre → inte infört.
+- Fönster: slöjborttagning (mörka kanalen) i hela rutor, mask från slöjvikten in i Förbättra (karmarna mörknade), fyllning utanför rutans rektangel (läckte ut på karmar/pampas), krav på färg i mörka ramen (fläckig ruta).
+- "Blå himmel" (`SkyReplacement`): redigeraren har blå himmel i alla 15 exteriörer, vi vit. Implementerat men **av som standard** — syntetisk himmel, inte ur fotografens exponeringar; ljusa tak i interiörer kan likna himmel.
+
+### Kvar / kända brister
+
+- Fönster där utsikten inte är klippt i mellanexponeringen (mörka träd lika ljusa som väggen) dras bara delvis in: ljusa remsor och en rand i DSC_6385. Lightrooms HDR-sammanslagning ger här klart renare rutor (`results/pilvinge-mellan/11-lr-hdr-DSC_6385.jpg`); `photoflow-cli enhance` + `scripts/maklarstil/lr_run.sh` jämför LR-HDR + vår Mäklarstil. LR-DNG:n saknar tonkurva och behöver en exponeringshöjning före Mäklarstilens kurva (annars orange stick/brus i mörka hörn).
+- Exteriörer blev något sämre med basram (10,22 → 10,75): himlen och himmelsbytet (se ovan) dominerar.
+- Krominansbrus/skärpa: inte justerat (måttet se ovan); lodlinjer i Pilottorget inte åtgärdade.
+- Jämförelsebilder: `~/PhotoFlowBenchmark/results/pilvinge-mellan/` (löpande, `status.md`) och `~/PhotoFlowBenchmark/results/pilvinge-2026-10-04-v2/mobil/`.
