@@ -172,6 +172,18 @@ struct PipelineRunnerEnhanceTests {
         var changed = job
         changed.identity = [nef, other]
         #expect(runner.enhanceFingerprint(job: changed, profile: .automatic) != before)
+
+        // Fönstermasken: saknad fil = ingen mask; ny/ändrad mask ger nytt fingerprint.
+        var masked = job
+        let maskURL = PipelineRunner.hdrMaskURL(outputDir: dir, groupId: 1)
+        masked.windowMask = maskURL
+        #expect(runner.enhanceFingerprint(job: masked, profile: .automatic) == before)
+        try FileManager.default.createDirectory(at: maskURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        write("mask 1", to: maskURL)
+        let withMask = runner.enhanceFingerprint(job: masked, profile: .automatic)
+        #expect(withMask != before)
+        write("mask 2", to: maskURL)
+        #expect(runner.enhanceFingerprint(job: masked, profile: .automatic) != withMask)
     }
 
     @Test("Övergången godkänner verkliga poster från förra versionen (källan sparad som filnamn)")
@@ -179,7 +191,9 @@ struct PipelineRunnerEnhanceTests {
         let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .appendingPathComponent("Fixtures/Enhancement/legacy-entries.json")
         let root = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
-        let engine = root["engineVersion"] as! Int
+        let fixtureEngine = root["engineVersion"] as! Int
+        // Posterna är från motorversion 1; övergången prövas som om de vore från den nuvarande.
+        let engine = EnhancementEngine.version
         func entry(_ name: String) throws -> (key: String, entry: EnhancementLog.Entry) {
             var dict = root[name] as! [String: Any]
             let key = dict.removeValue(forKey: "key") as! String
@@ -196,6 +210,10 @@ struct PipelineRunnerEnhanceTests {
             key: hdr.key, kind: .hdr,
             source: URL(fileURLWithPath: "/Volumes/x/output/Gatan 1 ÖVRIGA/\(hdr.entry.source)"), label: hdr.key)
         let profile = single.entry.profile
+        // Version 2 (fönstermasken) ändrar renderingen: version 1-poster godkänns inte.
+        if fixtureEngine != EnhancementEngine.version {
+            #expect(!PipelineRunner.canAdoptPreviousEnhancement(entry: single.entry, job: singleJob, profile: profile, previousEngineVersion: fixtureEngine))
+        }
         #expect(PipelineRunner.canAdoptPreviousEnhancement(entry: single.entry, job: singleJob, profile: profile, previousEngineVersion: engine))
         #expect(PipelineRunner.canAdoptPreviousEnhancement(entry: hdr.entry, job: hdrJob, profile: hdr.entry.profile, previousEngineVersion: engine))
         // Annan motorversion, annan källa eller annan profil → görs om.
@@ -204,5 +222,20 @@ struct PipelineRunnerEnhanceTests {
         other.source = URL(fileURLWithPath: "/Volumes/x/output/dng/DSC_9999.dng")
         #expect(!PipelineRunner.canAdoptPreviousEnhancement(entry: single.entry, job: other, profile: profile, previousEngineVersion: engine))
         #expect(!PipelineRunner.canAdoptPreviousEnhancement(entry: single.entry, job: singleJob, profile: .neutral, previousEngineVersion: engine))
+    }
+
+    @Test("Fönstermaskens innehåll ingår i fingerprintet")
+    func windowMaskDigest_followsContent() throws {
+        #expect(PipelineRunner.windowMaskDigest(nil) == "-")
+        #expect(PipelineRunner.windowMaskDigest(URL(fileURLWithPath: "/finns/inte.png")) == "-")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("maskdigest-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let a = dir.appendingPathComponent("a.png"), b = dir.appendingPathComponent("b.png")
+        try HDRImageOps.writeGrayPNG(ExposureFusion.Plane(width: 20, height: 20, data: (0..<400).map { $0 % 20 < 10 ? 1 : 0 }), to: a)
+        try HDRImageOps.writeGrayPNG(ExposureFusion.Plane(width: 20, height: 20, data: (0..<400).map { $0 % 20 < 11 ? 1 : 0 }), to: b)
+        #expect(PipelineRunner.windowMaskDigest(a) != "-")
+        #expect(PipelineRunner.windowMaskDigest(a) != PipelineRunner.windowMaskDigest(b))
+        #expect(PipelineRunner.windowMaskDigest(a) == PipelineRunner.windowMaskDigest(a))
     }
 }

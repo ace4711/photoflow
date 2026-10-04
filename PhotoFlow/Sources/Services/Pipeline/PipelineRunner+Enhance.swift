@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 extension PipelineRunner {
     // MARK: - Steg: Förbättra bilder
@@ -26,6 +27,8 @@ extension PipelineRunner {
         /// metadatasteget skriver EXIF/GPS i den efteråt, så storlek och ändringstid byts
         /// och varje omkörning såg alla bilder som ändrade.
         var identity: [URL] = []
+        /// Fönstermasken från window pull (bara HDR; filen behöver inte finnas).
+        var windowMask: URL? = nil
     }
 
     /// Exteriör enligt AI-taggarna (Vision): taggen "Exteriör" och ingen "Interiör".
@@ -50,7 +53,8 @@ extension PipelineRunner {
                 // (en ny sammanslagning görs då med dem), annars alla i gruppen.
                 let merged = photos.contains(where: \.accepted) ? photos.filter(\.accepted) : photos
                 jobs.append(EnhanceJob(key: "hdr_group_\(group.id)", kind: .hdr, source: tiff, label: "HDR grupp \(group.id)",
-                                      isExterior: Self.isExterior(photos), identity: merged.map(\.nefURL)))
+                                      isExterior: Self.isExterior(photos), identity: merged.map(\.nefURL),
+                                      windowMask: Self.hdrMaskURL(outputDir: outputDir, groupId: group.id)))
             } else {
                 for photo in photos {
                     if photo.rejected { rejected += 1; continue }
@@ -92,8 +96,15 @@ extension PipelineRunner {
             "kind": job.kind.rawValue,
             "straighten": "\(job.isExterior)",
             "maxDimension": "\(settings.hdrMaxDimension)",
-            "hdr": job.kind == .hdr ? "v\(HDREngine.version) align=\(settings.hdrAlignEnabled) sharpen=\(settings.hdrSharpenEnabled)" : "-"
+            "hdr": job.kind == .hdr ? "v\(HDREngine.version) align=\(settings.hdrAlignEnabled) sharpen=\(settings.hdrSharpenEnabled)" : "-",
+            "windowMask": Self.windowMaskDigest(job.windowMask)
         ])
+    }
+
+    /// Fönstermaskens innehåll (SHA-256, förkortad) för fingerprintet; "-" utan mask.
+    nonisolated static func windowMaskDigest(_ url: URL?) -> String {
+        guard let url, let data = try? Data(contentsOf: url) else { return "-" }
+        return SHA256.hash(data: data).prefix(12).map { String(format: "%02x", $0) }.joined()
     }
 
     /// Förfrågan till `EnhancementEngine` för ett jobb. Metadatan följer mappen filen ligger
@@ -112,7 +123,8 @@ extension PipelineRunner {
             exifSource: job.source, exiftoolPath: exiftoolPath,
             tiffMetadata: Self.creationMetadata(for: tiffURL, folderName: folderName, context: metadataContext),
             jpegMetadata: Self.creationMetadata(for: jpegURL, folderName: folderName, context: metadataContext),
-            allowStraighten: job.isExterior
+            allowStraighten: job.isExterior,
+            windowMaskURL: job.windowMask
         )
     }
 
