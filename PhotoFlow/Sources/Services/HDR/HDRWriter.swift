@@ -32,7 +32,7 @@ nonisolated enum HDRWriter {
 
     /// - Parameters:
     ///   - pixels: RGBA float32, sRGB gamma encoded, `width * height * 4` values.
-    ///   - tiffURL: destination for the full-resolution 16-bit LZW TIFF.
+    ///   - tiffURL: destination for the full-resolution 16-bit TIFF (okomprimerad, se `tiffCompression`).
     ///   - jpegURL: destination for the JPEG preview.
     ///   - jpegMaxDimension: JPEG preview long-side cap (0 = full resolution).
     ///   - jpegQuality: 0...1 JPEG compression quality.
@@ -105,7 +105,7 @@ nonisolated enum HDRWriter {
     /// Packs `pixels` (RGBA float32, [0,1]) into a plain 3-channel,
     /// 16-bit-per-component RGB `CGImage` — no alpha, and no color conversion
     /// (`colorSpace` here must be the same one the values were rendered in).
-    private static func makeRGB16CGImage(pixels: [Float], width: Int, height: Int, colorSpace: CGColorSpace) throws -> CGImage {
+    static func makeRGB16CGImage(pixels: [Float], width: Int, height: Int, colorSpace: CGColorSpace) throws -> CGImage {
         var rgb16 = [UInt16](repeating: 0, count: width * height * 3)
         pixels.withUnsafeBufferPointer { src in
             rgb16.withUnsafeMutableBufferPointer { dst in
@@ -150,12 +150,21 @@ nonisolated enum HDRWriter {
         }
     }
 
-    private static func writeTIFFDirect(_ cgImage: CGImage, to url: URL) throws {
+    /// TIFF-komprimering (TIFF-taggen Compression): 1 = okomprimerad, 5 = LZW.
+    ///
+    /// Okomprimerad sedan fas 1a (#2). Mätt på tre riktiga HDR-bilder (6000 × 4000, 16 bpc RGB):
+    /// LZW 172–177 MB, kodning 1,1 s och avkodning 0,33 s; okomprimerad 137 MB (alltså 20 % MINDRE —
+    /// LZW komprimerar inte 16-bitars fotografiskt brus), kodning 0,05 s och avkodning 0,07 s.
+    /// Avkodade pixlar är bit-för-bit identiska (SHA-256), så ingenting som bygger på filen
+    /// (fingerprints, motorversioner) påverkas. Se docs/plan-snabbare-pipeline.md, "Uppmätt".
+    static let tiffCompression = 1
+
+    static func writeTIFFDirect(_ cgImage: CGImage, to url: URL, compression: Int = tiffCompression) throws {
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.tiff.identifier as CFString, 1, nil) else {
             throw WriterError.destinationCreationFailed
         }
         let tiffProperties: [CFString: Any] = [
-            kCGImagePropertyTIFFCompression: 5 // LZW — lossless, meaningfully smaller than uncompressed for photographic content
+            kCGImagePropertyTIFFCompression: compression
         ]
         let properties: [CFString: Any] = [kCGImagePropertyTIFFDictionary: tiffProperties]
         CGImageDestinationAddImage(destination, cgImage, properties as CFDictionary)

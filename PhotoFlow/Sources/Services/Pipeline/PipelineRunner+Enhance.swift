@@ -198,8 +198,9 @@ extension PipelineRunner {
             )
         }
 
-        // Avkodningen av en 170 MB LZW-TIFF är enkeltrådad (~6 s), så några bilder körs
-        // samtidigt. Tre räcker: minnet är ~0,5 GB per bild.
+        // RAW-rendering/Core Image-kedjan per bild är till stor del enkeltrådad, så några bilder körs
+        // samtidigt. Tre räcker: minnet är ~0,5 GB per bild. (HDR-TIFF:erna är okomprimerade sedan
+        // fas 1a, så avkodningen är försumbar; tidigare LZW kostade ~0,3 s per bild.)
         let maxConcurrent = min(3, max(1, ProcessInfo.processInfo.activeProcessorCount / 3))
         try await withThrowingTaskGroup(of: (Int, Result<EnhancementEngine.Outcome, Error>, Double).self) { @MainActor group in
             var next = 0
