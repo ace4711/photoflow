@@ -167,9 +167,9 @@ nonisolated enum RAWRenderer {
     /// translation `HDRAlignment` computes between a non-reference exposure
     /// and the bracket's reference exposure.
     ///
-    /// Positive `dx`/`dy` moves image content to higher x/y (right/up in
-    /// Core Image's bottom-left-origin coordinate space, which is what
-    /// `HDRAlignment`'s Vision-derived shift is expressed in).
+    /// Positiva `dx`/`dy` flyttar innehållet till högre x/y i bufferten, dvs. åt
+    /// höger respektive nedåt (rad 0 är överst). `HDRAlignment.computeShift`
+    /// returnerar förskjutningen i samma koordinater.
     static func shiftRGBA(_ pixels: [Float], width: Int, height: Int, dx: Float, dy: Float) -> [Float] {
         guard dx != 0 || dy != 0 else { return pixels }
         var out = [Float](repeating: 0, count: pixels.count)

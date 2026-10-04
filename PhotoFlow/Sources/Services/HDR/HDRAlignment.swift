@@ -51,7 +51,8 @@ nonisolated enum HDRAlignment {
     }
 
     /// Computes the pixel-space `(dx, dy)` translation that moves `floating`'s
-    /// content onto `reference`'s framing, at `floating`/`reference`'s own
+    /// content onto `reference`'s framing — i buffertens koordinater (x åt höger,
+    /// y nedåt, samma som `RAWRenderer.shiftRGBA`), at `floating`/`reference`'s own
     /// (full working) resolution. Both images must be the same size — true by
     /// construction since every exposure in a bracket is rendered by
     /// `RAWRenderer` with the same `maxDimension`.
@@ -93,7 +94,11 @@ nonisolated enum HDRAlignment {
         // full-resolution size, so this ratio is exact (no aspect assumptions).
         let scaleX = Double(floating.width) / Double(floatingLuma.width)
         let scaleY = Double(floating.height) / Double(floatingLuma.height)
-        return CGPoint(x: transform.tx * scaleX, y: transform.ty * scaleY)
+        // Visions transform har origo nere till vänster (y uppåt), bufferten rad 0 överst
+        // (y nedåt): y byter tecken. Förut användes ty rakt av, och den lodräta rättelsen
+        // gick åt fel håll — en förskjutning på 2 px blev 4 px (uppmätt som kvarvarande
+        // förskjutning i felsökningsläget, fas 1).
+        return CGPoint(x: transform.tx * scaleX, y: -transform.ty * scaleY)
     }
 
     /// Avbildar `source` monotont så att dess fördelning (CDF) blir som `reference`s.
