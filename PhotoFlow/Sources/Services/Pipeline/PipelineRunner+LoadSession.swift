@@ -90,7 +90,7 @@ extension PipelineRunner {
         // Load persisted cull decisions
         let cullDecisions = state.loadCullDecisions()
         if !cullDecisions.isEmpty {
-            pipelineLog("Laddade gallringsbeslut for \(cullDecisions.count) bilder")
+            pipelineLog("Laddade gallringsbeslut för \(cullDecisions.count) bilder")
         }
 
         var bracketGroups: [BracketGroup] = []

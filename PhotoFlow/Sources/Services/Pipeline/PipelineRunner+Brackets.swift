@@ -38,8 +38,8 @@ extension PipelineRunner {
                 "reason": "manifest_fingerprint_match",
                 "fingerprint": fingerprint
             ])
-            state.appendStepLog(.createHDR, "Bracket-analys redan klar (manifest matchar) — hoppar over", type: .info)
-            state.appendLog("Bracket-analys redan klar — hoppar over.", type: .info)
+            state.appendStepLog(.createHDR, "Bracket-analys redan klar (manifest matchar) — hoppar över", type: .info)
+            state.appendLog("Bracket-analys redan klar — hoppar över.", type: .info)
             if let data = try? Data(contentsOf: groupsJSON),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let groups = json["groups"] as? [[String: Any]] {
@@ -68,8 +68,8 @@ extension PipelineRunner {
                     "maxTimeGap": "\(maxTimeGap)",
                     "minBracketSize": "\(minBracketSize)"
                 ])
-                state.appendStepLog(.createHDR, "Bracket-analys redan klar (\(totalImages) filer) — hoppar over", type: .info)
-                state.appendLog("Bracket-analys redan klar — hoppar over.", type: .info)
+                state.appendStepLog(.createHDR, "Bracket-analys redan klar (\(totalImages) filer) — hoppar över", type: .info)
+                state.appendLog("Bracket-analys redan klar — hoppar över.", type: .info)
                 // Still log group details
                 if let groups = json["groups"] as? [[String: Any]] {
                     let bracketCount = groups.filter { ($0["is_bracket"] as? Bool) == true }.count

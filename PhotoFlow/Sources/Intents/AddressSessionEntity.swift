@@ -27,7 +27,7 @@ struct AddressSessionEntity: AppEntity, IndexedEntity {
         let dateStr = Self.dateFormatter.string(from: date)
         return DisplayRepresentation(
             title: "\(address)",
-            subtitle: "\(eventTitle) \u{2014} \(dateStr) \u{2014} \(imageCount) bilder, \(acceptedCount) godkanda"
+            subtitle: "\(eventTitle) \u{2014} \(dateStr) \u{2014} \(imageCount) bilder, \(acceptedCount) godkända"
         )
     }
 
@@ -66,10 +66,10 @@ struct AddressSessionQuery: EnumerableEntityQuery {
 struct FindSessionsIntent: AppIntent {
     static let title: LocalizedStringResource = "Hitta sessioner i PhotoFlow"
     static let description = IntentDescription(
-        "Listar adresser fran alla kanda PhotoFlow-sessioner, med antal bilder och hur manga som ar godkanda."
+        "Listar adresser från alla kända PhotoFlow-sessioner, med antal bilder och hur många som är godkända."
     )
 
-    @Parameter(title: "Sokterm", description: "Filtrera pa adress eller bokningstitel. Lamna tom for alla.")
+    @Parameter(title: "Sökterm", description: "Filtrera på adress eller bokningstitel. Lämna tom för alla.")
     var searchTerm: String?
 
     static var parameterSummary: some ParameterSummary {

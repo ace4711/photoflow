@@ -51,8 +51,8 @@ extension PipelineRunner {
                 "reason": "manifest_fingerprint_match",
                 "tagCount": "\(existingEntries.count)"
             ])
-            state.appendStepLog(.aiTagging, "AI-taggar redan sparade (manifest matchar, \(existingEntries.count) bilder) — hoppar over", type: .info)
-            state.appendLog("AI-taggning redan klar — laddar fran ai_tags.json.", type: .info)
+            state.appendStepLog(.aiTagging, "AI-taggar redan sparade (manifest matchar, \(existingEntries.count) bilder) — hoppar över", type: .info)
+            state.appendLog("AI-taggning redan klar — laddar från ai_tags.json.", type: .info)
             for (filename, tags) in aiTagResults.sorted(by: { $0.key < $1.key }) {
                 let tagStr = tags.tags.joined(separator: ", ")
                 let catStr = tags.primaryCategory.isEmpty ? "" : " [\(tags.primaryCategory)]"
@@ -77,8 +77,8 @@ extension PipelineRunner {
                 "reason": "json_exists",
                 "tagCount": "\(existingEntries.count)"
             ])
-            state.appendStepLog(.aiTagging, "AI-taggar redan sparade (\(existingEntries.count) bilder) — hoppar over", type: .info)
-            state.appendLog("AI-taggning redan klar — laddar fran ai_tags.json.", type: .info)
+            state.appendStepLog(.aiTagging, "AI-taggar redan sparade (\(existingEntries.count) bilder) — hoppar över", type: .info)
+            state.appendLog("AI-taggning redan klar — laddar från ai_tags.json.", type: .info)
 
             // Log loaded tags
             for (filename, tags) in aiTagResults.sorted(by: { $0.key < $1.key }) {
@@ -310,7 +310,7 @@ extension PipelineRunner {
                 "reason": "json_exists",
                 "count": "\(existing.count)"
             ])
-            state.appendStepLog(.aiTagging, "Vision-kvalitetsanalys redan sparad (\(existing.count) bilder) — hoppar over", type: .info)
+            state.appendStepLog(.aiTagging, "Vision-kvalitetsanalys redan sparad (\(existing.count) bilder) — hoppar över", type: .info)
             return
         }
 
@@ -340,7 +340,7 @@ extension PipelineRunner {
         let utilityCount = photoQualityResults.values.filter(\.isUtility).count
         let skewedCount = photoQualityResults.values.filter { ($0.horizonAngleDegrees.map { abs($0) } ?? 0) > 1.0 }.count
         state.appendStepLog(.aiTagging, "Vision-kvalitetsanalys klar: \(total) bilder, \(duplicateCount) i dubblettgrupper, \(utilityCount) nyttobilder, \(skewedCount) med skev horisont (>1°)", type: .success)
-        state.appendLog("Vision-kvalitetsanalys klar: \(duplicateCount) mojliga dubbletter, \(skewedCount) skeva horisonter.", type: .success)
+        state.appendLog("Vision-kvalitetsanalys klar: \(duplicateCount) möjliga dubbletter, \(skewedCount) skeva horisonter.", type: .success)
 
         PhotoQualityService.save(photoQualityResults, to: outputDir)
     }

@@ -83,8 +83,8 @@ extension PipelineRunner {
                 "matchCount": "\(calendarMappings.count)",
                 "fingerprint": calendarFingerprint
             ])
-            state.appendStepLog(.findCalendarInfo, "Kalendermatchningar redan sparade (\(calendarMappings.count) st) — hoppar over", type: .info)
-            state.appendLog("Kalendermatchning redan klar — laddar fran calendar_matches.json.", type: .info)
+            state.appendStepLog(.findCalendarInfo, "Kalendermatchningar redan sparade (\(calendarMappings.count) st) — hoppar över", type: .info)
+            state.appendLog("Kalendermatchning redan klar — laddar från calendar_matches.json.", type: .info)
             for mapping in calendarMappings {
                 state.appendStepLog(.findCalendarInfo, "Match: \"\(mapping.address)\" — \(mapping.eventTitle)", type: .success)
             }
@@ -147,10 +147,10 @@ extension PipelineRunner {
             }
         }
 
-        state.appendStepLog(.findCalendarInfo, "\(photoDates.count) fotodatum extraherade fran \(groups.count) grupper")
+        state.appendStepLog(.findCalendarInfo, "\(photoDates.count) fotodatum extraherade från \(groups.count) grupper")
 
         guard !photoDates.isEmpty else {
-            state.appendStepLog(.findCalendarInfo, "Inga fotodatum — hoppar over", type: .warning)
+            state.appendStepLog(.findCalendarInfo, "Inga fotodatum — hoppar över", type: .warning)
             return
         }
 
@@ -158,7 +158,7 @@ extension PipelineRunner {
 
         if calendarMappings.isEmpty {
             state.appendLog("Inga matchande kalenderbokningar hittades.", type: .info)
-            state.appendStepLog(.findCalendarInfo, "Inga kalenderbokningar matchade nagot fotodatum", type: .warning)
+            state.appendStepLog(.findCalendarInfo, "Inga kalenderbokningar matchade något fotodatum", type: .warning)
         } else {
             state.allMatchedAddresses = []
             for mapping in calendarMappings {

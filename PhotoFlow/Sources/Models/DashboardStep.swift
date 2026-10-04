@@ -19,7 +19,7 @@ enum DashboardStep: Int, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .watchSources: return "Bevaka kallor"
+        case .watchSources: return "Bevaka källor"
         // "Hämta" i stället för "Kopiera": steget kopierar bara i SD-korts-
         // flödet (rsync i RunnerWrapper.copyFromSDCardAndStart). Väljer man
         // mapp manuellt räknar det bara filerna som redan ligger där.

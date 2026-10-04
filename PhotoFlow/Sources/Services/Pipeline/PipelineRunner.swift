@@ -317,7 +317,7 @@ class PipelineRunner: ObservableObject {
                 state.completeStep(.aiTagging, count: aiTagResults.count)
             } else {
                 state.updateStep(.aiTagging, phase: .disabled)
-                state.appendStepLog(.aiTagging, "AI-taggning/Vision-analys avaktiverad i installningar", type: .info)
+                state.appendStepLog(.aiTagging, "AI-taggning/Vision-analys avaktiverad i inställningar", type: .info)
             }
             pipelineLog("<<< AI-taggning / Vision-analys klar")
 
@@ -464,12 +464,12 @@ class PipelineRunner: ObservableObject {
     /// Re-run a single pipeline step
     func rerunStep(_ step: DashboardStep) async {
         guard let inputDir = state.inputDirectory else {
-            state.appendLog("Kan inte kora om — ingen inputmapp.", type: .error)
+            state.appendLog("Kan inte köra om — ingen inputmapp.", type: .error)
             return
         }
 
         logDecision(step: "\(step)", decision: "rerun_triggered")
-        state.appendStepLog(step, "Kor om steget...")
+        state.appendStepLog(step, "Kör om steget...")
         state.updateStep(step, phase: .active)
 
         do {
@@ -540,7 +540,7 @@ class PipelineRunner: ObservableObject {
                 try await loadBracketGroups()
                 state.updateStep(step, phase: .needsAttention)
                 state.currentStep = .reviewingBrackets
-                state.appendLog("Redo for granskning.", type: .success)
+                state.appendLog("Redo för granskning.", type: .success)
                 return
 
             case .moveToFolders:
@@ -556,7 +556,7 @@ class PipelineRunner: ObservableObject {
                 state.completeStep(step)
 
             default:
-                state.appendLog("\(step.title) kan inte koras om manuellt.", type: .warning)
+                state.appendLog("\(step.title) kan inte köras om manuellt.", type: .warning)
                 state.updateStep(step, phase: .complete)
                 return
             }

@@ -153,7 +153,7 @@ struct BracketReviewView: View {
             // Notes toggle
             Button(action: { withAnimation { showNotes.toggle() } }) {
                 Label(
-                    showNotes ? "Dolj anteckningar" : "Anteckningar (N)",
+                    showNotes ? "Dölj anteckningar" : "Anteckningar (N)",
                     systemImage: showNotes ? "mic.slash" : "mic.bubble"
                 )
             }

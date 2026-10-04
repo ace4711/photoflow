@@ -114,7 +114,7 @@ struct StepCardView: View {
                                 .foregroundColor(.secondary)
                         }
                         .buttonStyle(.plain)
-                        .help("Kor om detta steg")
+                        .help("Kör om detta steg")
                     }
                 }
                 .frame(height: 16)
@@ -465,7 +465,7 @@ struct StepDetailSheet: View {
                         .foregroundColor(.secondary)
                 }
 
-                Button("Stang") { dismiss() }
+                Button("Stäng") { dismiss() }
                     .buttonStyle(.bordered)
             }
             .padding(16)
@@ -482,7 +482,7 @@ struct StepDetailSheet: View {
                     summaryItem(label: "Bearbetade", value: "\(status.processedCount)")
                 }
                 if status.queuedCount > 0 {
-                    summaryItem(label: "I ko", value: "\(status.queuedCount)")
+                    summaryItem(label: "I kö", value: "\(status.queuedCount)")
                 }
                 Spacer()
             }
@@ -498,7 +498,7 @@ struct StepDetailSheet: View {
                     Image(systemName: "doc.text")
                         .font(.system(size: 40))
                         .foregroundColor(.secondary.opacity(0.3))
-                    Text("Ingen logg tillganglig")
+                    Text("Ingen logg tillgänglig")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Spacer()

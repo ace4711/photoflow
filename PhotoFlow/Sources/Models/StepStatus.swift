@@ -64,7 +64,7 @@ struct StepStatus {
             }
             return "Arbetar...\(estimateSuffix)"
         case .needsAttention:
-            return "Vantar pa dig"
+            return "Väntar på dig"
         case .paused:
             if totalCount > 0 {
                 return "Pausad \(processedCount)/\(totalCount)"

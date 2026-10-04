@@ -453,8 +453,8 @@ struct DashboardView: View {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.message = "Valj mappen med NEF-filer"
-        panel.prompt = "Valj"
+        panel.message = "Välj mappen med NEF-filer"
+        panel.prompt = "Välj"
         if let dir = settings.inputDirectory {
             panel.directoryURL = dir
         }
@@ -470,8 +470,8 @@ struct DashboardView: View {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.message = "Valj outputmapp"
-        panel.prompt = "Valj"
+        panel.message = "Välj outputmapp"
+        panel.prompt = "Välj"
         if let dir = settings.outputDirectory {
             panel.directoryURL = dir
         }
@@ -590,7 +590,7 @@ struct DashboardView: View {
         let inputDir = pipeline.inputDirectory ?? settings.inputDirectory
         guard let inputDir else {
             // No input dir yet — watcher will trigger pipeline when SD card is found
-            pipeline.appendLog("Vantar pa SD-kort eller inputmapp...", type: .info)
+            pipeline.appendLog("Väntar på SD-kort eller inputmapp...", type: .info)
             pipeline.updateStep(.watchSources, phase: .watching)
             return
         }

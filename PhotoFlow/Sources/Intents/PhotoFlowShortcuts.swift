@@ -13,7 +13,7 @@ struct PhotoFlowShortcuts: AppShortcutsProvider {
             phrases: [
                 "Bearbeta bilder med \(.applicationName)",
                 "Starta \(.applicationName)",
-                "Kor \(.applicationName)-pipelinen"
+                "Kör \(.applicationName)-pipelinen"
             ],
             shortTitle: "Bearbeta bilder",
             systemImageName: "photo.stack"
@@ -23,7 +23,7 @@ struct PhotoFlowShortcuts: AppShortcutsProvider {
             phrases: [
                 "Starta \(.applicationName)-bevakning",
                 "Stoppa \(.applicationName)-bevakning",
-                "Vaxla bevakning i \(.applicationName)"
+                "Växla bevakning i \(.applicationName)"
             ],
             shortTitle: "Bevakning",
             systemImageName: "eye"
@@ -31,8 +31,8 @@ struct PhotoFlowShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: SessionStatusIntent(),
             phrases: [
-                "Status for \(.applicationName)",
-                "Vad gor \(.applicationName)"
+                "Status för \(.applicationName)",
+                "Vad gör \(.applicationName)"
             ],
             shortTitle: "Status",
             systemImageName: "info.circle"
@@ -41,7 +41,7 @@ struct PhotoFlowShortcuts: AppShortcutsProvider {
             intent: ShowReviewIntent(),
             phrases: [
                 "Granska bilder i \(.applicationName)",
-                "Oppna granskning i \(.applicationName)"
+                "Öppna granskning i \(.applicationName)"
             ],
             shortTitle: "Granska",
             systemImageName: "hand.tap"

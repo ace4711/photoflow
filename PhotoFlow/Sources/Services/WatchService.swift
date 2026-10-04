@@ -9,7 +9,7 @@ class WatchService: ObservableObject {
     @Published var detectedVolumes: [URL] = []
     @Published var newFilesFound: Int = 0
     @Published var lastCheckTime: Date?
-    @Published var statusMessage: String = "Vantar..."
+    @Published var statusMessage: String = "Väntar..."
     @Published var logLines: [String] = []
 
     /// Fallback-pollning (`AppSettings.watchIntervalSeconds`, default 60 s) —
@@ -323,7 +323,7 @@ class WatchService: ObservableObject {
             } else {
                 // Search subdirectories one level deep
                 let subdirs = files.filter { $0.hasDirectoryPath && !$0.lastPathComponent.hasPrefix(".") && $0.lastPathComponent != "processed" }
-                log("Kontroll: Inga NEF direkt i \(dir.lastPathComponent), soker i \(subdirs.count) undermappar...")
+                log("Kontroll: Inga NEF direkt i \(dir.lastPathComponent), söker i \(subdirs.count) undermappar...")
                 for subdir in subdirs {
                     if let subFiles = try? FileManager.default.contentsOfDirectory(at: subdir, includingPropertiesForKeys: nil) {
                         let subNEFs = subFiles.filter { $0.pathExtension.uppercased() == "NEF" }
@@ -336,7 +336,7 @@ class WatchService: ObservableObject {
                 }
             }
         } else {
-            log("Kontroll: Kunde inte lasa \(dir.lastPathComponent)")
+            log("Kontroll: Kunde inte läsa \(dir.lastPathComponent)")
             return
         }
 
@@ -404,7 +404,7 @@ class WatchService: ObservableObject {
             NotificationService.shared.notifyPipelineStarting(fileCount: stableNEFs.count, folder: nefSourceDir)
             onNewFilesDetected?(nefSourceDir, stableNEFs)
         } else {
-            log("Automatisk bearbetning avstaengd - starta manuellt")
+            log("Automatisk bearbetning avstängd - starta manuellt")
         }
     }
 
@@ -445,7 +445,7 @@ class WatchService: ObservableObject {
         if nefFiles.isEmpty {
             log("Volym \(volumeURL.lastPathComponent): Inga nya NEF-filer i DCIM")
         } else {
-            log("HITTADE: \(nefFiles.count) NEF-filer pa \(volumeURL.lastPathComponent)")
+            log("HITTADE: \(nefFiles.count) NEF-filer på \(volumeURL.lastPathComponent)")
             newFilesFound = nefFiles.count
             audio.speak("Minneskort hittat med \(nefFiles.count) nya bilder")
 

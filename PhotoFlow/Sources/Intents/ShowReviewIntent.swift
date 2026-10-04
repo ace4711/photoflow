@@ -8,7 +8,7 @@ import Foundation
 /// ingen ny koppling behovdes.
 struct ShowReviewIntent: AppIntent {
     static let title: LocalizedStringResource = "Granska bilder i PhotoFlow"
-    static let description = IntentDescription("Oppnar PhotoFlow i granskningslaget for den aktuella sessionen.")
+    static let description = IntentDescription("Öppnar PhotoFlow i granskningsläget för den aktuella sessionen.")
     static let openAppWhenRun: Bool = true
 
     @MainActor
@@ -18,10 +18,10 @@ struct ShowReviewIntent: AppIntent {
         }
 
         guard !pipeline.allPhotos.isEmpty else {
-            return .result(dialog: "Det finns inga bilder att granska an.")
+            return .result(dialog: "Det finns inga bilder att granska än.")
         }
 
         pipeline.reviewRequestedFromNotification = true
-        return .result(dialog: "Oppnar granskning i PhotoFlow.")
+        return .result(dialog: "Öppnar granskning i PhotoFlow.")
     }
 }

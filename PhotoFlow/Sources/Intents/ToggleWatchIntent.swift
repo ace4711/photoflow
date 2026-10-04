@@ -10,17 +10,17 @@ import Foundation
 /// forgrunden.
 struct ToggleWatchIntent: AppIntent {
     static let title: LocalizedStringResource = "Starta/stoppa PhotoFlow-bevakning"
-    static let description = IntentDescription("Slar pa eller av SD-korts-/mappbevakningen i PhotoFlow.")
+    static let description = IntentDescription("Slår på eller av SD-korts-/mappbevakningen i PhotoFlow.")
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         guard let runner = AppServices.shared.runner else {
-            return .result(dialog: "PhotoFlow ar inte igang.")
+            return .result(dialog: "PhotoFlow är inte igång.")
         }
 
         if runner.watcher.isWatching {
             runner.stopWatchingForSDCards()
-            return .result(dialog: "PhotoFlow-bevakning avstangd.")
+            return .result(dialog: "PhotoFlow-bevakning avstängd.")
         } else {
             runner.startWatchingForSDCards()
             return .result(dialog: "PhotoFlow-bevakning startad.")

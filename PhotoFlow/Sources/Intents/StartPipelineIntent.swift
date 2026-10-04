@@ -9,7 +9,7 @@ import Foundation
 struct StartPipelineIntent: AppIntent {
     static let title: LocalizedStringResource = "Bearbeta bilder med PhotoFlow"
     static let description = IntentDescription(
-        "Startar PhotoFlow-pipelinen (DNG-konvertering, HDR, kalendermatchning, metadata) for en mapp med NEF-filer."
+        "Startar PhotoFlow-pipelinen (DNG-konvertering, HDR, kalendermatchning, metadata) för en mapp med NEF-filer."
     )
     static let openAppWhenRun: Bool = true
 
@@ -18,7 +18,7 @@ struct StartPipelineIntent: AppIntent {
     /// mapp dashboardens egen "Valj mapp"-knapp normalt pekar pa.
     @Parameter(
         title: "Mapp",
-        description: "Mapp med NEF-filer att bearbeta. Lamna tom for att anvanda den mapp som ar konfigurerad i PhotoFlow installningar.",
+        description: "Mapp med NEF-filer att bearbeta. Lämna tom för att använda den mapp som är konfigurerad i PhotoFlow inställningar.",
         supportedContentTypes: [.folder]
     )
     var folder: IntentFile?
@@ -35,7 +35,7 @@ struct StartPipelineIntent: AppIntent {
 
         let inputDir = folder?.fileURL ?? AppSettings.shared.inputDirectory
         guard let inputDir else {
-            return .result(dialog: "Ingen mapp vald, och ingen inputmapp ar konfigurerad i PhotoFlow installningar.")
+            return .result(dialog: "Ingen mapp vald, och ingen inputmapp är konfigurerad i PhotoFlow inställningar.")
         }
 
         runner.start(inputDir: inputDir, outputDir: AppSettings.shared.outputDirectory)

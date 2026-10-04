@@ -40,8 +40,8 @@ extension PipelineRunner {
                 "nefCount": "\(nefFiles.count)",
                 "fingerprint": fingerprint
             ])
-            state.appendLog("Alla \(nefFiles.count) previews finns redan — hoppar over.", type: .info)
-            state.appendStepLog(.generatePreviews, "Alla \(nefFiles.count) previews finns redan — hoppar over", type: .info)
+            state.appendLog("Alla \(nefFiles.count) previews finns redan — hoppar över.", type: .info)
+            state.appendStepLog(.generatePreviews, "Alla \(nefFiles.count) previews finns redan — hoppar över", type: .info)
             // Äldre sessioner: rotationen skrevs inte förut — rätta en gång.
             if !FileManager.default.fileExists(atPath: previewDir.appendingPathComponent(Self.orientationMarker).path) {
                 try await applyPreviewOrientation(nefFiles: nefFiles, previewDir: previewDir)
@@ -51,7 +51,7 @@ extension PipelineRunner {
         }
 
         state.appendLog("Genererar JPEG-previews...", type: .info)
-        state.appendStepLog(.generatePreviews, "Genererar previews for \(nefFiles.count) NEF-filer...")
+        state.appendStepLog(.generatePreviews, "Genererar previews för \(nefFiles.count) NEF-filer...")
 
         state.totalFiles = nefFiles.count
         state.currentFileIndex = 0
