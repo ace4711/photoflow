@@ -158,8 +158,7 @@ extension DashboardStep {
                     "Skriver till DNG/JPEG/HDR-TIFF direkt (overwrite in place); NEF-original rörs aldrig — får i stället en XMP-sidecar.",
                     "Fält: GPS-koordinater, adress (Headline/ObjectName/Title), bokningstitel och AI-taggar/beskrivning som nyckelord/bildtext.",
                     "Körs i batchar om 100 filer via ett exiftool-argfile för hastighet.",
-                    "Hoppar över om metadata_written.json finns och fingerprintet (bilder + AI-taggar + adresser/rättningar) matchar.",
-                    "HDR- och förbättrade filer får metadatan redan när de skapas; metadata_stamps.json visar vilka filer som redan har rätt metadata, och de hoppas över.",
+                    "Hoppar över filer som redan har rätt metadata enligt metadata_stamps.json (HDR och förbättrade filer får den när de skapas), eller hela steget om metadata_written.json och fingerprintet matchar.",
                     "En omkörd AI-taggning eller adressrättning triggar alltid en ny skrivning, även vid samma filantal.",
                     "Fel: exiftool saknas → installera med brew install exiftool; steget skriver då ingen metadata alls."
                 ],
