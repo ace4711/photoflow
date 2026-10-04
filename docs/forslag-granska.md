@@ -15,4 +15,6 @@ Prioriterat efter nytta/insats. [x] = gjort.
 11. [x] Stjärnbetyg per grupp (1-5, 0 tar bort; samma siffra igen växlar av) sparas i group_ratings.json i outputmappen och kan filtreras ("★ N+"). Förslag kvar: ta med betyget som xmp:Rating till Lightroom – ingen säker sidecar-skrivväg finns idag, så det är medvetet inte gjort.
 12. [x] Ångra senaste beslut (Cmd+Z / Ångra-knapp), upp till 200 steg.
 13. [x] Status för omsammanslagning i gruppslistan: spinner "Gör om…" per grupp och röd "Misslyckades" (felmeddelande som tooltip) om omgörningen inte gav någon ny HDR.
-14. [ ] Window pull-panel (fas 4 i docs/plan-hdr-fonster.md) – hanteras separat.
+14. [x] Urval till extern redigering (se docs/plan-urval.md): växeln "Skicka till redigering" (S) per grupp, kryssrutor per exponering (E), förslag förbockat med markeringen "Förslag", filter Skickas/Ej vald, räknare i headern, ⌘Z. Sparas i edit_selection.json.
+15. [x] "Skapa skicka-mappar": valda DNG kopieras till `<adress>/<adress> skicka/` (Osorterade → `Osorterade/Osorterade skicka/`), främmande filer skrivs aldrig över, bara egna oförändrade filer tas bort (edit_send_manifest.json), sammanfattning och Visa i Finder.
+16. [ ] Window pull-panel (fas 4 i docs/plan-hdr-fonster.md) – hanteras separat.
