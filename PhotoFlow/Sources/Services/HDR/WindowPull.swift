@@ -457,6 +457,30 @@ nonisolated enum WindowPull {
         }
         for l in 1...count where keep[l] { detection.kept += 1 }
         detection.mask = maskOf(keep)
+        // Partier av fönstret som är klippta även i den mörka ramen (frostat glas, bländande
+        // himmel) hör till fönstret: växer masken in i dem. Annars gick maskkanten mitt i en
+        // jämnvit yta utan någon kant att följa, och övergången blev trappstegsformad.
+        var queue: [Int] = []
+        queue.reserveCapacity(n / 8)
+        for p in 0..<n where detection.mask.data[p] > 0.5 { queue.append(p) }
+        var head = 0
+        while head < queue.count {
+            let p = queue[head]; head += 1
+            let x = p % width, y = p / width
+            for dy in -1...1 {
+                let ny = y + dy
+                guard ny >= 0, ny < height else { continue }
+                for dx in -1...1 {
+                    let nx = x + dx
+                    guard nx >= 0, nx < width else { continue }
+                    let q = ny * width + nx
+                    if clippedBoth[q] > 0.5 && detection.mask.data[q] < 0.5 {
+                        detection.mask.data[q] = 1
+                        queue.append(q)
+                    }
+                }
+            }
+        }
         detection.components = infos.compactMap { $0 }
         return detection
     }
@@ -543,7 +567,9 @@ nonisolated enum WindowPull {
     /// men p99 av max-kanalen ≤ `maxP99`, och inom [minGainEV, maxGainEV].
     static func matchGain(dark: [Float], mask: Plane, options: Options) -> Float {
         var lumas: [Float] = [], maxes: [Float] = []
-        for p in 0..<(mask.width * mask.height) where mask.data[p] >= 0.5 {
+        for p in 0..<(mask.width * mask.height) where mask.data[p] >= 0.5
+            && max(dark[p * 4], dark[p * 4 + 1], dark[p * 4 + 2]) <= options.darkInformativeMax {
+            // Klippta partier (frostat glas, bländande himmel) säger inget om exponeringen.
             lumas.append(HDRImageOps.luma(dark[p * 4], dark[p * 4 + 1], dark[p * 4 + 2]))
             maxes.append(max(dark[p * 4], dark[p * 4 + 1], dark[p * 4 + 2]))
         }
