@@ -107,6 +107,10 @@ struct BracketReviewView: View {
             return .handled
         }
         .onKeyPress(characters: CharacterSet(charactersIn: "d")) { _ in finishReview(); return .handled }
+        .onKeyPress(.tab) { goToUnreviewedGroup(direction: 1); return .handled }
+        .onKeyPress(characters: CharacterSet(charactersIn: "u")) { _ in goToUnreviewedGroup(direction: 1); return .handled }
+        .onKeyPress(characters: CharacterSet(charactersIn: "j")) { _ in navigateGroup(1); return .handled }
+        .onKeyPress(characters: CharacterSet(charactersIn: "k")) { _ in navigateGroup(-1); return .handled }
         .onKeyPress(characters: CharacterSet(charactersIn: "n")) { _ in
             withAnimation { showNotes.toggle() }
             return .handled
@@ -153,7 +157,10 @@ struct BracketReviewView: View {
             VStack(alignment: .trailing, spacing: 4) {
                 Text("Grupp \(selectedGroupIndex + 1) av \(pipeline.bracketGroups.count)")
                     .font(.headline)
-                Text("Piltangenter: navigera | Mellanslag: välj/avvälj | H: HDR-preview")
+                Text(ReviewNavigation.progressText(reviewed: reviewedCount, total: pipeline.bracketGroups.count))
+                    .font(.caption.bold())
+                    .foregroundColor(reviewedCount == pipeline.bracketGroups.count ? .green : .secondary)
+                Text("Pilar: navigera | Mellanslag: välj | H: HDR | Tab/U: nästa ogranskade")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
@@ -496,6 +503,16 @@ struct BracketReviewView: View {
             ImageCache.shared.prefetch(url: photo.previewURL, tier: .thumbnail, maxDimension: 200)
             ImageCache.shared.prefetch(url: photo.previewURL, tier: .fullSize, maxDimension: 2400)
         }
+        // Grannar: nästa/föregående grupp så att pil upp/ner känns omedelbart.
+        let groups = pipeline.bracketGroups
+        for i in ReviewNavigation.prefetchNeighbors(of: selectedGroupIndex, count: groups.count, radius: 2) {
+            for photo in pipeline.photos(in: groups[i]) {
+                ImageCache.shared.prefetch(url: photo.previewURL, tier: .fullSize, maxDimension: 2400)
+            }
+            if let hdr = groups[i].finalPreviewURL {
+                ImageCache.shared.prefetch(url: hdr, tier: .fullSize, maxDimension: 2400)
+            }
+        }
     }
 
     // MARK: - Actions
@@ -511,6 +528,18 @@ struct BracketReviewView: View {
         if newIndex >= 0 && newIndex < currentGroupPhotos.count {
             selectedPhotoIndex = newIndex
         }
+    }
+
+    private var reviewedCount: Int {
+        pipeline.bracketGroups.filter { pipeline.allReviewed($0) }.count
+    }
+
+    private func goToUnreviewedGroup(direction: Int) {
+        let reviewed = pipeline.bracketGroups.map { pipeline.allReviewed($0) }
+        guard let idx = ReviewNavigation.nextUnreviewed(from: selectedGroupIndex, reviewed: reviewed, direction: direction) else { return }
+        selectedGroupIndex = idx
+        selectedPhotoIndex = 0
+        showSources = false
     }
 
     private func navigateGroup(_ direction: Int) {

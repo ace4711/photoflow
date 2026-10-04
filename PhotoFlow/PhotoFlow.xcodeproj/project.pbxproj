@@ -19,6 +19,7 @@
 		0A254571BE69397054E47C89 /* HDREngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 881974C88BC24DB7A88BFDB5 /* HDREngine.swift */; };
 		0A920AE3F7F2BF2E2C1A141A /* NotesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A744F8E9CC36AC9DFDE19C79 /* NotesManager.swift */; };
 		0ABA30E9B5C55F96F7820185 /* PipelineRunner+AITagging.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFE1925080EB1C0287843A6E /* PipelineRunner+AITagging.swift */; };
+		0B430D294C1B7994FAEC030F /* ReviewNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62639D7EC279EFC5A3121198 /* ReviewNavigationTests.swift */; };
 		0B982544AC07E2C9EB008100 /* ReelWebVariantTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A3FC2DB9406841FF32D7631 /* ReelWebVariantTests.swift */; };
 		0BC4E6F7B5881C02478E834F /* TranslationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 946EF029FC6B8E82370D3CED /* TranslationService.swift */; };
 		0C9123D0C252617FCAA8388B /* ReelWebVariant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 395F9C90A632FE40FB1E4F83 /* ReelWebVariant.swift */; };
@@ -68,6 +69,7 @@
 		2B00AE90AC48537987DF0BD6 /* ReelImageAnalyzerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAA900448E73168708031EAF /* ReelImageAnalyzerTests.swift */; };
 		2B4826D74AF5BBF694349A19 /* DictationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8C117DD311BF15484E64F9F /* DictationServiceTests.swift */; };
 		2C5BBA7F4AD7146E61BDC6A6 /* PipelineRunner+LoadSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 641FF12CDBCFCA494956CF3A /* PipelineRunner+LoadSession.swift */; };
+		2C7B27705AA8FB2133F722F2 /* ReviewNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = AED7065D6886C21AC927A006 /* ReviewNavigation.swift */; };
 		2D48F62FB5E961246BC44080 /* PhotoFlowCLI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 692489EF5DE8E813FF8728F1 /* PhotoFlowCLI.swift */; };
 		2E6B87610B4551C5B2B978B1 /* AudioService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97F73B1E75EF61D038F41B3C /* AudioService.swift */; };
 		2EA30C7656888D9498B11E02 /* ReelProposalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 650927EBEBA2BD089349A6AE /* ReelProposalTests.swift */; };
@@ -210,6 +212,7 @@
 		9CB32BEAE0C03C881B5FD714 /* Preflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FB36CA3303E632713FBD27B /* Preflight.swift */; };
 		9D6A966DFEADD444C24BB645 /* PipelineRunner+HDR.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07F438E24E4E1E4884E9C260 /* PipelineRunner+HDR.swift */; };
 		9D8F4DE0885D55B7C8280318 /* StepCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D180E348EDC56158B0BF798D /* StepCardView.swift */; };
+		9DF431EAEE01AD8C3EB207A8 /* ReviewNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = AED7065D6886C21AC927A006 /* ReviewNavigation.swift */; };
 		9EC3A5DC0FB670DC9916C8B8 /* HDRLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F896F86D7D0B66BC08B64A95 /* HDRLog.swift */; };
 		A12C9183B1EB5B4E6C232CF3 /* PipelineRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5DB3A99AD7128B30E2F8B89 /* PipelineRunner.swift */; };
 		A1ACA8D7D447CB0C835BAF90 /* HDRReEnhanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51FFA3D32229247BA68422EA /* HDRReEnhanceTests.swift */; };
@@ -417,6 +420,7 @@
 		5F58D6C4ED8559614D6AAE56 /* WindowPullTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowPullTests.swift; sourceTree = "<group>"; };
 		5FDBA9911E8C73F6226423B7 /* PipelineRunner+DNG.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+DNG.swift"; sourceTree = "<group>"; };
 		619F544EAB6D20AB1A02E1CD /* ReelSyncMergerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelSyncMergerTests.swift; sourceTree = "<group>"; };
+		62639D7EC279EFC5A3121198 /* ReviewNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewNavigationTests.swift; sourceTree = "<group>"; };
 		63A20F964CE38E3D0B211D80 /* ReelMotionPlannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelMotionPlannerTests.swift; sourceTree = "<group>"; };
 		641FF12CDBCFCA494956CF3A /* PipelineRunner+LoadSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+LoadSession.swift"; sourceTree = "<group>"; };
 		64A78E994BBEEF2B356195DB /* singles.expected.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = singles.expected.json; sourceTree = "<group>"; };
@@ -501,6 +505,7 @@
 		ACFE8398C36DC1D9216B103B /* ReelSpec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelSpec.swift; sourceTree = "<group>"; };
 		ADC2D16642244E60D511C976 /* FieldLocationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldLocationService.swift; sourceTree = "<group>"; };
 		ADE6D33A3AAB34122377A837 /* HDRAlignment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRAlignment.swift; sourceTree = "<group>"; };
+		AED7065D6886C21AC927A006 /* ReviewNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewNavigation.swift; sourceTree = "<group>"; };
 		AF069198E88FC10A80486CAD /* two_brackets_and_gap.csv */ = {isa = PBXFileReference; path = two_brackets_and_gap.csv; sourceTree = "<group>"; };
 		AF63168D1774C3566A1890FF /* DependencyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DependencyManager.swift; sourceTree = "<group>"; };
 		B05548288B2EBB830BA02C5E /* ToolLocator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolLocator.swift; sourceTree = "<group>"; };
@@ -829,6 +834,7 @@
 				CD06F83CB1752838347B9F54 /* ReelUploadPlannerTests.swift */,
 				2A3FC2DB9406841FF32D7631 /* ReelWebVariantTests.swift */,
 				73C793E2AC4E7D98F92CE96D /* ReviewImageSelectionTests.swift */,
+				62639D7EC279EFC5A3121198 /* ReviewNavigationTests.swift */,
 				FEDBF202BE7BEA2DE2BA5F38 /* SessionHistoryStoreTests.swift */,
 				B778E538EE39AE2387680410 /* SessionManifestStoreTests.swift */,
 				9C9579C3681C19EC33B4A7B6 /* SessionVerifierTests.swift */,
@@ -986,6 +992,7 @@
 				3FB36CA3303E632713FBD27B /* Preflight.swift */,
 				FE874F40F63AB440BD8C72E6 /* PreflightModel.swift */,
 				3FAF9E71434C6940E4D09E52 /* ReviewImageSelection.swift */,
+				AED7065D6886C21AC927A006 /* ReviewNavigation.swift */,
 				80F4734D27E144D9ED40671F /* SessionHistoryStore.swift */,
 				D4A38FD1EFF2B96F70EF36FA /* SessionManifestStore.swift */,
 				C980DE95A08AA0E1086E34B2 /* SessionVerifier.swift */,
@@ -1250,6 +1257,7 @@
 				0C9123D0C252617FCAA8388B /* ReelWebVariant.swift in Sources */,
 				6644CB7C5A4AAC4896B917B1 /* ReelWorkerController.swift in Sources */,
 				C430019C7AC35FEEBBD62559 /* ReviewImageSelection.swift in Sources */,
+				2C7B27705AA8FB2133F722F2 /* ReviewNavigation.swift in Sources */,
 				A7BB36146294F0ED6765B284 /* SendableAudioBuffer.swift in Sources */,
 				82F865BBCB84BB071DB955DC /* SessionHistoryStore.swift in Sources */,
 				272E28E061C96C3659799CA9 /* SessionManifest.swift in Sources */,
@@ -1337,6 +1345,7 @@
 				49A35421E5489A3ECD3B767E /* ReelUploadPlannerTests.swift in Sources */,
 				0B982544AC07E2C9EB008100 /* ReelWebVariantTests.swift in Sources */,
 				DD56F20807A89608D2895CE2 /* ReviewImageSelectionTests.swift in Sources */,
+				0B430D294C1B7994FAEC030F /* ReviewNavigationTests.swift in Sources */,
 				245D25D0DDBB6D8812A35D62 /* SessionHistoryStoreTests.swift in Sources */,
 				7815F46A102D51998D8B4D8C /* SessionManifestStoreTests.swift in Sources */,
 				455B0C41C52497FDB33C8761 /* SessionVerifierTests.swift in Sources */,
@@ -1457,6 +1466,7 @@
 				F1F9FFB8315B1848A2075EFC /* ReelWebVariant.swift in Sources */,
 				F59EEB31AA3EF918E2598F9A /* ReelWorkerController.swift in Sources */,
 				D3BE3986E526987E5D243F73 /* ReviewImageSelection.swift in Sources */,
+				9DF431EAEE01AD8C3EB207A8 /* ReviewNavigation.swift in Sources */,
 				8B3D05261E6FF57ED247EE14 /* SendableAudioBuffer.swift in Sources */,
 				77932461C99C00B057428947 /* SessionHistoryStore.swift in Sources */,
 				E07356499310A60CA6E21D60 /* SessionHistoryView.swift in Sources */,
