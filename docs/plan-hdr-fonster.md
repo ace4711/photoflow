@@ -1,6 +1,6 @@
 # Plan: fönsterutsikt från mörkaste exponeringen (window pull)
 
-Status: plan, inget implementerat. Lightroom behövs inte.
+Status: fas 0 och fas 1 implementerade (HDREngine v3, se "Genomfört" sist). Lightroom behövs inte.
 
 ## Sammanfattning
 
@@ -98,3 +98,26 @@ Ny `Services/HDR/WindowPull.swift` (ren `nonisolated enum`), anropas i `HDREngin
 Risker: felträffar (lampor, blanka golv), onaturlig himmel i exteriörer, brus i mörk ram (välj näst mörkaste vid gain > 1,5 EV), dubbla karmar vid dålig registrering, att levererade sessioner skrivs över (Fråga), +2 s per grupp i 49/97 grupper.
 
 Kritiska filer: `Services/HDR/HDREngine.swift`, `ExposureFusion.swift`, nya `WindowPull.swift`, `PipelineRunner+HDR.swift`, `Enhancement/EnhancementEngine.swift`, `Views/BracketReviewView.swift`, `BracketAnalyzer.swift:220`, `HDRAlignment.swift`, `RAWRenderer.swift`, `AppSettings.swift`, `SettingsView.swift`, `PhotoFlowCLI.swift`.
+
+## Genomfört (fas 0–1, 2026-10-04)
+
+- `HDREngine.merge(frames:windowSource:)`: exponeringar med exponeringstid, sorterade mörkast först, referens = medianen. Gruppens mörkaste exponering skickas som fönsterkälla (renderas extra när förslaget sorterat bort den). `HDREngine.version = 3`.
+- `hdr.json` (`HDRLog`): motorversion, fingerprint (NEF-namn + storlek, HDR- och fönsterinställningar), fönsterstatistik, `mergedAt`, granskningens urval (`manualSelection`). HDR-steget gör om vid saknad fil eller ändrat fingerprint och skriver där filen ligger (även sorterade adressmappar). **Befintliga HDR utan post adopteras** med motorversion 2 och görs inte om. Inställningen "Gör om befintliga HDR när motorn uppdaterats": **Aldrig (standard)** / Alltid. Fråga planeras som standard när dialogen finns (fas 4); värdet `ask` beter sig till dess som Aldrig. "Kör om steget" rensar loggen och gör om alla grupper.
+- Omsammanslagning i granskningen förbättrar gruppen direkt (`reEnhanceHDRGroup`), och Förbättra-steget gör om en förbättring som är äldre än HDR:en (`mergedAt`).
+- Registrering: histogrammatchning före Vision, **rättat tecken på den lodräta förskjutningen** (den gick åt fel håll sedan justeringen infördes — 2 px blev 4 px), och förskjutningar > 3 px verifieras genom ommätning (avvisar felregistreringar på 18 px för ramar 6–7 EV under referensen).
+- `WindowPull.swift` enligt 2 a–d plus: hålfyllnad, tillväxt in i fönsterpartier som är klippta även i mörka ramen, bortsortering av släta ytor (textur < 0,02, färgstarka < 0,045) och golv/reflexer (överkant under 55 % av höjden), lampor kräver låg textur (< 0,09), maskens spridning högst 4 px utanför detekteringen. Straff för klippta pixlar i Mertens-vikterna.
+- CLI: `--window-pull on|off`, `--window-strength N`, `--hdr-debug` (mask, mörkMatchad, fusion utan pull, `hdr_metrics.json` per grupp i `hdr_debug/`). Skript: `window-testset.py`, `window-compare.py`.
+
+### Mätning (30 grupper, `~/PhotoFlowBenchmark/results/windows-2026-10-04/`)
+
+Pull kördes i 22 av 30 grupper (8: inga fönster — oftast när mörkaste ramen bara är 1–2 EV mörkare, eller släta ytor). Median (värsta) över de 22:
+
+| Mått | Utan pull | Med pull | Mål |
+|---|---|---|---|
+| Klippt i mask | 46 % (98 %) | 0,3 % (5,2 %) | < 2 % |
+| Struktur vs mörk ram | 0,65 (0,33) | 0,985 (0,93) | ≥ 0,8 |
+| Pullens halo utanför masken | – | 6 px (12 px) | < 8 px |
+| Pull-tid | – | 0,49 s (0,56 s) | < 2,5 s |
+| HDR-tid per grupp (inkl. extra rendering och felsökningsfiler) | 11,8 s | 15,1 s | |
+
+Kända brister: fönster mot mulen himmel blir grå (textur för låg för att sorteras bort, men inget att hämta); reflexer i TV-skärm/spegel dras in; klippta partier som även är klippta i mörka ramen blir jämngrå när gain < 1; halo-måttet mot referensramen är grovt.
