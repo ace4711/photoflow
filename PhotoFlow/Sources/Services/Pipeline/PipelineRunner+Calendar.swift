@@ -2,6 +2,10 @@ import Foundation
 import CoreLocation
 
 extension PipelineRunner {
+    /// Sätts bara av photoflow-cli (`--calendar-matches`): använd en befintlig calendar_matches.json
+    /// i outputmappen utan att kontrollera manifestets fingerprint (och alltså utan EventKit).
+    static var trustExistingCalendarMatches = false
+
     // MARK: - Step 2.5: Calendar Matching
 
     func matchCalendarBookings() async {
@@ -36,7 +40,10 @@ extension PipelineRunner {
         // steget än — då är den gamla "filen finns och är inte tom"-
         // kontrollen fortfarande rimlig (annars skulle varje uppgraderad,
         // redan klar session i onödan göra om kalenderåtkomst+geokodning).
+        // `trustExistingCalendarMatches` (photoflow-cli --calendar-matches): testvägen för riktmärket,
+        // där calendar_matches.json läggs in i förväg och EventKit inte finns (headless).
         let canUseCache = manifestRecord == nil || manifestRecord?.inputFingerprint == calendarFingerprint
+            || Self.trustExistingCalendarMatches
         if canUseCache,
            let savedData = try? Data(contentsOf: matchesFile),
            let savedJSON = try? JSONSerialization.jsonObject(with: savedData) as? [[String: Any]],

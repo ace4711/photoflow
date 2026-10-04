@@ -31,6 +31,14 @@
 #                       säkerhetskopiera användarens step_timings.jsonl/sessions.json före körningarna
 #                       och återställ dem efteråt (annars hamnar benchmarkets poster i appens historik).
 #   --prepare-only      Kopiera testmängden och avsluta.
+#   --calendar-matches FILE
+#                       Kör MED kalender: CLI:t får `--calendar-matches FILE` (en calendar_matches.json,
+#                       t.ex. från en riktig session) i stället för --no-calendar, och --no-reel.
+#                       Kalendersteget använder då filen i stället för att fråga EventKit (ingen
+#                       behörighet behövs), så adress-, GPS- och metadatavägen testas. OBS: MapKit-geokodningen hänger headless (photoflow-cli
+#                       utan app-bundle får aldrig svar), så ge varje post "latitude"/"longitude" och
+#                       "corrected": true — då används koordinaterna som manuellt rättade och ingen
+#                       geokodning görs.
 #
 # Miljövariabler:
 #   BENCH_HOME          Rot (standard ~/PhotoFlowBenchmark): input/, out/, results/.
@@ -62,6 +70,7 @@ OUTPUT_ROOT="$BENCH_HOME/out"
 CLI="${PHOTOFLOW_CLI_BIN:-}"
 PREPARE_ONLY=0
 PROTECT_HISTORY=0
+CALENDAR_MATCHES=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -73,7 +82,8 @@ while [ $# -gt 0 ]; do
         --cli) CLI="$2"; shift 2 ;;
         --protect-history) PROTECT_HISTORY=1; shift ;;
         --prepare-only) PREPARE_ONLY=1; shift ;;
-        -h|--help) sed -n '2,45p' "$0"; exit 0 ;;
+        --calendar-matches) CALENDAR_MATCHES="$2"; shift 2 ;;
+        -h|--help) sed -n '2,51p' "$0"; exit 0 ;;
         *) echo "Okänd flagga: $1" >&2; exit 2 ;;
     esac
 done
@@ -160,6 +170,14 @@ defaults write photoflow-cli aiDescriptionsEnabled -bool false
 } > "$RESULTS/environment.txt"
 cp "$INPUT_COPY/testset.json" "$RESULTS/testset.json"
 
+CALENDAR_FLAGS=(--no-calendar)
+if [ -n "$CALENDAR_MATCHES" ]; then
+    if [ ! -f "$CALENDAR_MATCHES" ]; then echo "Hittar inte $CALENDAR_MATCHES" >&2; exit 2; fi
+    CALENDAR_FLAGS=(--no-reel --calendar-matches "$CALENDAR_MATCHES")
+    cp "$CALENDAR_MATCHES" "$RESULTS/calendar_matches.json"
+    echo "kalender: $CALENDAR_MATCHES" >> "$RESULTS/environment.txt"
+fi
+
 if [ "$PROTECT_HISTORY" -eq 1 ]; then
     SUPPORT="$HOME/Library/Application Support/PhotoFlow"
     mkdir -p "$RESULTS/history-backup"
@@ -183,7 +201,7 @@ for ((i = 1; i <= TOTAL; i++)); do
     mkdir -p "$RUN_RESULTS/support" "$OUT"
     echo "=== $NAME ($LABEL) -> $OUT"
     T0=$(date +%s)
-    PHOTOFLOW_SUPPORT_DIR="$RUN_RESULTS/support" "$CLI" run --input "$INPUT_COPY" --output "$OUT" --no-calendar --json \
+    PHOTOFLOW_SUPPORT_DIR="$RUN_RESULTS/support" "$CLI" run --input "$INPUT_COPY" --output "$OUT" "${CALENDAR_FLAGS[@]}" --json \
         > "$RUN_RESULTS/cli.stdout" 2> "$RUN_RESULTS/cli.stderr"
     STATUS=$?
     T1=$(date +%s)

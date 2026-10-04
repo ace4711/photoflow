@@ -74,6 +74,11 @@ struct PhotoFlowCLI {
                              efter HDR; på som standard).
           --no-reel         Stäng av "Filmförslag" (automatisk Objektfilm per adress
                              sist i körningen; på som standard, kräver kalendermatchning).
+          --calendar-matches <fil>
+                            Kör MED kalender utan EventKit: filen (en calendar_matches.json)
+                             kopieras till outputmappen och används som kalendermatchning.
+                             Ge posterna "latitude"/"longitude"/"corrected": true — MapKit-
+                             geokodningen får inget svar headless.
           --json            Skriv en maskinläsbar JSON-sammanfattning på
                              slutet (mellan PHOTOFLOW_CLI_JSON_SUMMARY_BEGIN/
                              _END-markörraderna på stdout).
@@ -138,6 +143,7 @@ struct PhotoFlowCLI {
         var noEnhance = false
         var noReel = false
         var jsonOutput = false
+        var calendarMatchesPath: String?
 
         var idx = 0
         while idx < args.count {
@@ -163,6 +169,10 @@ struct PhotoFlowCLI {
                 noReel = true
             case "--json":
                 jsonOutput = true
+            case "--calendar-matches":
+                idx += 1
+                guard idx < args.count else { fail("--calendar-matches kräver ett värde") }
+                calendarMatchesPath = args[idx]
             case "--help", "-h":
                 printUsage()
                 exit(0)
@@ -192,6 +202,20 @@ struct PhotoFlowCLI {
         // faller tillbaka på en egen domän keyad på processnamnet, så en
         // CLI-körning kan aldrig råka ändra användarens riktiga
         // app-inställningar.
+        if let calendarMatchesPath {
+            if noCalendar { fail("--calendar-matches och --no-calendar går inte ihop") }
+            let target = outputURL.appendingPathComponent("calendar_matches.json")
+            do {
+                try FileManager.default.createDirectory(at: outputURL, withIntermediateDirectories: true)
+                try? FileManager.default.removeItem(at: target)
+                try FileManager.default.copyItem(at: URL(fileURLWithPath: calendarMatchesPath), to: target)
+            } catch {
+                standardError("Kunde inte kopiera \(calendarMatchesPath): \(error.localizedDescription)\n")
+                exit(1)
+            }
+            PipelineRunner.trustExistingCalendarMatches = true
+        }
+
         let settings = AppSettings.shared
         settings.hdrMergeEnabled = !noHDR
         settings.calendarMatchEnabled = !noCalendar
