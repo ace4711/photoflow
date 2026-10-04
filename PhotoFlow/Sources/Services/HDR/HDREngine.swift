@@ -188,9 +188,24 @@ nonisolated enum HDREngine {
                     darkShiftRejected = shift == nil
                 }
                 guard let shift, shift != .zero else { continue }
-                rendered[i].pixels = PipelineMetrics.phase("align.shift") {
+                let shifted = PipelineMetrics.phase("align.shift") {
                     RAWRenderer.shiftRGBA(rendered[i].pixels, width: width, height: height, dx: Float(shift.x), dy: Float(shift.y))
                 }
+                // Verifiering av större förskjutningar: mät om på den förskjutna bilden. En riktig
+                // förskjutning lämnar ~0 kvar; en felmätning (vanligast för den mörkaste ramen,
+                // 6–7 EV under referensen) lämnar lika mycket kvar åt andra hållet — då behålls
+                // bilden oförskjuten. Uppmätt: 18 px felregistrering i 2 av 30 testgrupper.
+                if HDRAlignment.needsVerification(shift) {
+                    let residual = try PipelineMetrics.phase("align.verify") {
+                        try HDRAlignment.computeShift(floating: RAWRenderer.RenderedImage(width: width, height: height, pixels: shifted),
+                                                      reference: reference, maxAlignDimension: HDRAlignment.refinedAlignDimension)
+                    }
+                    if !HDRAlignment.verifiedShift(shift, residual: residual) {
+                        if i == windowIndex { darkShiftRejected = true }
+                        continue
+                    }
+                }
+                rendered[i].pixels = shifted
             }
             // Felsökning: kvarvarande förskjutning för fönsterkällan efter justeringen.
             if options.debugDir != nil, let windowIndex, windowIndex != middleIndex {

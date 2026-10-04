@@ -42,6 +42,19 @@ nonisolated enum HDRAlignment {
         return CGPoint(x: x, y: y)
     }
 
+    /// Förskjutningar över `threshold` px mäts om efter att de tillämpats (se `verifiedShift`).
+    static func needsVerification(_ shift: CGPoint, threshold: Double = 3) -> Bool {
+        (shift.x * shift.x + shift.y * shift.y).squareRoot() > threshold
+    }
+
+    /// Godkänner en förskjutning om det som är kvar efteråt är litet — högst 1,5 px eller
+    /// en tredjedel av förskjutningen.
+    static func verifiedShift(_ shift: CGPoint, residual: CGPoint) -> Bool {
+        let s = (shift.x * shift.x + shift.y * shift.y).squareRoot()
+        let r = (residual.x * residual.x + residual.y * residual.y).squareRoot()
+        return r <= max(1.5, s / 3)
+    }
+
     enum AlignmentError: LocalizedError {
         case cgImageCreationFailed
 

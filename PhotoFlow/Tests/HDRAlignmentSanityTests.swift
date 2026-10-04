@@ -59,4 +59,13 @@ struct HDRAlignmentSanityTests {
         for y in 20..<(h - 20) { for x in 20..<(w - 20) { diff += abs(aligned[(y * w + x) * 4] - reference.pixels[(y * w + x) * 4]); count += 1 } }
         #expect(diff / Float(count) < 0.01)
     }
+
+    @Test("Verifiering: en felmätning (lika mycket kvar efteråt) avvisas, en riktig godkänns")
+    func verification() {
+        #expect(!HDRAlignment.needsVerification(CGPoint(x: 2, y: -2)))
+        #expect(HDRAlignment.needsVerification(CGPoint(x: -2, y: 18)))
+        #expect(!HDRAlignment.verifiedShift(CGPoint(x: -2, y: 18), residual: CGPoint(x: 0, y: -18)))
+        #expect(HDRAlignment.verifiedShift(CGPoint(x: -2, y: 18), residual: CGPoint(x: 0, y: 1)))
+        #expect(HDRAlignment.verifiedShift(CGPoint(x: 6, y: 0), residual: CGPoint(x: 1, y: 1)))
+    }
 }
