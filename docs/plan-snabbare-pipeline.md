@@ -384,6 +384,61 @@ Uppskattad tid efter #1–#7: kopiering 1,5 + DNG 2,5 + 1 + max(AI 8, HDR ~8) + 
 
 ---
 
+## 8. Uppmätt (fas 1a)
+
+Testmängd: 160 NEF (20 bracket-grupper, 70 enskilda; `scripts/benchmark.sh`, kopia i `~/PhotoFlowBenchmark/input`, 5,0 GB), M3 Max, **intern disk**, `--no-calendar`, AI-bildtexter av, en uppvärmning + 2 mätta körningar per version, Debug-bygge (optimerat). Baslinje = commit `f57c891`. Siffrorna är sekunder; T5 är **inte** mätt än.
+
+| Steg | Baslinje | Efter fas 1a | Förändring |
+|---|---|---|---|
+| Konvertera DNG | 14,9 | 10,9 | −27 % (`-mp`) |
+| Skapa previews | 3,2 | 3,2 | |
+| AI-taggning (Vision + kvalitet) | 5,4 | 5,3 | |
+| Skapa HDR (23 grupper) | 246,3 | 221,7 | −10 % (okomprimerad TIFF, ingen LZW-kodning) |
+| Förbättra bilder (92 st) | 196,3 | 130,7 | −33 % (okomprimerad TIFF in och ut) |
+| Skriv metadata | (ej tidtagen i CLI:t före fas 1a) | 28,9 | |
+| **Hela körningen** | **496,3** (497,3 / 495,4) | **402,3** (402,7 / 401,9) | **−19 %** |
+
+Körningarna varierar mindre än 1 s, så skillnaderna är verkliga. Debounce av manifest/logg (#6) ger inget mätbart i det här körläget (få steg rapporterar samtidigt); den är en förutsättning för fas 2.
+
+**Resurser per steg (efter, medianer; disk = appen + barnprocesser):**
+
+| Steg | tid s | CPU s | kärnor i snitt | läst MB | skrivet MB | toppminne MB |
+|---|---|---|---|---|---|---|
+| DNG | 10,9 | 139,2 | 12,8 | 529 | 7 364 | 9 |
+| Förhandsbilder | 3,2 | 3,2 | 1,0 | 0 | 602 | 17 |
+| AI | 5,3 | 23,5 | 4,4 | 0 | 3 | 154 |
+| HDR | 221,7 | 204,0 | **0,9** | 0 | 6 025 | 6 303 |
+| Förbättra | 130,7 | 202,7 | **1,6** | 1 | 23 790 | 10 044 |
+| Metadata | 28,9 | 28,8 | 1,0 | 261 | 15 648 | 4 690 |
+
+Svar på planens frågor, så långt de går att läsa av:
+- **HDR använder i snitt 0,9 kärnor** av 16 (en grupp i taget), Förbättra 1,6 (tre samtidiga jobb). Det är den största kvarvarande processorreserven (fas 1b/1c).
+- **Tid inne i HDR-gruppen (`timings.jsonl`):** RAW-rendering av varje exponering 2,08 s/st (78 st = 162 s av 222 s, alltså 73 %), fusion 0,53 + 3 × 0,37 s per grupp, `copyEXIF` 0,33 s, TIFF-skrivning 0,05 s. Fusionen är alltså **inte** flaskhalsen; `CIRAWFilter`-renderingen är det.
+- **Inne i Förbättra (per bild, summerat över 3 samtidiga):** `load` 3,27 s (för DNG-bilder är det den RAW-rendering som `loadImage` gör direkt; för HDR-TIFF ~0), `copyEXIF` 0,37 s, nedskalning/analys 0,27 + 0,06 s, slutrendering 0,11 s, TIFF-skrivning 0,05 s. RAW-renderingen av enskilda bilder dominerar.
+- **Metadatasteget** skriver 15,6 GB för 160 bilder (DNG skrivs om): disken är relevant där.
+- **DNG Converter** använder 12,8 kärnor med `-mp` på intern disk (CPU-bundet), skriver 7,4 GB.
+
+### TIFF-format (#2)
+
+Tre riktiga HDR-bilder (`hdr_group_96/126/130.tiff`, 6000 × 4000, 16 bpc RGB), tre upprepningar, `-O`-kompilerat mätprogram med samma `CGImageDestination`-väg som `HDRWriter`:
+
+| | Storlek | Kodning | Avkodning (ImageIO + ritning till 16-bitarsbuffert) |
+|---|---|---|---|
+| LZW (före) | 172–177 MB | 1,07–1,12 s | 0,33 s |
+| Okomprimerad | 137 MB | 0,05–0,06 s | 0,07 s |
+
+LZW var alltså **20 % större** och ~20 gånger långsammare att koda; planens antagande (1.4) stämde. Avkodade pixlar är bit-för-bit identiska (SHA-256 på rå 16-bitars RGBX, samma hash för alla tre bilder i båda formaten). **Beslut: okomprimerad** (`HDRWriter.tiffCompression = 1`); `HDREngine.version`/`EnhancementEngine.version` bumpas inte eftersom pixlarna är desamma. Kommentaren "~6 s avkodning" i `runEnhancePhotos` stämde inte för ImageIO (0,33 s).
+
+### DNG-konverterarens `-mp` (#7)
+
+150 NEF, intern disk: en process utan flaggan 13,1 s; fyra egna samtidiga processer 8,8 s; två 9,7 s; **en process med `-mp` 8,8 s** (−33 %). Metadata (inkl. `RawImageDigest`) är identisk med och utan `-mp`. Därför `-mp` med oförändrad partistorlek (50); egna parallella partier gav inget extra. Förväntad vinst på T5: ~0 (diskbundet). Utdata skrivs nu till `dng/.partial/` och flyttas när processen lyckats.
+
+### Verifiering mot baslinjen (`scripts/compare-outputs.sh`)
+
+Baslinje körning 2 mot efter körning 2 (och körning 1 mot körning 1): `bracket_groups.json` värdeidentisk (bytes skiljer p.g.a. slumpad nyckelordning, `JSONSerialization` utan `sortedKeys`, även mellan två baslinjekörningar), `enhancement.json` identisk (92 poster), 230 HDR-/förbättrade bilder med identiska avkodade pixlar, metadata (`exiftool -j -G1 -a -struct`) identisk för 710 filer. Flyktiga taggar som filtreras: `File/System/ExifTool`, XMP-id:n och `MetadataDate`, alla `ModifyDate`, DNG:s `PreviewDateTime`/`PreviewImageStart` och `Composite:SubSecModifyDate`, samt TIFF-strukturtaggarna `Compression`/`StripOffsets`/`StripByteCounts`/`RowsPerStrip`. Två baslinjekörningar mot varandra är identiska med samma filter, så filtret döljer inget som skiljer versionerna åt.
+
+---
+
 ### Critical Files for Implementation
 - /Users/fredrik/Developer/photo-preprocesser/PhotoFlow/Sources/Services/Pipeline/PipelineRunner.swift
 - /Users/fredrik/Developer/photo-preprocesser/PhotoFlow/Sources/Services/HDR/HDRWriter.swift
