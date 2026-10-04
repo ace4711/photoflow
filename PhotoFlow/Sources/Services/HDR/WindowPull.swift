@@ -102,7 +102,7 @@ nonisolated enum WindowPull {
         /// `paneMinScene` × interiörens median (mörka föremål framför fönstret lämnas), om höljet
         /// högst är `paneMaxHullRatio` × komponentens yta.
         var paneFill = true
-        var paneMinScene: Float = 0.5
+        var paneMinScene: Float = 0.2
         var paneMaxHullRatio: Double = 8
         var glowMaxEdgeFraction: Double = 0.3
         /// Ett slätt delområde vars scenluminans (median) är under så här många gånger
@@ -706,7 +706,8 @@ nonisolated enum WindowPull {
     /// låg scenluminans och lämnas. Komponenter vars hölje är mer än `maxHullRatio` × ytan
     /// (L-formade, sträcker sig över väggen) fylls inte. Hål fylls efteråt.
     static func fillPanes(_ mask: [Float], width: Int, height: Int, minFraction: Double, maxHullRatio: Double,
-                          groupRadius: Int = 0, growFraction: Double = 0, allowed: (Int) -> Bool) -> [Float] {
+                          groupRadius: Int = 0, growFraction: Double = 0, rectangularPanes: Bool = true,
+                          allowed: (Int) -> Bool) -> [Float] {
         let n = width * height
         // Delar av samma ruta (klippta remsor längs karmarna) grupperas via en utvidgning;
         // höljet räknas på gruppens egna pixlar.
@@ -732,7 +733,13 @@ nonisolated enum WindowPull {
             // Konvext hölje (monotona kedjan) av radernas ändpunkter.
             var pts: [(Double, Double)] = []
             for (i, y) in rows[l].enumerated() { pts.append((Double(rowMin[l][i]), Double(y))); pts.append((Double(rowMax[l][i]), Double(y))) }
-            let hull = convexHull(pts)
+            // Rutor är rektanglar (lodlinjerna rätas senare, men vinklarna är små): axelparallell
+            // omskriven rektangel i stället för konvext hölje — höljet skar annars av ett hörn
+            // diagonalt där detekteringen saknades, och slöjan låg kvar i en sned triangel.
+            let xs = pts.map(\.0), ys = pts.map(\.1)
+            let hull: [(Double, Double)] = rectangularPanes
+                ? [(xs.min()!, ys.min()!), (xs.max()!, ys.min()!), (xs.max()!, ys.max()!), (xs.min()!, ys.max()!)]
+                : convexHull(pts)
             guard hull.count >= 3 else { continue }
             var hullArea = 0.0
             for i in 0..<hull.count { let a = hull[i], b = hull[(i + 1) % hull.count]; hullArea += a.0 * b.1 - b.0 * a.1 }

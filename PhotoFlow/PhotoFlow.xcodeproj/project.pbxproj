@@ -103,6 +103,7 @@
 		3BBF8E3F46F0CD6290363EB0 /* PreflightModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE874F40F63AB440BD8C72E6 /* PreflightModel.swift */; };
 		3D05C8D89538E5AAC7F88111 /* ReelSyncMergerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 619F544EAB6D20AB1A02E1CD /* ReelSyncMergerTests.swift */; };
 		3D1A836DA889D5344D1E41FD /* ReelMotionPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A64849410C39F9B898C53F3 /* ReelMotionPlanner.swift */; };
+		3EAB359190AFEAE9E9AC4C02 /* SkyReplacement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E0BE15516725FAFEF16188D /* SkyReplacement.swift */; };
 		3F437BD6C250B4045AD8073E /* ReelTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8E31B3A6CF246A50408904B /* ReelTimelineTests.swift */; };
 		3F61FCC5962A450C64F153F5 /* HDRAlignmentSanityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D7FDF23FE9C36E5EC4B6515 /* HDRAlignmentSanityTests.swift */; };
 		419A031E19016827B1708995 /* FieldNoteRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0CE5CC64D7F0C136AE4F9A /* FieldNoteRow.swift */; };
@@ -211,6 +212,7 @@
 		8D888A2F93B7586DCC33CC3D /* ProcessRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 786C7DA81AF1DAB9E76EF216 /* ProcessRunner.swift */; };
 		8E9622ADB68CB9601D8F690C /* HDRWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 153B93145B4921E4F181418C /* HDRWriter.swift */; };
 		8EE3FB4300156EADCD930BA6 /* FieldDictationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D5B5E91F1D94BB20B297DC4 /* FieldDictationService.swift */; };
+		8FEA5BF290C03EB3AAE73865 /* SkyReplacement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E0BE15516725FAFEF16188D /* SkyReplacement.swift */; };
 		900DFF52FC9C1911D0BC65E1 /* ExposureFusion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80F00E018557CCC542713B03 /* ExposureFusion.swift */; };
 		90157AF70F2EDD7F25DA237E /* HDRAlignment.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADE6D33A3AAB34122377A837 /* HDRAlignment.swift */; };
 		902725A0960C95FF454842A8 /* PipelineRunner+Relocate.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC50553079593BFD753FCA7A /* PipelineRunner+Relocate.swift */; };
@@ -408,6 +410,7 @@
 		29E248F241C6E12D1E3044CA /* FieldNote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldNote.swift; sourceTree = "<group>"; };
 		2A3FC2DB9406841FF32D7631 /* ReelWebVariantTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelWebVariantTests.swift; sourceTree = "<group>"; };
 		2C5178E7FDBFF282DF4C28EC /* ReelShareModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelShareModel.swift; sourceTree = "<group>"; };
+		2E0BE15516725FAFEF16188D /* SkyReplacement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkyReplacement.swift; sourceTree = "<group>"; };
 		2FB4B0BD9A6392975829D662 /* bracket3_subsec.expected.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = bracket3_subsec.expected.json; sourceTree = "<group>"; };
 		32B258E880659DF266524420 /* PipelineRunner+Overlap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+Overlap.swift"; sourceTree = "<group>"; };
 		34E6CD8744670D864F6EE6C3 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
@@ -808,6 +811,7 @@
 				9D603A3978829DEE52EBEA9A /* BrokerLook.swift */,
 				E8F82627636F316BCD55736A /* EnhancementEngine.swift */,
 				A6CC67D978B6273ED4F88364 /* EnhancementParameters.swift */,
+				2E0BE15516725FAFEF16188D /* SkyReplacement.swift */,
 				4813AE42A017B14A7983958F /* VerticalCorrection.swift */,
 			);
 			path = Enhancement;
@@ -1342,6 +1346,7 @@
 				272E28E061C96C3659799CA9 /* SessionManifest.swift in Sources */,
 				AE10B180DFE0FFCA6375B99E /* SessionManifestStore.swift in Sources */,
 				F7D60C991BFFF8DFE2C8AF55 /* SessionVerifier.swift in Sources */,
+				8FEA5BF290C03EB3AAE73865 /* SkyReplacement.swift in Sources */,
 				7BEC667BD15867772B8454EE /* StepStatus.swift in Sources */,
 				D01E62A77D019E7F38F7AD22 /* StepTiming.swift in Sources */,
 				E988107DBCC6C2F10C59AD6A /* ToolLocator.swift in Sources */,
@@ -1574,6 +1579,7 @@
 				A630295A48AA6CCB2B587E01 /* SessionVerifyView.swift in Sources */,
 				BAFC8EE66AAFCD940587B052 /* SettingsView.swift in Sources */,
 				220473BEF62812870BB7435C /* ShowReviewIntent.swift in Sources */,
+				3EAB359190AFEAE9E9AC4C02 /* SkyReplacement.swift in Sources */,
 				A48970BF8D8D5C5ED96CF0AD /* StartPipelineIntent.swift in Sources */,
 				9D8F4DE0885D55B7C8280318 /* StepCardView.swift in Sources */,
 				70BDAEDAF1F167AF3DCDEB16 /* StepStatus.swift in Sources */,

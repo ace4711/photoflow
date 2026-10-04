@@ -178,6 +178,10 @@ struct EnhanceSettingsRows: View {
             .pickerStyle(.menu)
 
             Toggle("Räta lodlinjer", isOn: $settings.enhanceUprightEnabled)
+            Toggle("Blå himmel i exteriörer (syntetisk, Mäklarstil)", isOn: $settings.enhanceSkyEnabled)
+            Text("Byter vit eller grå himmel mot en blå gradient, som redigeraren gör. Himlen kommer inte från dina exponeringar — använd med eftertanke.")
+                .font(.caption)
+                .foregroundColor(.secondary)
 
             Text("Efter HDR-steget korrigeras varje färdig bild (HDR-TIFF per bracket, DNG-rendering per singel): vitbalans, exponering, svart/vit-punkt, skuggor/högdagrar, lätt S-kurva, vibrance, clarity, skärpa och liten horisonträtning. Resultatet sparas som nya filer i mappen FÖRBÄTTRADE — originalen rörs aldrig. Parametrar per bild sparas i enhancement.json.")
                 .font(.caption)

@@ -87,6 +87,9 @@ class AppSettings: ObservableObject {
     /// "Räta lodlinjer": förbättringen rätar nästan lodräta linjer (virtuell kameralutning,
     /// högst 8°, beskärning utan tomma hörn) när skattningen är säker (`VerticalCorrection`).
     @AppStorage("enhanceUprightEnabled") var enhanceUprightEnabled: Bool = true
+    /// "Blå himmel" (Mäklarstil): vit himmel i exteriörer byts mot en syntetisk blå gradient,
+    /// som redigeraren gör. Innehållet kommer inte från fotografens exponeringar — av som standard.
+    @AppStorage("enhanceSkyEnabled") var enhanceSkyEnabled: Bool = false
     @AppStorage("detailedProgress") var detailedProgress: Bool = true
     /// Fas 1c: högsta antal tunga jobb (HDR-grupper, förbättringar) som körs samtidigt, och om
     /// AI-taggningen får köras samtidigt med HDR. 0 = automatiskt (`ResourceGovernor`: lämnar

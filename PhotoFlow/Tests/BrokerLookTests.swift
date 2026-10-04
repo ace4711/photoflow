@@ -177,6 +177,30 @@ struct BrokerLookTests {
         #expect(BrokerLook.windowMedian(pixels: pixels, width: w, height: h, mask: tiny, gains: (1, 1, 1)) == nil)
     }
 
+    @Test("Blå himmel: gradienten är blåast överst; vit slät himmel mot överkanten hittas, ljust tak i nederkant inte")
+    func skyGradientAndDetection() {
+        let top = BrokerLook.Lab.fromSRGB(SkyReplacement.color(at: 0).0, SkyReplacement.color(at: 0).1, SkyReplacement.color(at: 0).2)
+        let hor = BrokerLook.Lab.fromSRGB(SkyReplacement.color(at: 1).0, SkyReplacement.color(at: 1).1, SkyReplacement.color(at: 1).2)
+        #expect(top.b < hor.b && top.l < hor.l && top.b < -20)
+        let w = 200, h = 120
+        func image(skyOnTop: Bool) -> [Float] {
+            var px = [Float](repeating: 1, count: w * h * 4)
+            for y in 0..<h {
+                for x in 0..<w {
+                    let p = (y * w + x) * 4
+                    let inSky = skyOnTop ? y < 40 : y >= 80
+                    let v: Float = inSky ? 0.97 : 0.3 + 0.2 * Float((x / 4 + y / 4) % 2)
+                    px[p] = v; px[p + 1] = v; px[p + 2] = v
+                }
+            }
+            return px
+        }
+        let sky = SkyReplacement.detect(pixels: image(skyOnTop: true), width: w, height: h)
+        #expect(sky != nil)
+        #expect((sky?.fraction ?? 0) > 0.25 && (sky?.bottom ?? 1) < 0.5)
+        #expect(SkyReplacement.detect(pixels: image(skyOnTop: false), width: w, height: h) == nil)
+    }
+
     @Test("Parametrar och profil utan de nya fälten avkodas (gamla JSON-filer)")
     func backwardCompatibleDecoding() throws {
         let params = try JSONDecoder().decode(EnhancementParameters.self, from: Data(#"{"exposureEV":0.5,"temperature":0,"tint":0,"blackPoint":0,"whitePoint":1,"shadows":0,"highlights":0,"contrast":0,"vibrance":0,"saturation":0,"clarity":0.3,"sharpness":0.5,"rotationDegrees":0}"#.utf8))

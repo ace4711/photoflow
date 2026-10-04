@@ -39,6 +39,8 @@ struct PhotoFlowCLI {
             await verifyCommand(Array(arguments.dropFirst()))
         case "reel":
             await reelCommand(Array(arguments.dropFirst()))
+        case "enhance":
+            await enhanceCommand(Array(arguments.dropFirst()))
         case "--help", "-h", "help":
             printUsage()
             exit(0)
@@ -54,6 +56,7 @@ struct PhotoFlowCLI {
         Användning: photoflow-cli run --input <mapp> --output <mapp> [flaggor]
                     photoflow-cli verify --output <mapp> [--json]
                     photoflow-cli reel --input <mapp> --output <mapp> [flaggor]
+                    photoflow-cli enhance --input <fil> --output <mapp> [--enhance-profile <id>] [--upright on|off] [--mask <png>]
 
         "run" kör hela PhotoFlow-pipelinen (NEF -> DNG -> previews ->
         bracket-analys -> [HDR] -> [förbättra bilder] -> [kalendermatchning] -> [AI-taggning] ->
@@ -78,6 +81,7 @@ struct PhotoFlowCLI {
                             Stilprofil för "Förbättra bilder" (auto, neutral, warm-bright,
                              maklarstil eller en egen profils id). Standard: maklarstil.
           --upright on|off  Räta lodlinjer i förbättringen (standard on).
+          --sky on|off      Syntetisk blå himmel i exteriörer, Mäklarstil (standard off).
           --hdr-method base|fusion
                             HDR-metod: basram med högdageråtervinning (standard) eller
                              Mertens exposure fusion.
@@ -168,6 +172,7 @@ struct PhotoFlowCLI {
         var maxParallel: Int?
         var enhanceProfile: String?
         var upright: Bool?
+        var sky: Bool?
 
         var idx = 0
         while idx < args.count {
@@ -217,6 +222,10 @@ struct PhotoFlowCLI {
                 idx += 1
                 guard idx < args.count else { fail("--enhance-profile kräver ett profil-id") }
                 enhanceProfile = args[idx]
+            case "--sky":
+                idx += 1
+                guard idx < args.count, ["on", "off"].contains(args[idx]) else { fail("--sky kräver on eller off") }
+                sky = args[idx] == "on"
             case "--upright":
                 idx += 1
                 guard idx < args.count, ["on", "off"].contains(args[idx]) else { fail("--upright kräver on eller off") }
@@ -286,6 +295,7 @@ struct PhotoFlowCLI {
         // Profil och lodlinjer sätts alltid (samma skäl: CLI:ns egen defaults-domän).
         settings.enhanceProfileID = enhanceProfile ?? EnhancementProfile.defaultID
         settings.enhanceUprightEnabled = upright ?? true
+        settings.enhanceSkyEnabled = sky ?? false
         // Ljud/tal/systemnotiser stängs alltid av headless: dels är de
         // meningslösa utan en interaktiv session, dels kraschar
         // `NotificationService` numera bara inte längre (se dess
@@ -504,6 +514,51 @@ struct PhotoFlowCLI {
     }
 
     // MARK: - reel
+
+    /// "enhance": Förbättra en enskild bild (DNG/NEF renderas med CIRAWFilter, även flyttals-DNG
+    /// från Lightrooms HDR-sammanslagning; TIFF/JPEG läses som bild). Skriver `<namn>_enh.tiff/.jpg`.
+    private static func enhanceCommand(_ args: [String]) async {
+        var input: String?, output: String?, profileID = EnhancementProfile.defaultID, upright = true, mask: String?, sky = false
+        var idx = 0
+        while idx < args.count {
+            let a = args[idx]
+            func value() -> String {
+                idx += 1
+                guard idx < args.count else { fail("\(a) kräver ett värde") }
+                return args[idx]
+            }
+            switch a {
+            case "--input": input = value()
+            case "--output": output = value()
+            case "--enhance-profile": profileID = value()
+            case "--upright": upright = value() == "on"
+            case "--sky": sky = value() == "on"
+            case "--mask": mask = value()
+            default: fail("Okänd flagga för enhance: \(a)")
+            }
+            idx += 1
+        }
+        guard let input, let output else { fail("enhance kräver --input och --output") }
+        let inURL = URL(fileURLWithPath: input), outDir = URL(fileURLWithPath: output)
+        let ext = inURL.pathExtension.lowercased()
+        let source: EnhancementEngine.Source = ["dng", "nef", "cr2", "cr3", "arw"].contains(ext)
+            ? .raw(inURL, maxDimension: 6000) : .image(inURL)
+        let stem = inURL.deletingPathExtension().lastPathComponent
+        let profile = await MainActor.run { EnhancementProfileStore.shared.profile(id: profileID) }
+        let request = EnhancementEngine.Request(
+            source: source, tiffURL: outDir.appendingPathComponent(stem + "_enh.tiff"),
+            jpegURL: outDir.appendingPathComponent(stem + "_enh.jpg"), profile: profile,
+            alreadySharpened: ext == "tif" || ext == "tiff", exifSource: inURL, exiftoolPath: nil,
+            tiffMetadata: nil, jpegMetadata: nil, allowStraighten: false,
+            windowMaskURL: mask.map { URL(fileURLWithPath: $0) }, upright: upright, skyReplacement: sky)
+        do {
+            let outcome = try await EnhancementEngine.enhance(request)
+            print("Förbättrad: \(request.jpegURL.path) (\(outcome.width)×\(outcome.height), profil \(profile.id))")
+            print("  parametrar: \(outcome.parameters.summary)")
+        } catch {
+            fail("Förbättra misslyckades: \(error.localizedDescription)")
+        }
+    }
 
     private static func reelCommand(_ args: [String]) async {
         var inputPath: String?

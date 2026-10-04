@@ -97,6 +97,8 @@ nonisolated struct EnhancementAnalysis: Codable, Sendable, Equatable {
 /// ## Mäklarstil v2 (version 4)
 /// - Fönstervarianten tillåter tak 0,99, värmer utsikten (b* +2) och avmättas inte längre;
 ///   ljusa ytor i interiörer avmättas (×0,8 vid L* ≥ 85).
+/// - Blå himmel (`SkyReplacement`, valfri, av som standard): vit/grå himmel mot överkanten
+///   byts mot en syntetisk blå gradient (andelen sparas som `skyFraction`).
 ///   Se `BrokerLook` och docs/plan-maklarstil.md ("v2").
 nonisolated enum EnhancementEngine {
     /// Höjs när algoritmen/renderingen ändras — del av fingerprintet så gamla
@@ -339,7 +341,8 @@ nonisolated enum EnhancementEngine {
     ///
     /// `windowMask`: fönstermask (gråskala 0…1, vilken storlek som helst — skalas till
     /// källans), laddad *utan* färghantering (`loadMask`). `nil` = version 1-rendering.
-    static func render(_ source: CIImage, parameters p: EnhancementParameters, windowMask: CIImage? = nil) -> CIImage {
+    static func render(_ source: CIImage, parameters p: EnhancementParameters, windowMask: CIImage? = nil,
+                       sky: SkyReplacement.Sky? = nil) -> CIImage {
         var image = source.transformed(by: CGAffineTransform(translationX: -source.extent.minX, y: -source.extent.minY))
         let sourceExtent = image.extent
 
@@ -350,11 +353,14 @@ nonisolated enum EnhancementEngine {
             return moved.clampedToExtent().transformed(by: CGAffineTransform(scaleX: sx, y: sy)).cropped(to: sourceExtent)
         }
 
+        var skyMask = sky.flatMap { SkyReplacement.maskImage($0, size: sourceExtent.size) }
+
         // 1a. Rätning av lodlinjer (Mäklarstil/"Räta lodlinjer") — masken följer med exakt.
         if let perspective = p.perspective {
             let w = Int(sourceExtent.width), h = Int(sourceExtent.height)
             image = VerticalCorrection.render(image, correction: perspective, width: w, height: h)
             mask = mask.map { VerticalCorrection.render($0, correction: perspective, width: w, height: h) }
+            skyMask = skyMask.map { VerticalCorrection.render($0, correction: perspective, width: w, height: h) }
         }
         // 1b. Rotation + minimal beskärning — masken följer med exakt.
         if abs(p.rotationDegrees) > 0.0001 {
@@ -373,6 +379,7 @@ nonisolated enum EnhancementEngine {
             }
             image = geometry(image)
             mask = mask.map { geometry($0.clampedToExtent()) }
+            skyMask = skyMask.map { geometry($0.clampedToExtent()) }
         }
         let extent = image.extent
         let longSide = Double(max(extent.width, extent.height))
@@ -413,6 +420,10 @@ nonisolated enum EnhancementEngine {
             } else {
                 result = clarified
             }
+        }
+        // Blå himmel (Mäklarstil): efter tonerna, före textur/skärpa.
+        if let sky, let skyMask {
+            result = SkyReplacement.apply(clamp01(result), mask: skyMask.cropped(to: extent), bottom: sky.bottom, medianLuma: sky.medianLuma)
         }
         if let look = p.look, look.texture > 0 {
             result = BrokerLook.applyTexture(result, amount: look.texture)
@@ -635,6 +646,9 @@ nonisolated enum EnhancementEngine {
         var windowMaskURL: URL? = nil
         /// Räta lodlinjer (`VerticalCorrection`) när skattningen är säker.
         var upright: Bool = false
+        /// "Blå himmel" (`SkyReplacement`, bara Mäklarstil): syntetisk himmel — inte ur
+        /// fotografens exponeringar, därför av som standard.
+        var skyReplacement: Bool = false
         var jpegMaxDimension: Int = 4000
         var jpegQuality: Double = 0.92
     }
@@ -730,7 +744,13 @@ nonisolated enum EnhancementEngine {
         }
 
         try Task.checkCancellation()
-        let enhanced = render(source, parameters: final, windowMask: analysisMask == nil ? nil : windowMask)
+        // Blå himmel: bara på begäran (inställningen är av som standard) och i Mäklarstil.
+        let sky = request.skyReplacement && request.profile.look == BrokerLook.profileLookID
+            && (final.look?.exteriorWeight ?? 0) >= SkyReplacement.minExteriorWeight
+            ? PipelineMetrics.phase("sky") { SkyReplacement.detect(pixels: small.pixels, width: small.width, height: small.height) }
+            : nil
+        final.skyFraction = sky?.fraction
+        let enhanced = render(source, parameters: final, windowMask: analysisMask == nil ? nil : windowMask, sky: sky)
         guard let full = PipelineMetrics.phase("render", { renderPixels(enhanced, context: context) }) else { throw EngineError.renderFailed }
         try Task.checkCancellation()
         try FileManager.default.createDirectory(at: request.tiffURL.deletingLastPathComponent(), withIntermediateDirectories: true)

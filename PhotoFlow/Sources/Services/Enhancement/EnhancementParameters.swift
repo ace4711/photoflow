@@ -43,6 +43,8 @@ nonisolated struct EnhancementParameters: Codable, Sendable, Equatable {
     var rotationDegrees: Double = 0
     var look: LookParameters? = nil
     var perspective: PerspectiveCorrection? = nil
+    /// Andel av bilden där himlen byttes mot blå (`SkyReplacement`); `nil` = ingen.
+    var skyFraction: Double? = nil
 
     static let identity = EnhancementParameters()
 

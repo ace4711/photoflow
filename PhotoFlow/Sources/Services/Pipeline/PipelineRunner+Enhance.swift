@@ -96,6 +96,7 @@ extension PipelineRunner {
             "kind": job.kind.rawValue,
             "straighten": "\(job.isExterior)",
             "upright": "\(settings.enhanceUprightEnabled)",
+            "sky": "\(settings.enhanceSkyEnabled)",
             "maxDimension": "\(settings.hdrMaxDimension)",
             "hdr": job.kind == .hdr ? "v\(HDREngine.version) align=\(settings.hdrAlignEnabled) sharpen=\(settings.hdrSharpenEnabled)" : "-",
             "windowMask": Self.windowMaskDigest(job.windowMask)
@@ -126,7 +127,8 @@ extension PipelineRunner {
             jpegMetadata: Self.creationMetadata(for: jpegURL, folderName: folderName, context: metadataContext),
             allowStraighten: job.isExterior,
             windowMaskURL: job.windowMask,
-            upright: settings.enhanceUprightEnabled
+            upright: settings.enhanceUprightEnabled,
+            skyReplacement: settings.enhanceSkyEnabled
         )
     }
 
