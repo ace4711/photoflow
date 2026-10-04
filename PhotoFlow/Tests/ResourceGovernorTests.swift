@@ -11,11 +11,11 @@ struct ResourceGovernorTests {
         ResourceBudget(physicalMemory: memoryGB * gb, activeCores: cores, pressure: pressure, userMax: userMax)
     }
 
-    @Test("M3 Max (128 GB, 16 kärnor): HDR når taket 3, Förbättra taket 6")
+    @Test("M3 Max (128 GB, 16 kärnor): HDR når taket 3, Förbättra taket 4")
     func largeMachine_hitsHardCaps() {
         let machine = budget(memoryGB: 128, cores: 16)
         #expect(ResourceGovernor.maxConcurrent(cost: ResourceGovernor.hdrCost(maxDimension: 6000), budget: machine) == 3)
-        #expect(ResourceGovernor.maxConcurrent(cost: ResourceGovernor.enhanceCost(maxDimension: 6000), budget: machine) == 6)
+        #expect(ResourceGovernor.maxConcurrent(cost: ResourceGovernor.enhanceCost(maxDimension: 6000), budget: machine) == 4)
     }
 
     @Test("16 GB: bara en HDR-grupp i taget (25 % fritt + reserv lämnar plats för en)")
@@ -52,7 +52,7 @@ struct ResourceGovernorTests {
     @Test("Minnestryck sänker taket: varning halverar, kritiskt ger ett")
     func memoryPressure_lowersLimit() {
         let enhance = ResourceGovernor.enhanceCost(maxDimension: 6000)
-        #expect(ResourceGovernor.maxConcurrent(cost: enhance, budget: budget(memoryGB: 128, cores: 16, pressure: .warning)) == 3)
+        #expect(ResourceGovernor.maxConcurrent(cost: enhance, budget: budget(memoryGB: 128, cores: 16, pressure: .warning)) == 2)
         #expect(ResourceGovernor.maxConcurrent(cost: enhance, budget: budget(memoryGB: 128, cores: 16, pressure: .critical)) == 1)
         let hdr = ResourceGovernor.hdrCost(maxDimension: 6000)
         #expect(ResourceGovernor.maxConcurrent(cost: hdr, budget: budget(memoryGB: 128, cores: 16, pressure: .warning)) == 1)
@@ -63,7 +63,7 @@ struct ResourceGovernorTests {
         let enhance = ResourceGovernor.enhanceCost(maxDimension: 6000)
         #expect(ResourceGovernor.maxConcurrent(cost: enhance, budget: budget(memoryGB: 128, cores: 16, userMax: 1)) == 1)
         #expect(ResourceGovernor.maxConcurrent(cost: enhance, budget: budget(memoryGB: 128, cores: 16, userMax: 2)) == 2)
-        #expect(ResourceGovernor.maxConcurrent(cost: enhance, budget: budget(memoryGB: 128, cores: 16, userMax: 50)) == 6)
+        #expect(ResourceGovernor.maxConcurrent(cost: enhance, budget: budget(memoryGB: 128, cores: 16, userMax: 50)) == 4)
         // Ett högt användartak trollar inte fram minne som inte finns.
         #expect(ResourceGovernor.maxConcurrent(cost: ResourceGovernor.hdrCost(maxDimension: 6000), budget: budget(memoryGB: 16, cores: 8, userMax: 6)) == 1)
     }

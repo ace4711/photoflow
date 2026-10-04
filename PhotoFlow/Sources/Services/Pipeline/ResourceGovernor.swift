@@ -62,13 +62,19 @@ nonisolated enum ResourceGovernor {
     /// UI), AI-taggningen som körs samtidigt med HDR och exiftool/DNG-processer.
     static let baseReserveBytes: UInt64 = 4 * gigabyte
 
-    /// Mätt (fas 1c, 160 NEF, 6000 px): en HDR-grupp tar ~4,4 GB i topp; fönsterutsikten
-    /// (window pull) lägger till ~0,4 GB. Avrundat uppåt till 5 GB per grupp vid 6000 px lång sida.
+    /// Mätt (fas 1c, 160 NEF, 6000 px): en HDR-grupp tar ~4,4 GB i topp räknat med appens
+    /// grundnivå (toppminne 6,3 GB i följd, 10,8 GB med tre samtidiga, alltså ~2,3 GB per extra
+    /// grupp); fönsterutsikten (window pull) lägger till ~0,4 GB. Räknat med marginal: 5 GB per
+    /// grupp vid 6000 px lång sida.
     static let hdrBytesAt6000px: UInt64 = 5 * gigabyte
     /// Lång sida när `hdrMaxDimension == 0` (full upplösning): Nikon Z8/Z9, 8256 px.
     static let fullResolutionLongSide = 8256
 
     /// Kostnad för en HDR-grupp. Minnet skalar med pixelantalet (lång sida i kvadrat).
+    ///
+    /// Taket 3: RAW-renderingen (`CIRAWFilter`, ~75 % av tiden i en grupp) skalar dåligt — med tre
+    /// samtidiga grupper tar varje rendering ~2,3 gånger så lång tid — så fler grupper ger lite och
+    /// konkurrerar med AI-taggningen som körs samtidigt.
     static func hdrCost(maxDimension: Int) -> JobCost {
         let side = Double(maxDimension > 0 ? maxDimension : fullResolutionLongSide)
         let scale = max(0.1, (side / 6000) * (side / 6000))
@@ -76,10 +82,14 @@ nonisolated enum ResourceGovernor {
     }
 
     /// Kostnad för en förbättring (RAW-rendering eller HDR-TIFF + Core Image-kedjan).
+    ///
+    /// Taket 4, mätt (fas 1c, 92 bilder): 1 samtidig 293 s, 2 → 171 s, 3 → 143 s, 4 → 159 s,
+    /// 6 → 133–185 s (brusigt). Över 3–4 vinner man inget: RAW-renderingen per bild blir lika mycket
+    /// långsammare (3,3 s → 9,4 s per bild vid 6) som man kör fler, men minnet växer ~1,5 GB per jobb.
     static func enhanceCost(maxDimension: Int) -> JobCost {
         let side = Double(maxDimension > 0 ? maxDimension : fullResolutionLongSide)
         let scale = max(0.1, (side / 6000) * (side / 6000))
-        return JobCost(memoryBytes: UInt64(Double(2 * gigabyte) * scale), cores: 1.0, hardCap: 6)
+        return JobCost(memoryBytes: UInt64(Double(2 * gigabyte) * scale), cores: 1.0, hardCap: 4)
     }
 
     /// Högsta antal samtidiga jobb med kostnaden `cost` givet `budget`. Alltid minst 1.

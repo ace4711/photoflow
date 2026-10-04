@@ -123,7 +123,7 @@ struct PipelineRunnerParallelTests {
         for (key, entry) in serialLog.entries {
             let other = try #require(parallelLog.entries[key])
             #expect(entry.parameters == other.parameters, "parametrar för \(key)")
-            #expect(entry.analysis == other.analysis, "analys för \(key)")
+            #expect(entry.analysis == other.analysis, "analys för \(key): \(entry.analysis) VS \(other.analysis)")
             #expect(entry.outputs == other.outputs)
             #expect(entry.fingerprint == other.fingerprint)
         }
