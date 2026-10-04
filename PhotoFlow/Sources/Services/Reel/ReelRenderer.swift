@@ -59,7 +59,10 @@ nonisolated final class ReelRenderer: @unchecked Sendable {
 
     init(spec: ReelSpec, specDirectory: URL, maxOutputSize: CGSize) {
         self.spec = spec
-        self.specDirectory = specDirectory
+        // Alltid en katalog-URL: `URL(fileURLWithPath:relativeTo:)` löser annars en
+        // relativ sökväg mot FÖRÄLDERN när basen saknar avslutande snedstreck (t.ex.
+        // en FILM-mapp som inte fanns när URL:en byggdes) — bilderna hittades då inte.
+        self.specDirectory = URL(fileURLWithPath: specDirectory.path, isDirectory: true)
         self.maxOutputSize = maxOutputSize
         self.context = CIContext(options: [
             .workingColorSpace: Self.sRGB,
