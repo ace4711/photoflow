@@ -138,3 +138,11 @@ Kandidater (`scripts/window-candidates.py`, sida i `~/PhotoFlowBenchmark/results
 | B: mål 0,76, p99 ≤ 1,25, Förbättra × 0,75 | 0,803 (0,434) | 0,3 % (91,7 %) | 0,873 (0,617) | +0,90 EV |
 
 Värsta klippta/struktur är samma grupp i alla (frostat glas som är klippt även i mörka ramen). A ger "lite ljusare" (+0,05 i median, +0,5 EV i grupperna där taket band) med i stort sett oförändrad klippning; strukturen sjunker något där himlen trycks in i skuldran (en grupp 0,81 → 0,71, två till 0,82–0,85). En grupp där Förbättra höjer exponeringen klipps mer (3 % → 9 %, i HDR:en 0 %).
+
+## Radians (HDREngine v7, 2026-10-04) — standardmetod
+
+- `RadianceMerge`: alla exponeringar (även gruppens mörkaste) renderas linjärt utan RAW-kurva och **utan CIRAWFilters skuggförskjutning** (`shadowBias` 0 — den gav negativa kanaler och orange stick i Lightrooms flyttals-DNG), gemensam vitbalans från referensen, registreras och slås ihop till scenlinjär radians (hattvikt × exponeringskvot, kvoterna mätta ur bilderna, spökskydd mot ett ankare per område). `SceneLinearTone` tonsätter (exponering ur statistiken, skuldra, slöja bort i utsikten). Inga fönstermasker; window pull används inte i radiansläget.
+- Förbättra v5 tonsätter Lightrooms linjära HDR-DNG på samma sätt (`photoflow-cli enhance`).
+- Helkörning 51 par mot basram: ΔE träning 7,97 → 7,63, test 6,54 → 6,63, fönster-ΔE (interiörer) 11,6 → 7,6, inga maskfel, HDR ~3× snabbare (8 min mot 26 min för fem adresser). Utsikten blir som i Lightroom: ren men ljusare och flackare än redigerarens (fönster rel. vägg 1,19 mot 1,08).
+- Prövat och förkastat: fönsterzon (ljuszon ur radiansen eller window pull-detekteringen) med egen exponering — zonen hittas inte pålitligt (missar lövverk med samma radians som rummet, delvisa rutor ger tonsteg); utsiktsfärger i Mäklarstil; lokal kontrast i ljusa partier. Se `~/PhotoFlowBenchmark/results/pilvinge-mellan/status.md` (12–15).
+- Minne: radianskostnaden i `ResourceGovernor` = 2,5 GB + 0,6 GB per ram vid 6000 px; uppmätt toppminne för hela processen med tre samtidiga grupper 9,4–11,7 GB.
