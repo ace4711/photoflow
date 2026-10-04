@@ -459,6 +459,52 @@ Sekunder. Baslinjen med kalender är medianen av tre körningar (47,3 / 47,7 / 5
 - **Verifiering** (`scripts/compare-outputs.sh`): med kalender (baslinje mot efter, två par) är `bracket_groups.json` värdeidentisk, `calendar_matches.json` byte-identisk, `enhancement.json` identisk, 230 bilder har identiska pixlar och metadata är identisk för 699 filer (adress, GPS, IPTC/XMP på HDR, förbättrade, DNG, förhandsbilder och sidecars). Utan kalender: identiskt för 230 bilder och 710 metadatafiler.
 - **Fynd:** `Process` skickar argumenten i filsystemets representation (NFD), så "ä" hade skrivits som "a" + kombinerande trema i IPTC om taggarna gått som processargument. `HDRWriter.writeMetadata` går därför via en argfil, som metadatasteget. Vid mätningen skrev pipelinen IPTC som UTF-8 utan `CodedCharacterSet`, så verktyg som läste IPTC som Latin-1 visade "LindvÃ¤gen" (åtgärdat senare i `6eefd3f`). Mätningarna och jämförelserna ovan gjordes med fas 1b-koden före `81c9571`/`6eefd3f`, som ändrar adresstilldelning och IPTC-skrivning; de behöver köras om mot dem.
 
+## 8c. Uppmätt (fas 1c: HDR-grupper och förbättringar parallellt, AI samtidigt med HDR)
+
+**Vad som gjorts:**
+- `ResourceGovernor` (ren funktion `maxConcurrent`): lämnar 2 kärnor och 25 % av minnet + 4 GB reserv fria, räknar minne per jobb på den faktiska upplösningen (HDR 5 GB vid 6000 px, inklusive window pull; Förbättra 2 GB), och sänker taket vid minnestryck (`DispatchSource.makeMemoryPressureSource`: varning halverar, kritiskt ger 1). Taket läses om före varje nytt jobb, så att det sjunker mitt i ett steg; pågående jobb får bli klara.
+- `OrderedParallel`: jobben körs samtidigt men resultaten lämnas i jobbordning, så att `hdr.json`, `enhancement.json`, stämplar, loggrader och räknare skrivs som vid seriell körning. Avbrott: inga nya jobb, pågående avbryts och väntas in, de som hann bli klara sparas. Paus: inga nya jobb startar.
+- HDR högst 3 grupper, Förbättra högst 4 bilder samtidigt (förut 3). AI-taggningen körs samtidigt med HDR (`PipelineRunner+Overlap.swift`, de beror inte på varandra); allt som behöver AI-taggarna körs efter båda.
+- Inställningen "Samtidiga jobb" (Pipeline → Prestanda): Automatiskt (standard), 1 = allt i följd som förut (felsökning), högst 2–6. CLI: `--max-parallel N`, `benchmark.sh --max-parallel N`.
+- `StepTiming.Record.mode` = "sequential"/"parallel"; prognosen blandar inte lägena, och ETA räknar bara den längre av AI och HDR när de körs samtidigt.
+
+**Mätning** (samma 160 NEF, intern disk, `--no-calendar`, AI-bildtexter av, en uppvärmning + 2 mätta körningar per läge, samma bygge = fas 1c ovanpå `forbattringar` 5c880f5, alltså med window pull fas 0–1 men före dess senare justeringar). Läge 1 = `--max-parallel 1`, Auto = standard. Sekunder, median. **Brus:** appen PhotoFlow och andra agenters körningar var igång samtidigt (de seriella körningarna varierade 606–708 s), så räkna med ±10 % i de seriella siffrorna.
+
+| Steg | Läge 1 (i följd) | Auto (parallellt) | Förändring |
+|---|---|---|---|
+| Konvertera DNG | 13,2 | 12,3 | |
+| Skapa previews | 3,8 | 3,8 | |
+| AI-taggning | 5,5 | 28,3 (döljs under HDR) | körs samtidigt med HDR |
+| Skapa HDR (23 grupper, window pull) | 325,5 | 153,6 | −53 % |
+| Förbättra bilder (92 st) | 269,6 | 122,7 | −54 % |
+| Skriv metadata | 37,4 | 33,1 | |
+| **Hela körningen** | **656,8** (708 / 606) | **327,3** (331 / 324) | **−50 %** |
+
+Läge 1 kör nu även Förbättra ett jobb i taget (förut 3), så "Auto mot läge 1" överdriver vinsten mot fas 1b: mot den förra standarden (3 förbättringar, 130–145 s här) är Förbättra-vinsten ~10 %, och huvudvinsten är HDR (−53 %) plus att AI döljs.
+
+**Resurser (median per steg; CPU för appen + barnprocesser, toppminne = appens phys_footprint):**
+
+| Steg | Läge 1: kärnor | Auto: kärnor | Läge 1: toppminne | Auto: toppminne |
+|---|---|---|---|---|
+| HDR | 0,8 | 2,0 | 7,5 GB | 11,7 GB (inkl. AI samtidigt) |
+| Förbättra | 0,7 | 1,6 | 7,8 GB | 13,8 GB |
+| Hela körningen (ps, bara appen) | medel 0,7, topp 4,9 | medel 1,4, topp 9,9 | 9,3 GB | 11,6 GB |
+
+**Svep (en körning per värde, samma outputmapp med bara steget borttaget):**
+- Förbättra: 1 → 293 s, 2 → 171 s, 3 → 143 s, 4 → 159 s, 6 → 133 s (en annan körning med 6: 185 s). Över 3–4 vinner man inget: RAW-renderingen per bild (`load`) går från 1,9 s till 9,4 s vid 6 samtidiga. Minnet växer ~1,5 GB per jobb. **Tak 4.**
+- HDR (före window pull): 1 → 293 s, 3 → 176 s. Toppminne 6,3 GB med en grupp, 10,8 GB med tre (~2,3 GB per extra grupp; 5 GB i vakten är marginal för window pull och full upplösning). `CIRAWFilter`-renderingen är flaskhalsen även här: 2,8 s per rendering med tre grupper mot ~2,1 s ensam (4,2 s i den brusiga seriella körningen).
+- Slutsats: den delade RAW-avkodningen (`CIRAWFilter`, GPU/avkodare) begränsar mer än kärnor och minne. Mer parallellism inom HDR/Förbättra ger lite; nästa steg är fas 2 (Förbättra av enskilda bilder samtidigt med HDR blir också begränsat av samma resurs).
+
+**Verifiering** (`scripts/compare-outputs.sh`, läge 1 mot Auto, körning 1 mot 1 och 2 mot 2): `bracket_groups.json` värdeidentisk, `enhancement.json` identisk (92 poster), 230 HDR-/förbättrade bilder med identiska avkodade pixlar, metadata identisk för 710 filer — **ALLT STÄMMER** i båda paren. Dessutom (eget skript, tider/inoder bortfiltrerade): `hdr.json`, `metadata_stamps.json`, `ai_tags.json`, `photo_quality.json`, `metadata_written.json` och `files_sorted.json` identiska, och raderna "Grupp N … klar" i `pipeline.log` kommer i samma ordning.
+
+**Tester:** `ResourceGovernorTests` (gränsberäkningen), `OrderedParallelTests` (ordning, sänkt tak, fel, avbrott, paus med syntetiska jobb), `PipelineRunnerParallelTests` (Förbättra parallellt mot seriellt: parametrar, pixlar, loggordning; avbryt-knappen mitt i en parallell körning och omstart). En körning av 8 gav en gång olika `analysis` mellan seriellt och parallellt i det syntetiska testet (gick inte att återskapa; riktiga körningar ovan identiska) — håll ögonen på det.
+
+**Risker och kvar:**
+- Det globala UI-läget (`statusMessage`, `progress`, `currentMergeGroupId`) delas av AI och HDR och av samtidiga HDR-grupper — det visar det senast startade/klara. Stegkorten har egna räknare och stämmer.
+- Resursmätningen per steg (`ResourceMeter`) är processvid: när AI och HDR överlappar räknas samma CPU/minne in i båda.
+- Ett fel i AI-taggningen avbryter HDR (och tvärtom) när de körs samtidigt, som när de körde i följd.
+- T5 är inte mätt; där kan Förbättra bli diskbundet tidigare.
+
 ---
 
 ### Critical Files for Implementation
