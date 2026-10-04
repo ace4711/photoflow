@@ -1,5 +1,6 @@
 import Foundation
 import CoreLocation
+import CryptoKit
 import ImageIO
 import UniformTypeIdentifiers
 import Testing
@@ -126,12 +127,18 @@ struct MetadataPlanTests {
         let baseName = file.deletingPathExtension().lastPathComponent
         guard let meta = MetadataPlan.fileMetadata(baseName: baseName, folder: folder, aiLookup: aiLookup,
                                                    aiTaggingEnabled: aiTaggingEnabled) else { return nil }
-        return PipelineRunner.exiftoolArguments(for: file, meta: meta)
+        let args = PipelineRunner.exiftoolArguments(for: file, meta: meta)
+        // Enda skillnaden mot före fas 1b: IPTC:CodedCharacterSet=UTF8 när IPTC-fält skrivs (inte NEF).
+        let charset = ExiftoolMetadataArguments.iptcCharsetLine
+        let isNEF = file.pathExtension.lowercased() == "nef"
+        let hasIPTC = args.contains { $0.hasPrefix("-IPTC:") && $0 != charset }
+        #expect(args.contains(charset) == (!isNEF && hasIPTC), "\(file.lastPathComponent)")
+        return args.filter { $0 != charset }
     }
 
     // MARK: - Gemensam beräkning = samma argument som förut
 
-    @Test("Den utbrutna metadataberäkningen ger exakt samma exiftool-argument som metadatasteget före fas 1b")
+    @Test("Den utbrutna metadataberäkningen ger samma exiftool-argument som metadatasteget före fas 1b (plus IPTC-teckenuppsättningen)")
     func sharedComputation_matchesLegacyArguments() {
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -397,7 +404,7 @@ struct MetadataPlanTests {
 
     /// Alla taggar (`-j -G1 -a -struct`) utom flyktiga, med samma filter som scripts/compare-outputs.py.
     private func tags(of file: URL) throws -> [String: String] {
-        // IPTC skrivs som UTF-8 utan CodedCharacterSet (som metadatasteget alltid gjort), så den läses med -charset.
+        // Läses med -charset iptc=UTF8 så att jämförelsen med filer skrivna före CodedCharacterSet fungerar.
         let json = try exiftool(["-j", "-G1", "-a", "-struct", "-charset", "iptc=UTF8", file.path])
         let array = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]] ?? []
         let volatile = try NSRegularExpression(pattern:
@@ -495,6 +502,64 @@ struct MetadataPlanTests {
             #expect(newTags["GPS:GPSLatitude"] != nil)
             #expect(newTags["ExifIFD:DateTimeOriginal"] == "2026:10:02 09:01:02")
         }
+    }
+
+    @Test("tagLines: IPTC:CodedCharacterSet=UTF8 med IPTC-fälten för JPEG/TIFF/DNG, aldrig i NEF:s XMP-sidecar")
+    func tagLines_declareIPTCCharset() {
+        let full = IPTCFileMetadata(address: "Lillvägen 24", eventTitle: "T", description: "D", latitude: 59, longitude: 18, aiTags: ["Kök"])
+        for isNEF in [false, true] {
+            let lines = ExiftoolMetadataArguments.tagLines(for: full, isNEF: isNEF)
+            #expect(lines.contains("-IPTC:CodedCharacterSet=UTF8") == !isNEF)
+            #expect(lines.contains { $0.hasPrefix("-IPTC:") } == !isNEF)
+        }
+        for name in ["DSC_0001.jpg", "hdr_group_1.tiff", "DSC_0001.dng"] {
+            let args = PipelineRunner.exiftoolArguments(for: URL(fileURLWithPath: "/tmp/x/\(name)"), meta: full)
+            #expect(args.contains("-IPTC:CodedCharacterSet=UTF8"), "\(name)")
+        }
+        let nef = PipelineRunner.exiftoolArguments(for: URL(fileURLWithPath: "/tmp/x/DSC_0001.NEF"), meta: full)
+        #expect(!nef.contains { $0.contains("CodedCharacterSet") })
+        // Bara GPS (inga IPTC-fält): ingen deklaration.
+        let gpsOnly = ExiftoolMetadataArguments.tagLines(for: IPTCFileMetadata(latitude: 1, longitude: 2), isNEF: false)
+        #expect(!gpsOnly.contains("-IPTC:CodedCharacterSet=UTF8"))
+    }
+
+    @Test("Markörversionen ingår i stämplarnas fingerprint: version 3 ogiltigförklarar stämplar från version 2")
+    func markerVersion_invalidatesStamps() throws {
+        #expect(PipelineRunner.metadataMarkerVersion == 3)
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("Gatan 1 ÖVRIGA/hdr_group_1.tiff")
+        touch(file)
+        let meta = IPTCFileMetadata(address: "Gatan 1", eventTitle: "", description: "Gatan 1")
+        // En stämpel som version 2 skrev den (samma kanoniska form, v=2).
+        var canonical = "v=2\u{1F}nef=false"
+        canonical += "\u{1F}address=Gatan 1\u{1F}event=\u{1F}description=Gatan 1\u{1F}lat=-\u{1F}lon=-\u{1F}tags="
+        let v2 = SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
+        let v3 = MetadataStamps.fingerprint(for: meta, isNEF: false)
+        #expect(v2 != v3)
+        var stamps = MetadataStamps()
+        stamps.files["Gatan 1 ÖVRIGA/hdr_group_1.tiff"] = .init(fingerprint: v2, inode: MetadataStamps.inode(of: file))
+        #expect(!stamps.matches(file, meta: meta, outputDir: dir))
+        stamps.record(file, meta: meta, outputDir: dir)
+        #expect(stamps.matches(file, meta: meta, outputDir: dir))
+    }
+
+    @Test("IPTC med å/ä/ö läses rätt av exiftool UTAN -charset (CodedCharacterSet = UTF8)",
+          .enabled(if: ToolLocator.exiftool != nil, "exiftool saknas (brew install exiftool) — testet kör riktiga exiftool-anrop"))
+    func iptcRoundTrip_withoutCharsetOption() throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let jpeg = dir.appendingPathComponent("DSC_0001.jpg")
+        try writeImagePair(tiff: dir.appendingPathComponent("scratch.tiff"), jpeg: jpeg)
+        let meta = IPTCFileMetadata(address: "Lillvägen 24", eventTitle: "Lillvägen 24, högst upp", description: "Lillvägen 24 — Kök")
+        let argfile = dir.appendingPathComponent("args.txt")
+        try PipelineRunner.exiftoolArguments(for: jpeg, meta: meta).joined(separator: "\n").write(to: argfile, atomically: true, encoding: .utf8)
+        try exiftool(["-@", argfile.path])
+        let read = { (tag: String) in try self.exiftool(["-s3", "-IPTC:\(tag)", jpeg.path]).trimmingCharacters(in: .whitespacesAndNewlines) }
+        #expect(try read("Sub-location") == "Lillvägen 24")
+        #expect(try read("Headline") == "Lillvägen 24")
+        #expect(try read("SpecialInstructions") == "Lillvägen 24, högst upp")
+        #expect(try read("CodedCharacterSet") == "UTF8")
     }
 
     @Test("Metadatasteget stämplar filerna, hoppar över matchande stämplar och skriver om vid ändrad GPS; utan stämplar skrivs allt",

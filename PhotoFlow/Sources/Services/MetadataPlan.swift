@@ -179,9 +179,17 @@ nonisolated enum ExiftoolMetadataArguments {
             }
         }
 
+        // IPTC-fälten skrivs som UTF-8 (`-charset iptc=UTF8`), men utan IPTC:CodedCharacterSet
+        // läser exiftool, Lightroom m.fl. dem som Latin-1 ("LillvÃ¤gen 24"). Deklarationen skrivs
+        // därför alltid tillsammans med IPTC-fälten. Inte i NEF:s XMP-sidecar (XMP är alltid UTF-8).
+        if !isNEF, lines.contains(where: { $0.hasPrefix("-IPTC:") }) {
+            lines.insert(Self.iptcCharsetLine, at: 0)
+        }
         return lines
     }
 
+    /// Deklarationen av IPTC-teckenuppsättningen (exiftool översätter "UTF8" till ESC % G).
+    static let iptcCharsetLine = "-IPTC:CodedCharacterSet=UTF8"
 }
 
 /// `metadata_stamps.json` i outputmappen (fas 1b): vilken metadata som skrivits till varje fil,

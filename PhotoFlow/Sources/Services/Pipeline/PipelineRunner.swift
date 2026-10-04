@@ -612,7 +612,9 @@ class PipelineRunner: ObservableObject {
     /// previously-written `metadata_written.json` markers untrustworthy (e.g. the
     /// DNG-folder-suffix fix and the NEF-symlink/XMP-sidecar fix). Markers without
     /// a matching version are treated as stale and metadata is written again.
-    nonisolated static let metadataMarkerVersion = 2
+    /// 3: IPTC:CodedCharacterSet=UTF8 skrivs med IPTC-fälten (utan den lästes adresserna som
+    /// Latin-1) och adressmetadata nycklas per bokningens egen mapp — alla filer skrivs om en gång.
+    nonisolated static let metadataMarkerVersion = 3
 
     private static let excludedDirNames: Set<String> = [
         "processed", "bracket_groups", "dng", "hdr", "previews"
