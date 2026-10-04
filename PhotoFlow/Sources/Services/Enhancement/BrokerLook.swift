@@ -16,6 +16,9 @@ import CoreImage
 /// - **Brus**: luminans-NR (`CINoiseReduction`) och kraftig krominans-NR
 ///   (oskärpa på färgkanalerna i YCbCr, luminansen orörd).
 /// - Mindre clarity än Automatisk, lite textur.
+/// - **Exteriörer** (taggade, eller mycket grönska/himmel, `exteriorWeight`) blandas mot ett
+///   eget recept: mörkare toner, klarare färger, knappt någon NR, mer textur och skärpa.
+/// - **Fönstermasken**: kurvan 70 % mot målet och lägre mättnad (ljus, dämpad utsikt).
 /// Allt sparas som explicita `LookParameters` i `enhancement.json`.
 nonisolated struct LookParameters: Codable, Sendable, Equatable {
     /// Tonkurvans stödpunkter (gammakodad luma in → ut), strikt växande x.
@@ -112,8 +115,9 @@ nonisolated enum BrokerLook {
     // MARK: - Vitbalans
 
     static let wbFraction = 1.0
-    /// Leveransernas vita väggar är nästan neutrala men en aning varma (b* ≈ +1,3…1,9).
-    static let warmth = 0.04
+    /// Leveransernas vita väggar är nästan neutrala men en aning varma (b* ≈ +1,3…1,9); 0,12 gav
+    /// minst ΔE och väggarnas b* som leveransernas (Δb* ≈ 0) över alla 51 par.
+    static let warmth = 0.12
     static let maxTemperature = 0.5
     static let maxTint = 0.25
 
