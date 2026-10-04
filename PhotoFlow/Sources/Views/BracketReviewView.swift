@@ -17,6 +17,12 @@ struct BracketReviewView: View {
     @State private var undoStack = ReviewUndoStack()
     @State private var ratings = ReviewRatings()
     @State private var compareMode: ReviewCompareMode = .off
+    /// Urvalet till extern redigering (`edit_selection.json`).
+    @State private var editSelection = EditSelection()
+    /// Förslaget för urvalet räknas fram (förlopp: klara/totalt).
+    @State private var suggestionProgress: (done: Int, total: Int)?
+    /// Visar arket som skapar skicka-mapparna.
+    @State private var sendRequests: [SendFolderSync.Request]?
     @FocusState private var isFocused: Bool
 
     private let audio = AudioService.shared
@@ -62,7 +68,8 @@ struct BracketReviewView: View {
                 hasRejected: photos.contains { $0.rejected },
                 hasUserOverride: photos.contains { $0.accepted && !$0.algorithmSuggested },
                 addressFolder: addresses[g.id],
-                rating: ratings.rating(for: g.id))
+                rating: ratings.rating(for: g.id),
+                isSending: !editSelection.chosenFiles(for: g.id, rejected: rejectedFiles(photos)).isEmpty)
         }
     }
 
@@ -96,6 +103,10 @@ struct BracketReviewView: View {
 
                     Divider()
 
+                    editBar
+
+                    Divider()
+
                     thumbnailStrip
                         .frame(height: 130)
                 }
@@ -118,7 +129,11 @@ struct BracketReviewView: View {
                 outputDir: pipeline.outputDirectory,
                 address: pipeline.matchedAddress
             )
-            if let dir = pipeline.outputDirectory { ratings = ReviewRatings.load(from: dir) }
+            if let dir = pipeline.outputDirectory {
+                ratings = ReviewRatings.load(from: dir)
+                editSelection = EditSelection.load(from: dir)
+            }
+            if !editSelection.suggestionApplied { runEditSuggestion() }
             prefetchCurrentGroup()
         }
         .onDisappear {
@@ -127,6 +142,13 @@ struct BracketReviewView: View {
             pipeline.flushCullDecisions()
         }
         .onChange(of: selectedGroupIndex) { _, _ in prefetchCurrentGroup() }
+        .onChange(of: pipeline.outputDirectory) { _, dir in
+            editSelection = dir.map { EditSelection.load(from: $0) } ?? EditSelection()
+            if !editSelection.suggestionApplied { runEditSuggestion() }
+        }
+        .onChange(of: pipeline.bracketGroups.count) { _, _ in
+            if !editSelection.suggestionApplied { runEditSuggestion() }
+        }
         .focusable()
         .focused($isFocused)
         .onAppear { isFocused = true }
@@ -171,6 +193,21 @@ struct BracketReviewView: View {
         .onKeyPress(characters: CharacterSet(charactersIn: "n")) { _ in
             withAnimation { showNotes.toggle() }
             return .handled
+        }
+        .onKeyPress(characters: CharacterSet(charactersIn: "s")) { press in
+            guard !press.modifiers.contains(.command) else { return .ignored }
+            toggleSendCurrentGroup()
+            return .handled
+        }
+        .onKeyPress(characters: CharacterSet(charactersIn: "e")) { press in
+            guard !press.modifiers.contains(.command) else { return .ignored }
+            if let photo = currentPhoto, !showHDRPreview { toggleEditFile(photo) }
+            return .handled
+        }
+        .sheet(isPresented: Binding(get: { sendRequests != nil }, set: { if !$0 { sendRequests = nil } })) {
+            if let dir = pipeline.outputDirectory, let requests = sendRequests {
+                EditSendSheet(outputDir: dir, requests: requests) { sendRequests = nil }
+            }
         }
         .overlay(alignment: .bottom) {
             CountdownOverlay()
@@ -217,10 +254,12 @@ struct BracketReviewView: View {
                 Text(ReviewNavigation.progressText(reviewed: reviewedCount, total: pipeline.bracketGroups.count))
                     .font(.caption.bold())
                     .foregroundColor(reviewedCount == pipeline.bracketGroups.count ? .green : .secondary)
-                Text("Pilar/J/K: navigera | Mellanslag: välj | Retur/Delete: acceptera/avvisa | ⌘Z: ångra | H: HDR | Tab/U: nästa ogranskade | Z: 100 % | Shift: lupp | C: histogram/klippning | X: jämför | 1–5: betyg (0: ta bort)")
+                Text("Pilar/J/K: navigera | Mellanslag: välj | Retur/Delete: acceptera/avvisa | ⌘Z: ångra | H: HDR | Tab/U: nästa ogranskade | Z: 100 % | Shift: lupp | C: histogram/klippning | X: jämför | 1–5: betyg (0: ta bort) | S: skicka gruppen | E: bocka i/ur exponering")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
+
+            editSummary
 
             Button(action: undoLastDecision) {
                 Label("Ångra", systemImage: "arrow.uturn.backward")
@@ -325,6 +364,16 @@ struct BracketReviewView: View {
                     }
                     Spacer()
                     VStack(spacing: 2) {
+                        if editSelection.isSending(group.id),
+                           !editSelection.chosenFiles(for: group.id, rejected: rejectedFiles(pipeline.photos(in: group))).isEmpty {
+                            HStack(spacing: 3) {
+                                if editSelection.isSuggestion(group.id) { SuggestionTag() }
+                                Image(systemName: "paperplane.fill")
+                                    .font(.caption2)
+                                    .foregroundColor(.blue)
+                            }
+                            .help("Skickas till redigering: \(editSelection.chosenFiles(for: group.id, rejected: rejectedFiles(pipeline.photos(in: group))).count) exponeringar")
+                        }
                         if ratings.rating(for: group.id) > 0 {
                             Text(ReviewRatings.stars(ratings.rating(for: group.id)))
                                 .font(.system(size: 9))
@@ -617,6 +666,13 @@ struct BracketReviewView: View {
             LocalThumbnailView(url: photo.previewURL)
                 .frame(width: 100, height: 75)
                 .clipped()
+                .overlay(alignment: .topLeading) {
+                    if let group = currentGroup {
+                        EditCheckbox(checked: editSelection.isSending(group.id) && editSelection.isChecked(photo.filename, in: group.id),
+                                     rejected: photo.rejected,
+                                     groupSending: editSelection.isSending(group.id)) { toggleEditFile(photo) }
+                    }
+                }
 
             Text(photo.exposureDisplay)
                 .font(.system(.caption2, design: .monospaced))
@@ -768,7 +824,17 @@ struct BracketReviewView: View {
 
     /// Återställer senaste beslutet och hoppar till bilden det gällde.
     private func undoLastDecision() {
-        guard let snap = undoStack.pop() else { return }
+        guard let entry = undoStack.pop() else { return }
+        if let edit = entry.editSelection {
+            editSelection.setEntry(edit.previous, for: edit.groupID)
+            saveEditSelection()
+            if edit.groupIndex < pipeline.bracketGroups.count {
+                selectedGroupIndex = edit.groupIndex
+                selectedPhotoIndex = edit.photoIndex
+            }
+            return
+        }
+        guard let snap = entry.decision else { return }
         pipeline.setDecision(photoID: snap.photoID, accepted: snap.accepted, rejected: snap.rejected)
         pipeline.setAlgorithmSuggested(photoID: snap.photoID, suggested: snap.algorithmSuggested)
         pipeline.saveCullDecisions()
@@ -815,6 +881,155 @@ struct BracketReviewView: View {
             guard !Task.isCancelled else { return }
             runner.reMergeHDR(group: groupCopy)
         }
+    }
+
+    // MARK: - Urval till redigering
+
+    private func rejectedFiles(_ photos: [PhotoItem]) -> Set<String> {
+        Set(photos.filter(\.rejected).map(\.filename))
+    }
+
+    private var editCounts: EditSelection.Counts {
+        var c = EditSelection.Counts(groups: 0, files: 0)
+        for g in pipeline.bracketGroups {
+            let n = editSelection.chosenFiles(for: g.id, rejected: rejectedFiles(pipeline.photos(in: g))).count
+            if n > 0 { c.groups += 1; c.files += n }
+        }
+        return c
+    }
+
+    /// Exponeringsförslaget för en grupp (avvisade bilder utelämnas).
+    private func suggestedFiles(for group: BracketGroup) -> [String] {
+        EditExposureSuggester.suggest(pipeline.photos(in: group).map {
+            .init(file: $0.filename, seconds: $0.exposureSeconds, rejected: $0.rejected)
+        })
+    }
+
+    private func recordEditUndo(_ group: BracketGroup) {
+        undoStack.push(.editSelection(EditSelectionUndo(
+            groupID: group.id, previous: editSelection.entry(for: group.id),
+            groupIndex: selectedGroupIndex, photoIndex: selectedPhotoIndex)))
+    }
+
+    private func saveEditSelection() {
+        guard let dir = pipeline.outputDirectory else { return }
+        do { try editSelection.save(to: dir) } catch {
+            pipeline.appendLog("Kunde inte spara urvalet till redigering: \(error.localizedDescription)", type: .error)
+        }
+    }
+
+    private func toggleSendCurrentGroup() {
+        guard let group = currentGroup else { return }
+        recordEditUndo(group)
+        let photos = pipeline.photos(in: group)
+        editSelection.toggleSend(group: group.id, defaultFiles: suggestedFiles(for: group), rejected: rejectedFiles(photos))
+        editSelection.isSending(group.id) ? audio.playAccept() : audio.playReject()
+        saveEditSelection()
+    }
+
+    private func toggleEditFile(_ photo: PhotoItem) {
+        guard let group = currentGroup, !photo.rejected else { return }
+        recordEditUndo(group)
+        let photos = pipeline.photos(in: group)
+        if editSelection.toggleFile(photo.filename, in: group.id, rejected: rejectedFiles(photos)) {
+            saveEditSelection()
+        } else {
+            _ = undoStack.pop()
+        }
+    }
+
+    private func useSuggestedFiles(for group: BracketGroup) {
+        let files = suggestedFiles(for: group)
+        guard !files.isEmpty else { return }
+        recordEditUndo(group)
+        editSelection.setEntry(EditSelection.Entry(send: true, files: files), for: group.id)
+        saveEditSelection()
+    }
+
+    /// Räknar fram förslaget i bakgrunden och lägger in det för grupper fotografen inte rört.
+    private func runEditSuggestion() {
+        guard suggestionProgress == nil, !pipeline.bracketGroups.isEmpty else { return }
+        let inputs: [EditSuggestionRunner.GroupInput] = pipeline.bracketGroups.compactMap { g in
+            let photos = pipeline.photos(in: g)
+            guard let first = photos.first, let last = photos.last else { return nil }
+            return .init(id: g.id, start: first.dateTime, end: last.dateTime, photos: photos.map {
+                .init(file: $0.filename, previewURL: $0.previewURL, seconds: $0.exposureSeconds, rejected: $0.rejected)
+            })
+        }
+        suggestionProgress = (0, 0)
+        Task {
+            let (entries, result) = await EditSuggestionRunner.suggest(groups: inputs) { done, total in
+                Task { @MainActor in if suggestionProgress != nil { suggestionProgress = (done, total) } }
+            }
+            editSelection.applySuggestion(entries)
+            saveEditSelection()
+            suggestionProgress = nil
+            pipeline.appendLog("Förslag till redigering: \(result.selected.count) av \(inputs.count) grupper (\(result.clusters.count) olika vyer).", type: .info)
+        }
+    }
+
+    private func createSendFolders() {
+        let addresses = groupAddresses
+        var requests: [SendFolderSync.Request] = []
+        for g in pipeline.bracketGroups {
+            let photos = pipeline.photos(in: g)
+            let chosen = Set(editSelection.chosenFiles(for: g.id, rejected: rejectedFiles(photos)))
+            for p in photos where chosen.contains(p.filename) {
+                requests.append(.init(address: addresses[g.id] ?? "Osorterade", nefURL: p.nefURL, dngURL: p.dngURL))
+            }
+        }
+        sendRequests = requests
+    }
+
+    private var editBar: some View {
+        Group {
+            if let group = currentGroup {
+                let photos = currentGroupPhotos
+                EditSelectionBar(
+                    isSending: editSelection.isSending(group.id),
+                    isSuggestion: editSelection.isSuggestion(group.id),
+                    chosenCount: editSelection.chosenFiles(for: group.id, rejected: rejectedFiles(photos)).count,
+                    exposureCount: photos.count,
+                    suggestedFiles: suggestedFiles(for: group),
+                    onToggle: toggleSendCurrentGroup,
+                    onUseSuggestion: { useSuggestedFiles(for: group) })
+            }
+        }
+    }
+
+    private var editSummary: some View {
+        let counts = editCounts
+        return VStack(alignment: .trailing, spacing: 4) {
+            Button(action: createSendFolders) {
+                Label("Skapa skicka-mappar", systemImage: "folder.badge.plus")
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.blue)
+            .controlSize(.large)
+            .disabled(counts.files == 0 || pipeline.outputDirectory == nil)
+            .help("Kopierar valda exponeringars DNG till <adress>/<adress> skicka/ (originalen ändras inte)")
+            HStack(spacing: 6) {
+                if let p = suggestionProgress {
+                    ProgressView().controlSize(.mini)
+                    Text(p.total > 0 ? "Föreslår urval… \(p.done)/\(p.total)" : "Föreslår urval…")
+                } else {
+                    Text(EditSelection.countsText(counts))
+                    Menu {
+                        Button("Föreslå urval igen (orörda grupper)") { runEditSuggestion() }
+                        Button("Ta bort orörda förslag") {
+                            editSelection.clearSuggestions()
+                            saveEditSelection()
+                        }
+                    } label: { Image(systemName: "wand.and.stars") }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Automatiskt förslag")
+                }
+            }
+            .font(.caption2)
+            .foregroundColor(.secondary)
+        }
+        .padding(.leading, 8)
     }
 
     private func finishReview() {

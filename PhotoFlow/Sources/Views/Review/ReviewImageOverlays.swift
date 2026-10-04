@@ -228,6 +228,9 @@ struct ReviewFilterBar: View {
                 Button("Ej granskade") { filter = .unreviewed }
                 Button("Flaggade/avvisade") { filter = .flagged }
                 Divider()
+                Button("Skickas till redigering") { filter = .sending }
+                Button("Ej vald för redigering") { filter = .notSending }
+                Divider()
                 ForEach(1...5, id: \.self) { n in
                     Button("★ \(n)+") { filter = .minRating(n) }
                 }
