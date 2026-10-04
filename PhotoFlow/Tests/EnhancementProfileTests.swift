@@ -90,12 +90,14 @@ struct EnhancementProfileTests {
         #expect(f.vibrance == 1)
     }
 
-    @Test("Inbyggda profiler: Automatisk, Neutral, Varm & ljus")
+    @Test("Inbyggda profiler: Automatisk, Neutral, Varm & ljus, Mäklarstil")
     func builtInProfiles() {
         let ids = EnhancementProfile.builtIn.map(\.id)
-        #expect(ids == ["auto", "neutral", "warm-bright"])
-        #expect(EnhancementProfile.builtIn.map(\.name) == ["Automatisk", "Neutral", "Varm & ljus"])
-        #expect(Set(ids).count == 3)
+        #expect(ids == ["auto", "neutral", "warm-bright", "maklarstil"])
+        #expect(EnhancementProfile.builtIn.map(\.name) == ["Automatisk", "Neutral", "Varm & ljus", "Mäklarstil"])
+        #expect(Set(ids).count == 4)
+        #expect(EnhancementProfile.broker.look == BrokerLook.profileLookID)
+        #expect(EnhancementProfile.automatic.look == nil)
         #expect(EnhancementProfile.automatic.autoStrength == 1)
         #expect(EnhancementProfile.automatic.warmBias > 0)
         #expect(EnhancementProfile.neutral.autoStrength < EnhancementProfile.automatic.autoStrength)
@@ -144,7 +146,7 @@ struct EnhancementProfileTests {
         let store = EnhancementProfileStore(directory: dir)
 
         // Tom katalog: bara de inbyggda.
-        #expect(store.loadAll().map(\.id) == ["auto", "neutral", "warm-bright"])
+        #expect(store.loadAll().map(\.id) == ["auto", "neutral", "warm-bright", "maklarstil"])
 
         var custom = EnhancementProfile(id: "maklare-1", name: "Mäklare 1", autoStrength: 0.7)
         custom.warmBias = 0.04
@@ -154,7 +156,7 @@ struct EnhancementProfileTests {
         try store.save(other)
 
         let all = store.loadAll()
-        #expect(all.map(\.id) == ["auto", "neutral", "warm-bright", "aaa", "maklare-1"])
+        #expect(all.map(\.id) == ["auto", "neutral", "warm-bright", "maklarstil", "aaa", "maklare-1"])
         #expect(store.profile(id: "maklare-1") == custom)
         #expect(store.profile(id: "finns-inte") == .automatic)
 
@@ -164,7 +166,7 @@ struct EnhancementProfileTests {
         try fake.write(to: dir.appendingPathComponent("fake.json"))
         try Data("inte json".utf8).write(to: dir.appendingPathComponent("trasig.json"))
         #expect(store.profile(id: "auto").name == "Automatisk")
-        #expect(store.loadAll().count == 5)
+        #expect(store.loadAll().count == 6)
 
         // Osäkra id:n (sökvägar) vägras.
         #expect(throws: (any Error).self) { try store.save(EnhancementProfile(id: "../ut", name: "X")) }

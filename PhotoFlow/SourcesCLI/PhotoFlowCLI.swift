@@ -74,6 +74,10 @@ struct PhotoFlowCLI {
                              efter HDR; på som standard).
           --no-reel         Stäng av "Filmförslag" (automatisk Objektfilm per adress
                              sist i körningen; på som standard, kräver kalendermatchning).
+          --enhance-profile <id>
+                            Stilprofil för "Förbättra bilder" (auto, neutral, warm-bright,
+                             maklarstil eller en egen profils id). Standard: auto.
+          --upright on|off  Räta lodlinjer i förbättringen (standard on).
           --window-pull on|off
                             Fönster från mörkaste exponeringen i HDR (standard on).
           --window-strength <N>
@@ -158,6 +162,8 @@ struct PhotoFlowCLI {
         var windowStrength: Double?
         var hdrDebug = false
         var maxParallel: Int?
+        var enhanceProfile: String?
+        var upright: Bool?
 
         var idx = 0
         while idx < args.count {
@@ -199,6 +205,14 @@ struct PhotoFlowCLI {
                 windowStrength = value
             case "--hdr-debug":
                 hdrDebug = true
+            case "--enhance-profile":
+                idx += 1
+                guard idx < args.count else { fail("--enhance-profile kräver ett profil-id") }
+                enhanceProfile = args[idx]
+            case "--upright":
+                idx += 1
+                guard idx < args.count, ["on", "off"].contains(args[idx]) else { fail("--upright kräver on eller off") }
+                upright = args[idx] == "on"
             case "--max-parallel":
                 idx += 1
                 guard idx < args.count, let n = Int(args[idx]), n >= 0 else { fail("--max-parallel kräver ett heltal >= 0") }
@@ -260,6 +274,9 @@ struct PhotoFlowCLI {
         // Fas 1c: 0 = automatiskt (standard), 1 = allt i följd. Sätts alltid, så att ett värde från
         // en tidigare körning (CLI:ns egen defaults-domän) inte hänger kvar.
         settings.maxParallelism = maxParallel ?? 0
+        // Profil och lodlinjer sätts alltid (samma skäl: CLI:ns egen defaults-domän).
+        settings.enhanceProfileID = enhanceProfile ?? EnhancementProfile.automaticID
+        settings.enhanceUprightEnabled = upright ?? true
         // Ljud/tal/systemnotiser stängs alltid av headless: dels är de
         // meningslösa utan en interaktiv session, dels kraschar
         // `NotificationService` numera bara inte längre (se dess
@@ -273,7 +290,7 @@ struct PhotoFlowCLI {
         print("  input:  \(inputURL.path)")
         print("  output: \(outputURL.path)")
         print("  window pull: \(settings.hdrWindowPullEnabled ? "på (\(Int(settings.hdrWindowPullStrength)) %)" : "av")\(hdrDebug ? ", HDR-felsökning på" : "")")
-        print("  HDR: \(settings.hdrMergeEnabled ? "på" : "av"), kalender: \(settings.calendarMatchEnabled ? "på" : "av"), AI-taggning: \(settings.aiTaggingEnabled ? "på" : "av"), förbättra bilder: \(settings.enhanceEnabled ? "på (profil \(settings.enhanceProfileID))" : "av"), filmförslag: \(settings.reelProposalEnabled ? "på" : "av"), samtidiga jobb: \(settings.maxParallelism == 0 ? "automatiskt" : "\(settings.maxParallelism)")")
+        print("  HDR: \(settings.hdrMergeEnabled ? "på" : "av"), kalender: \(settings.calendarMatchEnabled ? "på" : "av"), AI-taggning: \(settings.aiTaggingEnabled ? "på" : "av"), förbättra bilder: \(settings.enhanceEnabled ? "på (profil \(settings.enhanceProfileID), lodlinjer \(settings.enhanceUprightEnabled ? "på" : "av"))" : "av"), filmförslag: \(settings.reelProposalEnabled ? "på" : "av"), samtidiga jobb: \(settings.maxParallelism == 0 ? "automatiskt" : "\(settings.maxParallelism)")")
 
         let state = PipelineState()
         let runner = PipelineRunner(state: state)

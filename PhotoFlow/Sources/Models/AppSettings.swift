@@ -80,6 +80,9 @@ class AppSettings: ObservableObject {
     /// skickad film.
     @AppStorage("reelProposalEnabled") var reelProposalEnabled: Bool = true
     @AppStorage("enhanceProfileID") var enhanceProfileID: String = EnhancementProfile.automaticID
+    /// "Räta lodlinjer": förbättringen rätar nästan lodräta linjer (virtuell kameralutning,
+    /// högst 8°, beskärning utan tomma hörn) när skattningen är säker (`VerticalCorrection`).
+    @AppStorage("enhanceUprightEnabled") var enhanceUprightEnabled: Bool = true
     @AppStorage("detailedProgress") var detailedProgress: Bool = true
     /// Fas 1c: högsta antal tunga jobb (HDR-grupper, förbättringar) som körs samtidigt, och om
     /// AI-taggningen får köras samtidigt med HDR. 0 = automatiskt (`ResourceGovernor`: lämnar

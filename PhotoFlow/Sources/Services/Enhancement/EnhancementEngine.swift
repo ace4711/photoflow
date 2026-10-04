@@ -83,10 +83,20 @@ nonisolated struct EnhancementAnalysis: Codable, Sendable, Equatable {
 ///   ×2 och mjukad med en halv radie), så ingen halo uppstår vid karmarna.
 /// - Masken roteras/beskärs exakt som bilden (horisonträtning).
 /// Utan mask är både analysen och renderingen identiska med version 1.
+///
+/// ## Mäklarstil och lodlinjer (version 3)
+/// - Profilen "Mäklarstil" (`EnhancementProfile.look == "broker"`) ersätter exponering,
+///   nivåer, skuggor/högdagrar, S-kurva och vibrance med `BrokerLook`: vitbalans som gör
+///   neutrala ytor neutrala, brusreducering, en tonkurva mot leveransernas målpercentiler och
+///   mättnad per nyans (3D-LUT), lägre clarity och lite textur. I fönstermasken används en
+///   svagare kurva. Parametrarna sparas i `EnhancementParameters.look`.
+/// - "Räta lodlinjer" (`Request.upright`, alla profiler): `VerticalCorrection` skattar
+///   lodlinjernas flyktpunkt i analysbilden och rätar dem (högst 8° lutning, 3° rotation),
+///   före allt annat; masken följer med. Ersätter horisonträtningen när den görs.
 nonisolated enum EnhancementEngine {
     /// Höjs när algoritmen/renderingen ändras — del av fingerprintet så gamla
     /// förbättringar görs om.
-    static let version = 2
+    static let version = 3
 
     /// Fönstervarianten (se "Fönstermask"): andel av en positiv exponeringshöjning,
     /// lägsta högdagsdämpning och knät (linjärt) för den mjuka roll-offen.
@@ -335,9 +345,15 @@ nonisolated enum EnhancementEngine {
             return moved.clampedToExtent().transformed(by: CGAffineTransform(scaleX: sx, y: sy)).cropped(to: sourceExtent)
         }
 
-        // 1. Rotation + minimal beskärning — masken följer med exakt.
+        // 1a. Rätning av lodlinjer (Mäklarstil/"Räta lodlinjer") — masken följer med exakt.
+        if let perspective = p.perspective {
+            let w = Int(sourceExtent.width), h = Int(sourceExtent.height)
+            image = VerticalCorrection.render(image, correction: perspective, width: w, height: h)
+            mask = mask.map { VerticalCorrection.render($0, correction: perspective, width: w, height: h) }
+        }
+        // 1b. Rotation + minimal beskärning — masken följer med exakt.
         if abs(p.rotationDegrees) > 0.0001 {
-            let w = sourceExtent.width, h = sourceExtent.height
+            let w = image.extent.width, h = image.extent.height
             let theta = CGFloat(p.rotationDegrees * .pi / 180)
             let transform = CGAffineTransform(translationX: w / 2, y: h / 2)
                 .rotated(by: theta)
@@ -357,9 +373,24 @@ nonisolated enum EnhancementEngine {
         let longSide = Double(max(extent.width, extent.height))
 
         // 2–4 (utom clarity/skärpa): toner. Med mask blandas fönstervarianten in.
-        let toned = tones(image, parameters: p, window: false)
-        var result = toned
-        if let mask {
+        let toned: CIImage
+        var result: CIImage
+        if let look = p.look {
+            // Mäklarstil (`BrokerLook`): tonkurva + mättnad som 3D-LUT efter brusreduceringen;
+            // i fönstermasken den svagare fönsterkurvan.
+            let base = BrokerLook.prepare(image, parameters: p, look: look)
+            toned = BrokerLook.applyCube(base, look, window: false)
+            result = toned
+            if let mask {
+                result = BrokerLook.applyCube(base, look, window: true).applyingFilter("CIBlendWithMask", parameters: [
+                    kCIInputBackgroundImageKey: toned, kCIInputMaskImageKey: mask
+                ]).cropped(to: extent)
+            }
+        } else {
+            toned = tones(image, parameters: p, window: false)
+            result = toned
+        }
+        if p.look == nil, let mask {
             let windowToned = tones(image, parameters: p, window: true)
             result = windowToned.applyingFilter("CIBlendWithMask", parameters: [
                 kCIInputBackgroundImageKey: toned, kCIInputMaskImageKey: mask
@@ -377,6 +408,9 @@ nonisolated enum EnhancementEngine {
             } else {
                 result = clarified
             }
+        }
+        if let look = p.look, look.texture > 0 {
+            result = BrokerLook.applyTexture(result, amount: look.texture)
         }
         if p.sharpness > 0 {
             result = unsharp(result, extent: extent, radius: max(0.6, 1.2 * longSide / 8256), intensity: p.sharpness)
@@ -594,6 +628,8 @@ nonisolated enum EnhancementEngine {
         var allowStraighten: Bool = false
         /// Gruppens fönstermask från window pull (`hdr_masks/hdr_group_N.png`), om den finns.
         var windowMaskURL: URL? = nil
+        /// Räta lodlinjer (`VerticalCorrection`) när skattningen är säker.
+        var upright: Bool = false
         var jpegMaxDimension: Int = 4000
         var jpegQuality: Double = 0.92
     }
@@ -673,7 +709,20 @@ nonisolated enum EnhancementEngine {
                 horizonDegrees: horizon, alreadySharpened: request.alreadySharpened, mask: analysisMask
             ))
         }
-        let final = request.profile.finalParameters(auto: auto)
+        var final = request.profile.finalParameters(auto: auto)
+        if request.profile.look == BrokerLook.profileLookID {
+            final = BrokerLook.parameters(base: final, pixels: small.pixels, width: small.width, height: small.height,
+                                          mask: analysisMask, taggedExterior: request.allowStraighten)
+        }
+        if request.upright {
+            let focal = VerticalCorrection.focal(fromExifOf: request.exifSource)
+            if let perspective = PipelineMetrics.phase("upright", {
+                VerticalCorrection.measure(pixels: small.pixels, width: small.width, height: small.height, focal: focal)
+            }) {
+                final.perspective = perspective
+                final.rotationDegrees = 0  // rotationen ingår i lodlinjekorrigeringen
+            }
+        }
 
         try Task.checkCancellation()
         let enhanced = render(source, parameters: final, windowMask: analysisMask == nil ? nil : windowMask)

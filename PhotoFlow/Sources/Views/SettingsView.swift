@@ -177,10 +177,12 @@ struct EnhanceSettingsRows: View {
             }
             .pickerStyle(.menu)
 
+            Toggle("Räta lodlinjer", isOn: $settings.enhanceUprightEnabled)
+
             Text("Efter HDR-steget korrigeras varje färdig bild (HDR-TIFF per bracket, DNG-rendering per singel): vitbalans, exponering, svart/vit-punkt, skuggor/högdagrar, lätt S-kurva, vibrance, clarity, skärpa och liten horisonträtning. Resultatet sparas som nya filer i mappen FÖRBÄTTRADE — originalen rörs aldrig. Parametrar per bild sparas i enhancement.json.")
                 .font(.caption)
                 .foregroundColor(.secondary)
-            Text("Automatisk: full automatik med en liten varm förskjutning. Neutral: svag automatik, ingen varm ton, ingen rätning. Varm & ljus: något ljusare och varmare. Egna profiler läggs som JSON i ~/Library/Application Support/PhotoFlow/profiles/.")
+            Text("Automatisk: full automatik med en liten varm förskjutning. Neutral: svag automatik, ingen varm ton, ingen rätning. Varm & ljus: något ljusare och varmare. Mäklarstil: härmar redigerarens leveranser — ljus och luftig, neutrala vita väggar, upplyfta skuggor, dämpad mättnad och lågt brus. Räta lodlinjer: väggar och dörrkarmar blir lodräta (högst 8°, beskärs utan tomma hörn; hoppas över när linjerna är osäkra). Egna profiler läggs som JSON i ~/Library/Application Support/PhotoFlow/profiles/.")
                 .font(.caption)
                 .foregroundColor(.secondary)
         } else {

@@ -25,6 +25,8 @@ import Foundation
 /// - `sharpness`: 0…1,5 intensitet på slutskärpningen (radien följer upplösningen).
 /// - `rotationDegrees`: rotation i grader som tillämpas (moturs positivt, som
 ///   Core Image), med minimal beskärning så att inga tomma hörn uppstår.
+/// - `look`: Mäklarstilens tonkurva/mättnad/brusreducering (`BrokerLook`); `nil` = vanlig rendering.
+/// - `perspective`: rätning av lodlinjer (`VerticalCorrection`); `nil` = ingen.
 nonisolated struct EnhancementParameters: Codable, Sendable, Equatable {
     var exposureEV: Double = 0
     var temperature: Double = 0
@@ -39,6 +41,8 @@ nonisolated struct EnhancementParameters: Codable, Sendable, Equatable {
     var clarity: Double = 0
     var sharpness: Double = 0
     var rotationDegrees: Double = 0
+    var look: LookParameters? = nil
+    var perspective: PerspectiveCorrection? = nil
 
     static let identity = EnhancementParameters()
 
@@ -131,6 +135,12 @@ nonisolated struct EnhancementParameters: Codable, Sendable, Equatable {
         if clarity != 0 { add("clarity", clarity) }
         if sharpness != 0 { add("skärpa", sharpness) }
         if rotationDegrees != 0 { add("rotation", rotationDegrees, "%+.2f°") }
+        if let look {
+            parts.append("mäklarstil (median \(String(format: "%.2f", BrokerLook.evaluate(x: look.curveX, y: look.curveY, at: 0.5))) vid 0,5)")
+        }
+        if let perspective {
+            parts.append(String(format: "lodlinjer %+.1f°/%+.1f°", perspective.pitchDegrees, perspective.rollDegrees))
+        }
         return parts.isEmpty ? "ingen ändring" : parts.joined(separator: ", ")
     }
 }
@@ -173,10 +183,13 @@ nonisolated struct EnhancementProfile: Codable, Sendable, Equatable, Identifiabl
     var warmBias: Double = 0
     /// Låsta parametrar: `EnhancementParameters.Key.rawValue` → absolut värde.
     var locks: [String: Double] = [:]
+    /// Särskild look ovanpå automatiken: `"broker"` = Mäklarstil (`BrokerLook`), `nil` = ingen.
+    var look: String? = nil
 
     static let automaticID = "auto"
     static let neutralID = "neutral"
     static let warmBrightID = "warm-bright"
+    static let brokerID = "maklarstil"
 
     static let automatic = EnhancementProfile(
         id: automaticID, name: "Automatisk", autoStrength: 1, warmBias: 0.03
@@ -188,7 +201,12 @@ nonisolated struct EnhancementProfile: Codable, Sendable, Equatable, Identifiabl
         id: warmBrightID, name: "Varm & ljus", autoStrength: 1,
         exposure: 0.15, shadows: 0.10, whites: 0.02, vibrance: 0.05, warmBias: 0.09
     )
-    static let builtIn: [EnhancementProfile] = [automatic, neutral, warmBright]
+    /// Härmar redigerarens leveranser (ljus, luftig, neutrala vita väggar, låg mättnad,
+    /// lågt brus) — se `BrokerLook`. Rätning av horisonten som Automatisk.
+    static let broker = EnhancementProfile(
+        id: brokerID, name: "Mäklarstil", autoStrength: 1, warmBias: 0, look: BrokerLook.profileLookID
+    )
+    static let builtIn: [EnhancementProfile] = [automatic, neutral, warmBright, broker]
 
     static func isBuiltIn(id: String) -> Bool { builtIn.contains { $0.id == id } }
 
