@@ -289,7 +289,7 @@ nonisolated enum HDREngine {
             group: group, frames: frames.map(\.lastPathComponent), reference: frames[middleIndex].lastPathComponent,
             windowSource: windowSource?.lastPathComponent, window: pull?.stats, components: pull?.components, maskFraction: m.maskFraction,
             clippedInMask: m.clipped, structureVsDark: m.structure, lumaSpread: m.spread, chroma: m.chroma,
-            haloWidthPx: m.haloWidth, haloAmplitude: m.haloAmplitude,
+            haloWidthPx: m.haloWidth, haloAmplitude: m.haloAmplitude, pullHaloWidthPx: m.pullHalo,
             darkShiftPx: darkShift.map { [Double($0.x), Double($0.y)] }, darkShiftRejected: darkShift == nil ? nil : darkShiftRejected,
             residualShiftPx: residualShift.map { Double(($0.x * $0.x + $0.y * $0.y).squareRoot()) },
             residualShiftVector: residualShift.map { [Double($0.x), Double($0.y)] }, seconds: seconds, pullSeconds: pull?.stats.seconds ?? 0)

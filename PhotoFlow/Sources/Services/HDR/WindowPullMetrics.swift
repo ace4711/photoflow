@@ -34,6 +34,9 @@ nonisolated enum WindowPullMetrics {
         /// avvikelse i luma mot referensen i ringarna (mål < 0,03).
         var haloWidthPx: Pair
         var haloAmplitude: Pair
+        /// Hur långt utanför maskkanten (px, full upplösning) window pull ändrar bilden mer
+        /// än 0,01 i medelluma — den halo/ring som pullen själv lägger till (mål < 8 px).
+        var pullHaloWidthPx: Double?
         /// Den mörka ramens uppmätta förskjutning och kvarvarande förskjutning efter
         /// justeringen (> 1 px flaggas), i px vid full upplösning.
         var darkShiftPx: [Double]?
@@ -47,7 +50,7 @@ nonisolated enum WindowPullMetrics {
     /// Räknar måtten på ~`dimension` px.
     static func measure(output: [Float], fusion: [Float], dark: [Float], reference: [Float], fullMask: Plane?,
                         width: Int, height: Int, dimension: Int = 2000)
-        -> (maskFraction: Double, clipped: Pair, structure: Pair, spread: Pair, chroma: Pair, haloWidth: Pair, haloAmplitude: Pair) {
+        -> (maskFraction: Double, clipped: Pair, structure: Pair, spread: Pair, chroma: Pair, haloWidth: Pair, haloAmplitude: Pair, pullHalo: Double) {
         let s = HDRImageOps.scaledSize(width: width, height: height, maxDimension: dimension)
         let factor = Double(max(width, height)) / Double(max(s.width, s.height))
         let outS = HDRImageOps.scaleRGBA(output, width: width, height: height, toWidth: s.width, toHeight: s.height)
@@ -59,7 +62,7 @@ nonisolated enum WindowPullMetrics {
         let inMask = maskS.map { $0 >= 0.5 }
         let maskCount = inMask.filter { $0 }.count
         let zero = Pair(withPull: 0, withoutPull: 0)
-        guard maskCount > 0 else { return (0, zero, zero, zero, zero, zero, zero) }
+        guard maskCount > 0 else { return (0, zero, zero, zero, zero, zero, zero, 0) }
 
         func clipped(_ img: [Float]) -> Double {
             var c = 0
@@ -106,16 +109,26 @@ nonisolated enum WindowPullMetrics {
         }
         // Halo: medelavvikelse i luma mot referensen i ringar utanför masken (avstånd 1…40 px
         // på mätupplösningen), relativt baslinjen i ringarna 28…40. Klippta referenspixlar räknas inte.
-        var rings: [[Int]] = []
+        var rings: [[Int]] = [], allRings: [[Int]] = []
         var current = Plane(width: s.width, height: s.height, data: inMask.map { $0 ? 1 : 0 })
         for _ in 0..<40 {
             let next = HDRImageOps.morph(current, radius: 1, dilate: true)
-            var ring: [Int] = []
+            var ring: [Int] = [], all: [Int] = []
             for p in 0..<n where next.data[p] > 0.5 && current.data[p] < 0.5 {
+                all.append(p)
                 if max(refS[p * 4], refS[p * 4 + 1], refS[p * 4 + 2]) < 0.95 { ring.append(p) }
             }
             rings.append(ring)
+            allRings.append(all)
             current = next
+        }
+        // Pullens egen påverkan utanför masken: medelskillnad med/utan pull per ring.
+        let outLum = HDRImageOps.lumaPlane(outS, width: s.width, height: s.height).data
+        let fusLum = HDRImageOps.lumaPlane(fusS, width: s.width, height: s.height).data
+        var pullHaloRings = 0
+        for (i, ring) in allRings.enumerated() where !ring.isEmpty {
+            let d = ring.reduce(0.0) { $0 + Double(outLum[$1] - fusLum[$1]) } / Double(ring.count)
+            if abs(d) > 0.01 { pullHaloRings = i + 1 }
         }
         let refLum = HDRImageOps.lumaPlane(refS, width: s.width, height: s.height).data
         func halo(_ img: [Float]) -> (width: Double, amplitude: Double) {
@@ -146,6 +159,7 @@ nonisolated enum WindowPullMetrics {
                 Pair(withPull: spreadOut, withoutPull: spreadFus),
                 Pair(withPull: chromaOut, withoutPull: chromaFus),
                 Pair(withPull: haloOut.width, withoutPull: haloFus.width),
-                Pair(withPull: haloOut.amplitude, withoutPull: haloFus.amplitude))
+                Pair(withPull: haloOut.amplitude, withoutPull: haloFus.amplitude),
+                Double(pullHaloRings) * factor)
     }
 }

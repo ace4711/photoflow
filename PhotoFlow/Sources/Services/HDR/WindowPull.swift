@@ -53,15 +53,21 @@ nonisolated enum WindowPull {
         /// Komponenter mindre än denna andel av bilden slängs.
         var minComponentFraction: Double = 0.0005
         /// Guided filter: radie som andel av långsidan och regularisering.
-        var guidedRadiusFraction: Double = 0.002
+        var guidedRadiusFraction: Double = 0.0015
         var guidedEps: Float = 1e-2
         /// Dilatation efter guided filter (px vid 6000 px långsida).
         var dilatePixels: Double = 1.5
+        /// Längsta avstånd (px vid 6000 px långsida) som masken får sprida sig utanför
+        /// den detekterade ytan.
+        var maxSpreadPixels: Double = 4
         /// Spökskyddsbandets halvbredd (px vid 6000 px långsida) och tröskel (gammaluma).
         var ghostBandPixels: Double = 32
         var ghostThreshold: Float = 0.12
-        /// Minsta textur (medel |Laplace| av mörka ramens luma på ~1500 px) för ett fönster.
-        var minTexture: Float = 0.045
+        /// Minsta textur (medel |Laplace| av mörka ramens luma på ~1500 px) för ett fönster,
+        /// och för en färgstark komponent (kroma över `coloredSurfaceChroma`).
+        var minTexture: Float = 0.02
+        var minTextureColored: Float = 0.045
+        var coloredSurfaceChroma: Float = 0.25
         /// Komponenter vars överkant ligger under denna andel av bildhöjden är golv/reflexer.
         var floorTop: Double = 0.55
 
@@ -158,6 +164,13 @@ nonisolated enum WindowPull {
         let coeffs = HDRImageOps.guidedCoefficients(guide: guideG, input: maskG, radius: radiusG, eps: options.guidedEps)
         let aFull = HDRImageOps.bilinear(coeffs.a, toWidth: width, toHeight: height)
         let bFull = HDRImageOps.bilinear(coeffs.b, toWidth: width, toHeight: height)
+        // Tak: guided filter-svansen får inte nå längre än `maxSpreadPixels` utanför den
+        // detekterade masken — annars mörknar karmen närmast glaset (uppmätt "pull-halo"
+        // 15–18 px innan taket fanns).
+        let spreadG = max(1, Int((options.maxSpreadPixels * Double(longSide) / 6000 / factor).rounded()))
+        let limitG = HDRImageOps.morph(Plane(width: g.width, height: g.height, data: maskG.data.map { $0 >= 0.5 ? 1 : 0 }),
+                                       radius: spreadG, dilate: true)
+        let limitFull = HDRImageOps.bilinear(limitG, toWidth: width, toHeight: height)
         var mask = [Float](repeating: 0, count: width * height)
         dark.withUnsafeBufferPointer { dBuf in
             mask.withUnsafeMutableBufferPointer { mBuf in
@@ -166,7 +179,7 @@ nonisolated enum WindowPull {
                     for x in 0..<width {
                         let p = y * width + x
                         let lum = HDRImageOps.luma(d[p * 4], d[p * 4 + 1], d[p * 4 + 2])
-                        m[p] = min(max(aFull.data[p] * lum + bFull.data[p], 0), 1)
+                        m[p] = min(max(aFull.data[p] * lum + bFull.data[p], 0), 1, limitFull.data[p])
                     }
                 }
             }
@@ -406,7 +419,8 @@ nonisolated enum WindowPull {
         // Ljusa ytor inne i rummet ser ut som fönster i ljusvillkoren: solbelyst vägg eller
         // golv, blanka reflexer. Två enkla kännetecken, uppmätta på testmängden:
         //  - utsikten har detaljer (träd, hus, spröjsar) — en slät vägg har nästan ingen textur
-        //    i den mörka ramen (vägg ~0,01, träpanel ~0,03, fönster 0,06–0,15);
+        //    i den mörka ramen (vit vägg ≤ 0,011, fönster 0,03–0,18). Färgstarka ytor (solbelyst
+        //    träpanel: textur 0,034 men kroma 0,33) kräver mer textur än utsikter (kroma ≤ 0,18);
         //  - ett fönster börjar aldrig i bildens nedre del — solfläckar och reflexer på golvet gör.
         // Fusionens luma i en ring runt komponenten och den matchade medianen sparas för felsökning.
         func maskOf(_ selected: [Bool]) -> Plane {
@@ -416,7 +430,8 @@ nonisolated enum WindowPull {
         }
         for l in 1...count where keep[l] {
             guard let info = infos[l] else { continue }
-            if info.darkTexture < Double(options.minTexture) {
+            if info.darkTexture < Double(options.minTexture)
+                || (info.darkTexture < Double(options.minTextureColored) && info.darkChroma > Double(options.coloredSurfaceChroma)) {
                 keep[l] = false; detection.surfaces += 1; infos[l]?.verdict = "slät yta"
             } else if info.box[1] > options.floorTop {
                 keep[l] = false; detection.surfaces += 1; infos[l]?.verdict = "golv/reflex"
