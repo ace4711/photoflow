@@ -159,6 +159,7 @@ extension DashboardStep {
                     "Fält: GPS-koordinater, adress (Headline/ObjectName/Title), bokningstitel och AI-taggar/beskrivning som nyckelord/bildtext.",
                     "Körs i batchar om 100 filer via ett exiftool-argfile för hastighet.",
                     "Hoppar över om metadata_written.json finns och fingerprintet (bilder + AI-taggar + adresser/rättningar) matchar.",
+                    "HDR- och förbättrade filer får metadatan redan när de skapas; metadata_stamps.json visar vilka filer som redan har rätt metadata, och de hoppas över.",
                     "En omkörd AI-taggning eller adressrättning triggar alltid en ny skrivning, även vid samma filantal.",
                     "Fel: exiftool saknas → installera med brew install exiftool; steget skriver då ingen metadata alls."
                 ],

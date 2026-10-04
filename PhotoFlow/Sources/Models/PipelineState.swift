@@ -349,6 +349,7 @@ class PipelineState: ObservableObject {
     /// Correct a mismatched address with new name and GPS coordinates
     func correctAddress(at index: Int, newAddress: String, coordinate: CLLocationCoordinate2D) {
         guard index < allMatchedAddresses.count else { return }
+        let oldAddress = allMatchedAddresses[index].address
         allMatchedAddresses[index] = (address: newAddress, eventTitle: allMatchedAddresses[index].eventTitle, hasGPS: true, coordinate: coordinate)
         appendLog("Adress rättad: \(newAddress) (\(String(format: "%.6f", coordinate.latitude)), \(String(format: "%.6f", coordinate.longitude)))", type: .success)
         // Store corrected coordinates for metadata writing
@@ -358,7 +359,7 @@ class PipelineState: ObservableObject {
         // address text was written, so re-geocoding on the next load silently
         // threw the manual GPS correction away again.
         saveCalendarMatches()
-        invalidateWrittenMetadataIfNeeded()
+        invalidateWrittenMetadataIfNeeded(addresses: [oldAddress, newAddress])
         syncManifest()
     }
 
@@ -391,8 +392,20 @@ class PipelineState: ObservableObject {
     /// removed so `writeIPTCMetadata` runs again next time — otherwise the wrong
     /// GPS/address that prompted the correction would stay baked into the already
     /// tagged files forever.
-    private func invalidateWrittenMetadataIfNeeded() {
+    ///
+    /// Fas 1b: stämplarna (`metadata_stamps.json`) för filerna i adressmapparna för den gamla och
+    /// den nya adressen tas också bort, så att de skrivs om. (Metadatasteget jämför dessutom
+    /// stämpelns värden med de nya, så även filer som ännu ligger i `hdr/`/`enhanced/` skrivs om.)
+    private func invalidateWrittenMetadataIfNeeded(addresses: [String]) {
         guard let outputDir = outputDirectory else { return }
+        var stamps = MetadataStamps.load(from: outputDir)
+        let folders = Set(addresses.flatMap { address -> [String] in
+            let name = CalendarService.sanitizeFolderName(address)
+            return AddressFolderLayout.allDirs(in: outputDir, folderName: name).map(\.lastPathComponent)
+        })
+        if stamps.removeAll(inFolders: folders) > 0 {
+            stamps.save(to: outputDir)
+        }
         let marker = outputDir.appendingPathComponent("metadata_written.json")
         guard FileManager.default.fileExists(atPath: marker.path) else { return }
         try? FileManager.default.removeItem(at: marker)

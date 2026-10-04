@@ -26,6 +26,10 @@ class PipelineRunner: ObservableObject {
     /// Calendar address mappings for organizing output
     var calendarMappings: [(address: String, eventTitle: String, photoDateRange: ClosedRange<Date>)] = []
 
+    /// Adressmetadata (bokningsinfo + GPS per adressmapp) som räknats fram efter kalendersteget,
+    /// med signaturen (bokningar + manuella rättningar) den gäller för. Se `resolveAddressMetadata`.
+    var addressMetadataCache: (signature: String, entries: [ResolvedAddress])?
+
     /// Cached AI tags: filename -> PhotoTags
     var aiTagResults: [String: VisionTaggingService.PhotoTags] = [:]
 
@@ -292,6 +296,10 @@ class PipelineRunner: ObservableObject {
             if AppSettings.shared.calendarMatchEnabled {
                 state.updateStep(.findCalendarInfo, phase: .active)
                 await matchCalendarBookings()
+                // Fas 1b: adressernas GPS och bokningsinfo räknas fram redan här (i stället för först i
+                // sorteringen), så att HDR och Förbättra kan skriva all metadata när filerna skapas.
+                // Sortering och metadatasteg återanvänder samma resultat.
+                if !calendarMappings.isEmpty { _ = await resolveAddressMetadata() }
                 state.completeStep(.findCalendarInfo)
                 state.updateStep(.writeIPTCTags, phase: .queued)
             } else {
@@ -506,9 +514,10 @@ class PipelineRunner: ObservableObject {
                 state.completeStep(step)
 
             case .writeIPTCTags:
-                // Rensa marker så steget körs om
+                // Rensa marker och stämplar så steget skriver om alla filer
                 if let outputDir = state.outputDirectory {
                     try? FileManager.default.removeItem(at: outputDir.appendingPathComponent("metadata_written.json"))
+                    try? FileManager.default.removeItem(at: MetadataStamps.url(in: outputDir))
                 }
                 await writeIPTCMetadata()
                 state.completeStep(step)
@@ -603,7 +612,7 @@ class PipelineRunner: ObservableObject {
     /// previously-written `metadata_written.json` markers untrustworthy (e.g. the
     /// DNG-folder-suffix fix and the NEF-symlink/XMP-sidecar fix). Markers without
     /// a matching version are treated as stale and metadata is written again.
-    static let metadataMarkerVersion = 2
+    nonisolated static let metadataMarkerVersion = 2
 
     private static let excludedDirNames: Set<String> = [
         "processed", "bracket_groups", "dng", "hdr", "previews"

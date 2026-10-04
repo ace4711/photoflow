@@ -45,64 +45,8 @@ extension PipelineRunner {
         lines.append("-charset")
         lines.append("iptc=UTF8")
 
-        if let lat = meta.latitude, let lon = meta.longitude {
-            let latRef = lat >= 0 ? "N" : "S"
-            let lonRef = lon >= 0 ? "E" : "W"
-            if isNEF {
-                // XMP:GPSLatitudeRef/GPSLongitudeRef don't exist as separate tags
-                // (verified with exiftool 13.50 — "doesn't exist or isn't writable").
-                // exiftool accepts a signed "value N/S/E/W" string directly on the
-                // XMP:GPSLatitude/GPSLongitude tags instead.
-                lines.append("-XMP:GPSLatitude=\(abs(lat)) \(latRef)")
-                lines.append("-XMP:GPSLongitude=\(abs(lon)) \(lonRef)")
-            } else {
-                lines.append("-GPSLatitude=\(abs(lat))")
-                lines.append("-GPSLatitudeRef=\(latRef)")
-                lines.append("-GPSLongitude=\(abs(lon))")
-                lines.append("-GPSLongitudeRef=\(lonRef)")
-            }
-        }
-
-        if let address = meta.address, !address.isEmpty {
-            if isNEF {
-                lines.append("-XMP:Title=\(address)")
-                lines.append("-XMP-iptcCore:Location=\(address)")
-                lines.append("-XMP-iptcCore:Sublocation=\(address)")
-            } else {
-                lines.append("-IPTC:Headline=\(address)")
-                lines.append("-IPTC:ObjectName=\(address)")
-                lines.append("-XMP:Title=\(address)")
-                lines.append("-IPTC:Sub-location=\(address)")
-            }
-        }
-
-        if let eventTitle = meta.eventTitle, !eventTitle.isEmpty {
-            lines.append(isNEF ? "-XMP:Instructions=\(eventTitle)" : "-IPTC:SpecialInstructions=\(eventTitle)")
-        }
-
-        for tag in meta.aiTags {
-            // -=/+= idiom: removes the tag first if present, then re-adds it, so
-            // re-running this step doesn't pile up duplicate keywords (verified
-            // with exiftool 13.50 — plain += duplicates on every re-run).
-            if isNEF {
-                lines.append("-XMP:Subject-=\(tag)")
-                lines.append("-XMP:Subject+=\(tag)")
-            } else {
-                lines.append("-IPTC:Keywords-=\(tag)")
-                lines.append("-IPTC:Keywords+=\(tag)")
-                lines.append("-XMP:Subject-=\(tag)")
-                lines.append("-XMP:Subject+=\(tag)")
-            }
-        }
-
-        if let description = meta.description, !description.isEmpty {
-            if isNEF {
-                lines.append("-XMP:Description=\(description)")
-            } else {
-                lines.append("-IPTC:Caption-Abstract=\(description)")
-                lines.append("-XMP:Description=\(description)")
-            }
-        }
+        // Själva taggarna är delade med skrivningen när HDR-/förbättrade filer skapas (fas 1b).
+        lines.append(contentsOf: ExiftoolMetadataArguments.tagLines(for: meta, isNEF: isNEF))
 
         if isNEF && !sidecarExists {
             lines.append("-o")
@@ -114,8 +58,215 @@ extension PipelineRunner {
         return lines
     }
 
+    /// Filerna (exiftools målsökväg, alltså sista sökvägen före `-execute` i
+    /// `exiftoolArguments`) som exiftool skrev utan fel, enligt `-progress`-utdatan: varje
+    /// kommando börjar med "======== <fil> [i/n]" och slutar med "N image files
+    /// updated/unchanged/created" eller "... weren't updated due to errors".
+    nonisolated static func succeededExiftoolTargets(in output: String) -> Set<String> {
+        var succeeded: Set<String> = []
+        var current: String?
+        for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.hasPrefix("======== ") {
+                var name = line.dropFirst("======== ".count)
+                if let bracket = name.range(of: " [", options: .backwards), name.hasSuffix("]") {
+                    name = name[..<bracket.lowerBound]
+                }
+                current = String(name)
+            } else if let file = current, let count = Self.exiftoolResultCount(line), count > 0 {
+                // "0 image files updated" skrivs också när filen inte gick att skriva (före "... due to errors").
+                succeeded.insert(file)
+                current = nil
+            } else if line.contains("weren't updated due to errors") {
+                current = nil
+            }
+        }
+        return succeeded
+    }
+
+    /// Antalet i en resultatrad "N image file(s) updated/unchanged/created", annars nil.
+    nonisolated private static func exiftoolResultCount(_ line: Substring) -> Int? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard ["updated", "unchanged", "created"].contains(where: { trimmed.hasSuffix("image files \($0)") || trimmed.hasSuffix("image file \($0)") }),
+              let number = trimmed.split(separator: " ").first else { return nil }
+        return Int(number)
+    }
+
+    // MARK: - Adressmetadata (fas 1b: beräknas efter kalendersteget, delas av alla steg)
+
+    /// Bokningsinfo och koordinat för en adressmapp (nyckel = mappnamnet för bokningens
+    /// första fotodatum), i bokningarnas ordning.
+    nonisolated struct ResolvedAddress: Equatable, Sendable {
+        enum Source: Equatable { case corrected, geocoded, failed }
+        var key: String
+        /// Bokningens adress (det som geokodades / rättades).
+        var mappingAddress: String
+        var bookingInfo: String?
+        var latitude: Double?
+        var longitude: Double?
+        var source: Source
+    }
+
+    /// Signaturen som `addressMetadataCache` gäller för: bokningarna och de manuella rättningarna.
+    private var addressMetadataSignature: String {
+        let iso = ISO8601DateFormatter()
+        let mappings = calendarMappings.map {
+            "\($0.address)|\($0.eventTitle)|\(iso.string(from: $0.photoDateRange.lowerBound))|\(iso.string(from: $0.photoDateRange.upperBound))"
+        }
+        let corrections = state.correctedCoordinates
+            .map { "\($0.key)=\($0.value.latitude),\($0.value.longitude)" }
+            .sorted()
+        return (mappings + ["#"] + corrections).joined(separator: ";")
+    }
+
+    /// Geokodar adresserna och tolkar bokningstitlarna — en gång, efter kalendersteget, i stället
+    /// för (som före fas 1b) först i sorteringen och sedan igen i metadatasteget. En manuellt
+    /// rättad koordinat (`correctedCoordinates`) vinner alltid över geokodningen. Resultatet
+    /// återanvänds så länge bokningarna och rättningarna är desamma; en adress som inte gick att
+    /// geokoda försöks igen vid nästa anrop (som förut, då sortering och metadata geokodade var för sig).
+    func resolveAddressMetadata() async -> [ResolvedAddress] {
+        let signature = addressMetadataSignature
+        if let cache = addressMetadataCache, cache.signature == signature,
+           !cache.entries.contains(where: { $0.source == .failed }) {
+            return cache.entries
+        }
+        let calendar = CalendarService.shared
+        var entries: [ResolvedAddress] = []
+        var seen: Set<String> = []
+        for mapping in calendarMappings {
+            let key = calendar.addressFolder(for: mapping.photoDateRange.lowerBound, mappings: calendarMappings) ?? mapping.address
+            guard seen.insert(key).inserted else { continue }
+            let titleInfo = await BookingTitleParser.shared.parse(title: mapping.eventTitle)
+            let bookingInfo = BookingTitleParser.bookingInfoText(from: titleInfo)
+            if let corrected = state.correctedCoordinates[mapping.address] {
+                entries.append(ResolvedAddress(key: key, mappingAddress: mapping.address, bookingInfo: bookingInfo,
+                                               latitude: corrected.latitude, longitude: corrected.longitude, source: .corrected))
+            } else if let coord = await calendar.geocodeAddress(mapping.address) {
+                entries.append(ResolvedAddress(key: key, mappingAddress: mapping.address, bookingInfo: bookingInfo,
+                                               latitude: coord.latitude, longitude: coord.longitude, source: .geocoded))
+            } else {
+                entries.append(ResolvedAddress(key: key, mappingAddress: mapping.address, bookingInfo: bookingInfo,
+                                               latitude: nil, longitude: nil, source: .failed))
+            }
+        }
+        // Signaturen räknas om: rättningar kan ha kommit till medan vi väntade på geokodningen.
+        if signature == addressMetadataSignature {
+            addressMetadataCache = (signature, entries)
+        }
+        return entries
+    }
+
+    /// Metadatat per adressmapp (nyckel = mappnamnet) så som metadatasteget skriver det.
+    func addressMetadataByFolder(_ entries: [ResolvedAddress]) -> [String: AddressMetadata] {
+        let calendar = CalendarService.shared
+        let mappings = calendarMappings
+        var resolved: [String: (bookingInfo: String?, latitude: Double, longitude: Double)] = [:]
+        for entry in entries {
+            resolved[entry.key] = (entry.bookingInfo, entry.latitude ?? 0, entry.longitude ?? 0)
+        }
+        return MetadataPlan.addressMetadata(
+            mappings: mappings,
+            folderForDate: { calendar.addressFolder(for: $0, mappings: mappings) },
+            resolved: resolved
+        )
+    }
+
+    /// AI-taggar per basnamn (`DSC_0012`), bara när AI-taggning är på och bilden har taggar.
+    func metadataAILookup() -> [String: AITagData] {
+        guard AppSettings.shared.aiTaggingEnabled else { return [:] }
+        var lookup: [String: AITagData] = [:]
+        for photo in state.allPhotos where !photo.aiTags.isEmpty {
+            let baseName = photo.filename.replacingOccurrences(of: ".NEF", with: "")
+            lookup[baseName] = AITagData(tags: photo.aiTags, description: photo.aiDescription)
+        }
+        return lookup
+    }
+
+    // MARK: - Metadata när HDR-/förbättrade filer skapas (fas 1b, steg A)
+
+    /// Det som behövs för att räkna fram metadatan för nya filer, utan att vänta på sorteringen.
+    nonisolated struct CreationMetadataContext: Sendable {
+        /// Adressmetadata per adressmapp; tom utan kalendermatchningar (allt blir "Osorterade").
+        var addressMeta: [String: AddressMetadata]
+        /// AI-uppslaget, eller nil om bilderna inte är inlästa än (HDR körs före `loadBracketGroups`).
+        var aiLookup: [String: AITagData]?
+        /// Basnamnen på sessionens bilder (från `bracket_groups.json`), för att avgöra att en fil
+        /// INTE kan ha AI-taggar när `aiLookup` saknas.
+        var photoBaseNames: Set<String>
+        var aiTaggingEnabled: Bool
+    }
+
+    func creationMetadataContext(photoBaseNames: Set<String> = []) async -> CreationMetadataContext {
+        let entries = calendarMappings.isEmpty ? [] : await resolveAddressMetadata()
+        return CreationMetadataContext(
+            addressMeta: addressMetadataByFolder(entries),
+            aiLookup: state.allPhotos.isEmpty ? nil : metadataAILookup(),
+            photoBaseNames: photoBaseNames,
+            aiTaggingEnabled: AppSettings.shared.aiTaggingEnabled
+        )
+    }
+
+    /// Metadatat som metadatasteget skulle skriva till `file` när den ligger i adressmappen
+    /// `folderName`, eller nil om det inte är känt än eller om steget inte skulle skriva något
+    /// (då skrivs bara EXIF, och metadatasteget tar resten som förut).
+    nonisolated static func creationMetadata(for file: URL, folderName: String, context: CreationMetadataContext) -> IPTCFileMetadata? {
+        let baseName = file.deletingPathExtension().lastPathComponent
+        let folder: AddressMetadata?
+        if folderName == MetadataPlan.unsortedFolderName {
+            folder = nil
+        } else {
+            // En adressmapp som metadatasteget inte känner till skriver det inte heller till.
+            guard let meta = context.addressMeta[folderName] else { return nil }
+            folder = meta
+        }
+        let lookup: [String: AITagData]
+        if let aiLookup = context.aiLookup {
+            lookup = aiLookup
+        } else if !context.photoBaseNames.contains(baseName) {
+            lookup = [:]
+        } else {
+            return nil
+        }
+        return MetadataPlan.fileMetadata(baseName: baseName, folder: folder, aiLookup: lookup,
+                                         aiTaggingEnabled: context.aiTaggingEnabled)
+    }
+
+    /// Adressmappen en fil redan ligger i (`<adress> ÖVRIGA`/`TITTBILDER`/`FÖRBÄTTRADE`), eller
+    /// nil om den ligger i en stagingmapp (`hdr/`, `enhanced/`).
+    nonisolated static func addressFolderName(containing file: URL) -> String? {
+        let parent = file.deletingLastPathComponent().lastPathComponent
+        for suffix in [" ÖVRIGA", " TITTBILDER", AddressFolderLayout.enhancedSuffix] {
+            let nfcParent = parent.precomposedStringWithCanonicalMapping
+            let nfcSuffix = suffix.precomposedStringWithCanonicalMapping
+            if nfcParent.hasSuffix(nfcSuffix), nfcParent.count > nfcSuffix.count {
+                return String(nfcParent.dropLast(nfcSuffix.count))
+            }
+        }
+        return nil
+    }
+
+    /// Adressmappen för en bild med fotodatumet `date` ("Osorterade" utan kalendermatchning).
+    func addressFolderName(forPhotoDate date: Date?) -> String {
+        guard let date else { return MetadataPlan.unsortedFolderName }
+        return CalendarService.shared.addressFolder(for: date, mappings: calendarMappings) ?? MetadataPlan.unsortedFolderName
+    }
+
+    /// Uppdaterar `metadata_stamps.json` efter att HDR/Förbättra skrivit `outputs`: stämpel för
+    /// filer som fick IPTC/XMP/GPS, ingen stämpel (metadatasteget skriver dem) för övriga.
+    func recordCreationStamps(_ outputs: [(url: URL, meta: IPTCFileMetadata?)], metadataWritten: Bool, outputDir: URL) {
+        var stamps = MetadataStamps.load(from: outputDir)
+        let before = stamps
+        for output in outputs {
+            if metadataWritten, let meta = output.meta {
+                stamps.record(output.url, meta: meta, outputDir: outputDir)
+            } else {
+                stamps.remove(output.url, outputDir: outputDir)
+            }
+        }
+        if stamps != before { stamps.save(to: outputDir) }
+    }
+
     /// Write GPS + IPTC + AI tags to files in address folders
-    func writeIPTCMetadata(outputDir: URL? = nil, addressMeta: [String: (lat: Double, lon: Double, bookingInfo: String?)]? = nil) async {
+    func writeIPTCMetadata(outputDir: URL? = nil) async {
         let outputDir = outputDir ?? state.outputDirectory
         guard let outputDir else {
             state.appendLog("Ingen outputmapp — kan inte skriva metadata.", type: .error)
@@ -125,7 +276,6 @@ extension PipelineRunner {
         state.currentStep = .writingMetadata
         state.statusMessage = "Skriver metadata (GPS, IPTC, AI-taggar)..."
 
-        let calendar = CalendarService.shared
         let fm = FileManager.default
 
         // Fas 8: manifest-fingerprint av bildlistan + AI-taggar/beskrivning
@@ -185,38 +335,17 @@ extension PipelineRunner {
             return
         }
 
-        // If no addressMeta provided, rebuild it from calendarMappings
-        var meta = addressMeta ?? [:]
-        if meta.isEmpty && !calendarMappings.isEmpty {
-            for mapping in calendarMappings {
-                let address = calendar.addressFolder(for: mapping.photoDateRange.lowerBound, mappings: calendarMappings) ?? mapping.address
-                if meta[address] == nil {
-                    let titleInfo = await BookingTitleParser.shared.parse(title: mapping.eventTitle)
-                    let bookingInfo = BookingTitleParser.bookingInfoText(from: titleInfo)
-                    // Same reasoning as exportToAddressFolders: a manual correction
-                    // must win over re-geocoding the (known-wrong) original address.
-                    if let corrected = state.correctedCoordinates[mapping.address] {
-                        meta[address] = (lat: corrected.latitude, lon: corrected.longitude, bookingInfo: bookingInfo)
-                        continue
-                    }
-                    let coord = await calendar.geocodeAddress(mapping.address)
-                    if let coord {
-                        meta[address] = (lat: coord.latitude, lon: coord.longitude, bookingInfo: bookingInfo)
-                    } else {
-                        meta[address] = (lat: 0, lon: 0, bookingInfo: bookingInfo)
-                    }
-                }
-            }
-        }
+        // Adress, bokningsinfo och GPS per adressmapp: samma resultat som HDR/Förbättra använde
+        // när filerna skapades (beräknat efter kalendersteget, se `resolveAddressMetadata`).
+        let meta = addressMetadataByFolder(await resolveAddressMetadata())
+        let aiTagLookup = metadataAILookup()
+        let aiTaggingEnabled = AppSettings.shared.aiTaggingEnabled
 
-        // Build AI tag lookup: baseName -> (tags, description)
-        var aiTagLookup: [String: (tags: [String], description: String)] = [:]
-        if AppSettings.shared.aiTaggingEnabled {
-            for photo in state.allPhotos where !photo.aiTags.isEmpty {
-                let baseName = photo.filename.replacingOccurrences(of: ".NEF", with: "")
-                aiTagLookup[baseName] = (tags: photo.aiTags, description: photo.aiDescription)
-            }
-        }
+        // Fas 1b: stämplar per fil. Filer vars stämpel visar att de redan har exakt den metadata
+        // som skulle skrivas (HDR/förbättrade filer som fick den när de skapades, eller filer från
+        // en tidigare körning) hoppas över. Utan stämpelfil (äldre sessioner) skrivs allt som förut.
+        var stamps = MetadataStamps.load(from: outputDir)
+        var skippedByStamp = 0
 
         // Collect ALL files and their combined metadata into a single argfile
         // Each file gets one entry with GPS + IPTC + AI tags combined
@@ -224,20 +353,29 @@ extension PipelineRunner {
         var totalFiles = 0
         // Track per-file description for detailed logging
         var fileDescriptions: [String] = []
+        // exiftools målsökväg (sista sökvägen före -execute) → filen och metadatan, för stämplarna.
+        var plannedByTarget: [String: (file: URL, meta: IPTCFileMetadata)] = [:]
+
+        func plan(_ file: URL, _ fileMeta: IPTCFileMetadata, description: String) {
+            if stamps.matches(file, meta: fileMeta, outputDir: outputDir) {
+                skippedByStamp += 1
+                return
+            }
+            let lines = Self.exiftoolArguments(for: file, meta: fileMeta)
+            argfileLines.append(contentsOf: lines)
+            if lines.count >= 2 { plannedByTarget[lines[lines.count - 2]] = (file, fileMeta) }
+            let sidecarNote = file.pathExtension.lowercased() == "nef" ? " (XMP-sidecar)" : ""
+            fileDescriptions.append("✓ \(file.lastPathComponent)\(sidecarNote) ← \(description)")
+            totalFiles += 1
+        }
 
         for (folderName, folderMeta) in meta {
-            // Find the matching address/title for IPTC
-            let mapping = calendarMappings.first(where: {
-                calendar.addressFolder(for: $0.photoDateRange.lowerBound, mappings: calendarMappings) == folderName
-            })
-
-            // NFC-normalize all strings
-            let address = (mapping?.address ?? folderName).precomposedStringWithCanonicalMapping
-            let eventTitle = (mapping?.eventTitle ?? "").precomposedStringWithCanonicalMapping
-            let bookingInfo = (folderMeta.bookingInfo ?? "").precomposedStringWithCanonicalMapping
-            let description = [address, bookingInfo].filter { !$0.isEmpty }.joined(separator: " — ")
-
-            let hasGPS = folderMeta.lat != 0 || folderMeta.lon != 0
+            // Build per-file log description
+            var folderParts: [String] = []
+            if let lat = folderMeta.latitude, let lon = folderMeta.longitude {
+                folderParts.append("GPS \(String(format: "%.4f", lat)),\(String(format: "%.4f", lon))")
+            }
+            folderParts.append("adress=\"\(folderMeta.address)\"")
 
             for subDir in AddressFolderLayout.allDirs(in: outputDir, folderName: folderName) {
                 guard fm.fileExists(atPath: subDir.path),
@@ -247,40 +385,12 @@ extension PipelineRunner {
                     // XMP sidecars aren't retaggable directly — they get written/updated
                     // as a side effect of processing their NEF (see exiftoolArguments).
                     if file.pathExtension.lowercased() == "xmp" { continue }
-
-                    // Build per-file log description
-                    var parts: [String] = []
-                    if hasGPS {
-                        parts.append("GPS \(String(format: "%.4f", folderMeta.lat)),\(String(format: "%.4f", folderMeta.lon))")
-                    }
-                    parts.append("adress=\"\(address)\"")
-
-                    // Per-file AI tags (merged into the same exiftool call)
                     let baseName = file.deletingPathExtension().lastPathComponent
-                    let aiData = aiTagLookup[baseName]
-                    let nfcTags = (aiData?.tags ?? []).map { $0.precomposedStringWithCanonicalMapping }
-                    let combinedDesc: String
-                    if let aiData {
-                        combinedDesc = [description, aiData.description.precomposedStringWithCanonicalMapping]
-                            .filter { !$0.isEmpty }.joined(separator: " — ")
-                        parts.append("AI: \(aiData.tags.joined(separator: ", "))")
-                    } else {
-                        combinedDesc = description
-                    }
-
-                    let fileMeta = IPTCFileMetadata(
-                        address: address,
-                        eventTitle: eventTitle,
-                        description: combinedDesc,
-                        latitude: hasGPS ? folderMeta.lat : nil,
-                        longitude: hasGPS ? folderMeta.lon : nil,
-                        aiTags: nfcTags
-                    )
-                    argfileLines.append(contentsOf: Self.exiftoolArguments(for: file, meta: fileMeta))
-
-                    let sidecarNote = file.pathExtension.lowercased() == "nef" ? " (XMP-sidecar)" : ""
-                    fileDescriptions.append("✓ \(file.lastPathComponent)\(sidecarNote) ← \(parts.joined(separator: ", "))")
-                    totalFiles += 1
+                    guard let fileMeta = MetadataPlan.fileMetadata(baseName: baseName, folder: folderMeta, aiLookup: aiTagLookup,
+                                                                   aiTaggingEnabled: aiTaggingEnabled) else { continue }
+                    var parts = folderParts
+                    if let aiData = aiTagLookup[baseName] { parts.append("AI: \(aiData.tags.joined(separator: ", "))") }
+                    plan(file, fileMeta, description: parts.joined(separator: ", "))
                 }
             }
         }
@@ -290,36 +400,50 @@ extension PipelineRunner {
         // (DNG has no suffix, same as address folders) is checked individually,
         // since a previous bug gated the whole block on a folder that wouldn't
         // exist unless there happened to be unmatched DNG files.
-        if AppSettings.shared.aiTaggingEnabled {
-            for subDir in AddressFolderLayout.allDirs(in: outputDir, folderName: "Osorterade") {
+        if aiTaggingEnabled {
+            for subDir in AddressFolderLayout.allDirs(in: outputDir, folderName: MetadataPlan.unsortedFolderName) {
                 guard fm.fileExists(atPath: subDir.path),
                       let files = try? fm.contentsOfDirectory(at: subDir, includingPropertiesForKeys: nil) else { continue }
                 for file in files {
                     if file.pathExtension.lowercased() == "xmp" { continue }
                     let baseName = file.deletingPathExtension().lastPathComponent
-                    guard let aiData = aiTagLookup[baseName] else { continue }
-
-                    let nfcTags = aiData.tags.map { $0.precomposedStringWithCanonicalMapping }
-                    let nfcDesc = aiData.description.precomposedStringWithCanonicalMapping
-                    let fileMeta = IPTCFileMetadata(
-                        address: nil,
-                        eventTitle: nil,
-                        description: nfcDesc.isEmpty ? nil : nfcDesc,
-                        latitude: nil,
-                        longitude: nil,
-                        aiTags: nfcTags
-                    )
-                    argfileLines.append(contentsOf: Self.exiftoolArguments(for: file, meta: fileMeta))
-
-                    let sidecarNote = file.pathExtension.lowercased() == "nef" ? " (XMP-sidecar)" : ""
-                    fileDescriptions.append("✓ \(file.lastPathComponent)\(sidecarNote) ← AI: \(aiData.tags.joined(separator: ", "))")
-                    totalFiles += 1
+                    guard let fileMeta = MetadataPlan.fileMetadata(baseName: baseName, folder: nil, aiLookup: aiTagLookup,
+                                                                   aiTaggingEnabled: aiTaggingEnabled) else { continue }
+                    plan(file, fileMeta, description: "AI: \(aiTagLookup[baseName]?.tags.joined(separator: ", ") ?? "")")
                 }
             }
         }
 
+        // Persist marker so we skip on re-run
+        func writeMarker(filesWritten: Int) {
+            let marker: [String: Any] = [
+                "version": Self.metadataMarkerVersion,
+                "folders_written": meta.count,
+                "files_written": filesWritten,
+                "timestamp": ISO8601DateFormatter().string(from: Date()),
+                "addresses": Array(meta.keys),
+                "stamps": MetadataStamps.fileName
+            ]
+            if let markerData = try? JSONSerialization.data(withJSONObject: marker, options: .prettyPrinted) {
+                try? markerData.write(to: metadataMarkerFile)
+            }
+        }
+
+        if skippedByStamp > 0 {
+            logDecision(step: "write_iptc", decision: "stamps", details: [
+                "skippedByStamp": "\(skippedByStamp)", "toWrite": "\(totalFiles)"
+            ])
+            state.appendStepLog(.writeIPTCTags, "\(skippedByStamp) filer har redan rätt metadata (skrevs när de skapades eller vid en tidigare körning) — hoppas över", type: .info)
+        }
+
         guard totalFiles > 0 else {
-            state.appendStepLog(.writeIPTCTags, "Inga filer att skriva metadata till", type: .warning)
+            if skippedByStamp > 0 {
+                state.updateStepProgress(.writeIPTCTags, processed: skippedByStamp, total: skippedByStamp)
+                state.appendLog("Metadata redan skriven till alla \(skippedByStamp) filer.", type: .success)
+                writeMarker(filesWritten: skippedByStamp)
+            } else {
+                state.appendStepLog(.writeIPTCTags, "Inga filer att skriva metadata till", type: .warning)
+            }
             return
         }
 
@@ -434,6 +558,18 @@ extension PipelineRunner {
 
             try? fm.removeItem(at: argfileURL)
 
+            // Stämpla filerna som exiftool skrev utan fel (även när omgången som helhet felade).
+            // Sparas efter varje omgång, så att ett avbrott inte gör att allt skrivs om nästa gång.
+            let chunkOutput = (try? String(contentsOf: stdoutURL, encoding: .utf8)) ?? ""
+            let succeeded = Self.succeededExiftoolTargets(in: chunkOutput)
+            var stamped = false
+            for target in succeeded {
+                guard let planned = plannedByTarget[target] else { continue }
+                stamps.record(planned.file, meta: planned.meta, outputDir: outputDir)
+                stamped = true
+            }
+            if stamped { stamps.save(to: outputDir) }
+
             processedSoFar += filesInChunk
             state.updateStepProgress(.writeIPTCTags, processed: processedSoFar, total: totalFiles)
         }
@@ -443,31 +579,8 @@ extension PipelineRunner {
 
         state.appendLog("Metadata skriven till \(totalFiles) filer.", type: .success)
 
-        // Persist marker so we skip on re-run
-        let marker: [String: Any] = [
-            "version": Self.metadataMarkerVersion,
-            "folders_written": meta.count,
-            "files_written": totalFiles,
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
-            "addresses": Array(meta.keys)
-        ]
-        if let markerData = try? JSONSerialization.data(withJSONObject: marker, options: .prettyPrinted) {
-            try? markerData.write(to: metadataMarkerFile)
-        }
+        writeMarker(filesWritten: totalFiles + skippedByStamp)
     }
-}
-
-/// Metadata to write to one output file via `PipelineRunner.exiftoolArguments`.
-/// `address`/`eventTitle`/`description` are `nil` when the field should not be
-/// touched at all (e.g. AI-only files in "Osorterade" that have no calendar match).
-/// All strings are expected to already be NFC-normalized by the caller.
-struct IPTCFileMetadata {
-    var address: String?
-    var eventTitle: String?
-    var description: String?
-    var latitude: Double?
-    var longitude: Double?
-    var aiTags: [String] = []
 }
 
 /// Hur många filer i en exiftool-omgång som redan loggats (delas mellan

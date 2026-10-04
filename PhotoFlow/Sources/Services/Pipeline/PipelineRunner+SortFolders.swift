@@ -1,4 +1,5 @@
 import Foundation
+import CoreLocation
 
 extension PipelineRunner {
     /// Organize all files into address-named folders.
@@ -90,41 +91,27 @@ extension PipelineRunner {
 
         state.appendLog("Organiserar filer i adressmappar...", type: .info)
 
-        // Geocode all unique addresses and build metadata per address
-        var addressMeta: [String: (lat: Double, lon: Double, bookingInfo: String?)] = [:]
-        for mapping in calendarMappings {
-            let address = calendar.addressFolder(for: mapping.photoDateRange.lowerBound, mappings: calendarMappings) ?? mapping.address
-            if addressMeta[address] == nil {
-                let titleInfo = await BookingTitleParser.shared.parse(title: mapping.eventTitle)
-                let bookingInfo = BookingTitleParser.bookingInfoText(from: titleInfo)
-                // A manually corrected coordinate (PipelineState.correctAddress) must
-                // win over automatic geocoding — that correction exists specifically
-                // because geocoding got this address wrong.
-                if let corrected = state.correctedCoordinates[mapping.address] {
-                    addressMeta[address] = (lat: corrected.latitude, lon: corrected.longitude, bookingInfo: bookingInfo)
-                    state.appendLog("Använder manuellt rättad GPS för \"\(mapping.address)\" → \(String(format: "%.6f", corrected.latitude)), \(String(format: "%.6f", corrected.longitude))", type: .success)
-                    state.appendStepLog(.moveToFolders, "Manuellt rättad GPS: \"\(mapping.address)\" → \(String(format: "%.6f", corrected.latitude)), \(String(format: "%.6f", corrected.longitude))")
-                    if let idx = state.allMatchedAddresses.firstIndex(where: { $0.address == mapping.address }) {
-                        state.allMatchedAddresses[idx].hasGPS = true
-                        state.allMatchedAddresses[idx].coordinate = corrected
-                    }
-                    continue
-                }
-                let coord = await calendar.geocodeAddress(mapping.address)
-                if let coord {
-                    addressMeta[address] = (lat: coord.latitude, lon: coord.longitude, bookingInfo: bookingInfo)
-                    state.appendLog("Geokodade \"\(mapping.address)\" → \(String(format: "%.6f", coord.latitude)), \(String(format: "%.6f", coord.longitude))", type: .success)
-                    state.appendStepLog(.moveToFolders, "Geokodad: \"\(mapping.address)\" → \(String(format: "%.6f", coord.latitude)), \(String(format: "%.6f", coord.longitude))")
-                    // Update GPS status and coordinate in address banner
-                    if let idx = state.allMatchedAddresses.firstIndex(where: { $0.address == mapping.address }) {
-                        state.allMatchedAddresses[idx].hasGPS = true
-                        state.allMatchedAddresses[idx].coordinate = coord
-                    }
-                } else {
-                    addressMeta[address] = (lat: 0, lon: 0, bookingInfo: bookingInfo)
-                    state.appendLog("Kunde inte geokoda \"\(mapping.address)\" — GPS-data utelämnas.", type: .warning)
-                    state.appendStepLog(.moveToFolders, "Geokodning misslyckades: \"\(mapping.address)\"", type: .warning)
-                }
+        // GPS per adress: samma resultat som kalendersteget räknade fram (fas 1b,
+        // `resolveAddressMetadata`) och som HDR/Förbättra och metadatasteget använder.
+        // En manuellt rättad koordinat (PipelineState.correctAddress) vinner över geokodningen.
+        for entry in await resolveAddressMetadata() {
+            let coordText = "\(String(format: "%.6f", entry.latitude ?? 0)), \(String(format: "%.6f", entry.longitude ?? 0))"
+            switch entry.source {
+            case .corrected:
+                state.appendLog("Använder manuellt rättad GPS för \"\(entry.mappingAddress)\" → \(coordText)", type: .success)
+                state.appendStepLog(.moveToFolders, "Manuellt rättad GPS: \"\(entry.mappingAddress)\" → \(coordText)")
+            case .geocoded:
+                state.appendLog("Geokodade \"\(entry.mappingAddress)\" → \(coordText)", type: .success)
+                state.appendStepLog(.moveToFolders, "Geokodad: \"\(entry.mappingAddress)\" → \(coordText)")
+            case .failed:
+                state.appendLog("Kunde inte geokoda \"\(entry.mappingAddress)\" — GPS-data utelämnas.", type: .warning)
+                state.appendStepLog(.moveToFolders, "Geokodning misslyckades: \"\(entry.mappingAddress)\"", type: .warning)
+            }
+            // Update GPS status and coordinate in address banner
+            if let lat = entry.latitude, let lon = entry.longitude,
+               let idx = state.allMatchedAddresses.firstIndex(where: { $0.address == entry.mappingAddress }) {
+                state.allMatchedAddresses[idx].hasGPS = true
+                state.allMatchedAddresses[idx].coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
             }
         }
 
@@ -334,9 +321,11 @@ extension PipelineRunner {
     func moveUnsortedHDR(outputDir: URL) -> [String] {
         guard AppSettings.shared.hdrMergeEnabled else { return [] }
         let fm = FileManager.default
-        let calendar = CalendarService.shared
         let hdrDir = outputDir.appendingPathComponent("hdr")
         var moved: [String] = []
+        // Stämplarna (fas 1b) följer med filerna, så att metadata som skrevs när HDR:en skapades
+        // inte skrivs en gång till av metadatasteget.
+        var stamps = MetadataStamps.load(from: outputDir)
 
         func place(_ source: URL, in folder: URL) -> String? {
             guard fm.fileExists(atPath: source.path) else { return nil }
@@ -347,6 +336,7 @@ extension PipelineRunner {
                 } else {
                     try fm.moveItem(at: source, to: dest)
                 }
+                stamps.move(from: source, to: dest, outputDir: outputDir)
                 return dest.path
             } catch {
                 state.appendStepLog(.moveToFolders, "Kunde inte flytta \(source.lastPathComponent): \(error.localizedDescription)", type: .warning)
@@ -358,7 +348,7 @@ extension PipelineRunner {
             guard let firstPhoto = state.photos(in: group).first else { continue }
             // Samma reserv som bilderna: utan kalendermatchning → "Osorterade",
             // så att ingen HDR blir kvar i hdr/ utan adressmapp.
-            let folderName = calendar.addressFolder(for: firstPhoto.dateTime, mappings: calendarMappings) ?? "Osorterade"
+            let folderName = addressFolderName(forPhotoDate: firstPhoto.dateTime)
             let previewDir = AddressFolderLayout.previewDir(in: outputDir, folderName: folderName)
             let extrasDir = AddressFolderLayout.extrasDir(in: outputDir, folderName: folderName)
             let tiff = hdrDir.appendingPathComponent("hdr_group_\(group.id).tiff")
@@ -374,6 +364,7 @@ extension PipelineRunner {
         }
 
         if !moved.isEmpty {
+            stamps.save(to: outputDir)
             state.appendLog("Flyttade \(moved.count) HDR-filer till adressmapparna.", type: .success)
             try? fm.removeItem(at: outputDir.appendingPathComponent("metadata_written.json"))
         }
@@ -394,20 +385,8 @@ extension PipelineRunner {
         let fm = FileManager.default
         let stagingDir = AddressFolderLayout.enhancedStagingDir(in: outputDir)
         guard let names = try? fm.contentsOfDirectory(atPath: stagingDir.path), !names.isEmpty else { return [] }
-        let calendar = CalendarService.shared
         var moved: [String] = []
-
-        func folderName(forKey key: String) -> String {
-            var photo: PhotoItem?
-            if key.hasPrefix("hdr_group_"), let id = Int(key.dropFirst("hdr_group_".count)),
-               let group = state.bracketGroups.first(where: { $0.id == id }) {
-                photo = state.photos(in: group).first
-            } else {
-                photo = state.allPhotos.first { $0.displayName == key }
-            }
-            guard let photo else { return "Osorterade" }
-            return calendar.addressFolder(for: photo.dateTime, mappings: calendarMappings) ?? "Osorterade"
-        }
+        var stamps = MetadataStamps.load(from: outputDir)
 
         for name in names.sorted() {
             let ext = (name as NSString).pathExtension.lowercased()
@@ -415,7 +394,7 @@ extension PipelineRunner {
             guard ["tiff", "tif", "jpg"].contains(ext), stem.hasSuffix(AddressFolderLayout.enhancedFileSuffix) else { continue }
             let key = String(stem.dropLast(AddressFolderLayout.enhancedFileSuffix.count))
             let source = stagingDir.appendingPathComponent(name)
-            let targetDir = AddressFolderLayout.enhancedDir(in: outputDir, folderName: folderName(forKey: key))
+            let targetDir = AddressFolderLayout.enhancedDir(in: outputDir, folderName: enhancedFolderName(forKey: key))
             let dest = targetDir.appendingPathComponent(name)
             do {
                 try fm.createDirectory(at: targetDir, withIntermediateDirectories: true)
@@ -424,6 +403,7 @@ extension PipelineRunner {
                 } else {
                     try fm.moveItem(at: source, to: dest)
                 }
+                stamps.move(from: source, to: dest, outputDir: outputDir)
                 moved.append(dest.path)
             } catch {
                 state.appendStepLog(.moveToFolders, "Kunde inte flytta \(name): \(error.localizedDescription)", type: .warning)
@@ -431,10 +411,25 @@ extension PipelineRunner {
         }
 
         if !moved.isEmpty {
+            stamps.save(to: outputDir)
             state.appendStepLog(.moveToFolders, "\(moved.count) förbättrade filer → FÖRBÄTTRADE-mapparna")
             state.appendLog("Flyttade \(moved.count) förbättrade filer till adressmapparna.", type: .success)
             try? fm.removeItem(at: outputDir.appendingPathComponent("metadata_written.json"))
         }
         return moved
+    }
+
+    /// Adressmappen för en förbättrad fil med nyckeln `key` (`hdr_group_<id>`: gruppens första
+    /// bild; annars bildens basnamn). Okända nycklar → "Osorterade".
+    func enhancedFolderName(forKey key: String) -> String {
+        var photo: PhotoItem?
+        if key.hasPrefix("hdr_group_"), let id = Int(key.dropFirst("hdr_group_".count)),
+           let group = state.bracketGroups.first(where: { $0.id == id }) {
+            photo = state.photos(in: group).first
+        } else {
+            photo = state.allPhotos.first { $0.displayName == key }
+        }
+        guard let photo else { return MetadataPlan.unsortedFolderName }
+        return addressFolderName(forPhotoDate: photo.dateTime)
     }
 }
