@@ -216,7 +216,13 @@ extension PipelineRunner {
                 group.addTask {
                     let started = Date()
                     do {
-                        let outcome = try await EnhancementEngine.enhance(req)
+                        let outcome = try await PipelineMetrics.jobAsync(
+                            step: "enhance", unit: job.key,
+                            bytesIn: PipelineMetrics.totalSize(of: [job.source]),
+                            bytesOut: { (_: EnhancementEngine.Outcome) in PipelineMetrics.totalSize(of: [req.tiffURL, req.jpegURL]) }
+                        ) {
+                            try await EnhancementEngine.enhance(req)
+                        }
                         return (idx, .success(outcome), Date().timeIntervalSince(started))
                     } catch is CancellationError {
                         throw CancellationError()

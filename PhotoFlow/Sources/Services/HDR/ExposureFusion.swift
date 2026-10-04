@@ -86,19 +86,23 @@ nonisolated enum ExposureFusion {
         // 1. Per-image weight maps (contrast * saturation * well-exposedness).
         var weightPlanes: [Plane] = []
         weightPlanes.reserveCapacity(images.count)
-        for image in images {
-            weightPlanes.append(computeWeight(image, width: width, height: height, options: options))
-            try progress?(0.2 * Double(weightPlanes.count) / Double(images.count))
-        }
+        try PipelineMetrics.phase("fuse.weights") {
+            for image in images {
+                weightPlanes.append(computeWeight(image, width: width, height: height, options: options))
+                try progress?(0.2 * Double(weightPlanes.count) / Double(images.count))
+            }
 
-        // 2. Normalize so weights sum to 1 at every pixel.
-        normalizeWeights(&weightPlanes)
+            // 2. Normalize so weights sum to 1 at every pixel.
+            normalizeWeights(&weightPlanes)
+        }
         try progress?(0.25)
 
         let levels = levelsCount(width: width, height: height)
 
         // 3. Weight Gaussian pyramids — shared across all 3 color channels below.
-        let weightPyramids = weightPlanes.map { Pyramid.gaussianPyramid($0, levels: levels) }
+        let weightPyramids = PipelineMetrics.phase("fuse.weightPyramids") {
+            weightPlanes.map { Pyramid.gaussianPyramid($0, levels: levels) }
+        }
         try progress?(0.3)
 
         // 4. Blend one color channel at a time: build every image's Laplacian
@@ -109,6 +113,7 @@ nonisolated enum ExposureFusion {
         var resultPlanes: [Plane] = []
         resultPlanes.reserveCapacity(3)
         for channel in 0..<3 {
+          try PipelineMetrics.phase("fuse.channel") {
             let laplacianPyramids = images.map { image in
                 Pyramid.laplacianPyramid(extractChannel(image, width: width, height: height, channel: channel), levels: levels)
             }
@@ -126,20 +131,23 @@ nonisolated enum ExposureFusion {
 
             resultPlanes.append(Pyramid.collapse(blended))
             try progress?(0.3 + 0.7 * Double(channel + 1) / 3.0)
+          }
         }
 
         // 5. Interleave R,G,B back into RGBA, clip to [0,1], alpha = 1.
-        var output = [Float](repeating: 1, count: width * height * 4)
-        for (channel, plane) in resultPlanes.enumerated() {
-            output.withUnsafeMutableBufferPointer { dst in
-                plane.data.withUnsafeBufferPointer { src in
-                    for p in 0..<plane.data.count {
-                        dst[p * 4 + channel] = min(max(src[p], 0), 1)
+        return PipelineMetrics.phase("fuse.interleave") {
+            var output = [Float](repeating: 1, count: width * height * 4)
+            for (channel, plane) in resultPlanes.enumerated() {
+                output.withUnsafeMutableBufferPointer { dst in
+                    plane.data.withUnsafeBufferPointer { src in
+                        for p in 0..<plane.data.count {
+                            dst[p * 4 + channel] = min(max(src[p], 0), 1)
+                        }
                     }
                 }
             }
+            return output
         }
-        return output
     }
 
     // MARK: - Weight maps

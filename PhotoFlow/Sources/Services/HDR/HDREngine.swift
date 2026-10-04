@@ -71,14 +71,16 @@ nonisolated enum HDREngine {
         guard rawURLs.count >= 2 else { throw EngineError.tooFewImages }
 
         let middleIndex = rawURLs.count / 2
-        let whiteBalance = try RAWRenderer.readWhiteBalance(url: rawURLs[middleIndex])
+        let whiteBalance = try PipelineMetrics.phase("readWhiteBalance") { try RAWRenderer.readWhiteBalance(url: rawURLs[middleIndex]) }
 
         var rendered: [RAWRenderer.RenderedImage] = []
         rendered.reserveCapacity(rawURLs.count)
         for (i, url) in rawURLs.enumerated() {
             try Task.checkCancellation()
             progress?(0.05 + 0.45 * Double(i) / Double(rawURLs.count))
-            rendered.append(try RAWRenderer.render(url: url, whiteBalance: whiteBalance, maxDimension: options.maxDimension))
+            rendered.append(try PipelineMetrics.phase("render", bytesIn: PipelineMetrics.totalSize(of: [url])) {
+                try RAWRenderer.render(url: url, whiteBalance: whiteBalance, maxDimension: options.maxDimension)
+            })
         }
 
         guard let first = rendered.first else { throw EngineError.tooFewImages }
@@ -91,12 +93,16 @@ nonisolated enum HDREngine {
             let reference = rendered[middleIndex]
             for i in rendered.indices where i != middleIndex {
                 try Task.checkCancellation()
-                let measured = try HDRAlignment.computeShift(
-                    floating: rendered[i], reference: reference, maxAlignDimension: HDRAlignment.refinedAlignDimension
-                )
+                let measured = try PipelineMetrics.phase("align") {
+                    try HDRAlignment.computeShift(
+                        floating: rendered[i], reference: reference, maxAlignDimension: HDRAlignment.refinedAlignDimension
+                    )
+                }
                 // Orimliga förskjutningar avvisas, små rundas till hela pixlar — se sanitizedShift.
                 guard let shift = HDRAlignment.sanitizedShift(measured, width: width, height: height), shift != .zero else { continue }
-                rendered[i].pixels = RAWRenderer.shiftRGBA(rendered[i].pixels, width: width, height: height, dx: Float(shift.x), dy: Float(shift.y))
+                rendered[i].pixels = PipelineMetrics.phase("align.shift") {
+                    RAWRenderer.shiftRGBA(rendered[i].pixels, width: width, height: height, dx: Float(shift.x), dy: Float(shift.y))
+                }
             }
         }
         progress?(0.55)
@@ -111,13 +117,17 @@ nonisolated enum HDREngine {
         try Task.checkCancellation()
         // Radien skalas med upplösningen: 1,2 px vid kamerans 8256 px.
         let finalPixels = options.sharpenEnabled
-            ? HDRWriter.sharpen(pixels: fused, width: width, height: height, radius: max(0.6, 1.2 * Double(max(width, height)) / 8256), intensity: 0.6)
+            ? PipelineMetrics.phase("sharpen") {
+                HDRWriter.sharpen(pixels: fused, width: width, height: height, radius: max(0.6, 1.2 * Double(max(width, height)) / 8256), intensity: 0.6)
+            }
             : fused
         try HDRWriter.write(pixels: finalPixels, width: width, height: height, tiffURL: tiffURL, jpegURL: jpegURL, jpegMaxDimension: options.jpegMaxDimension, jpegQuality: options.jpegQuality)
         progress?(0.95)
 
         if let exiftoolPath {
-            HDRWriter.copyEXIF(from: rawURLs[middleIndex], to: [tiffURL, jpegURL], exiftoolPath: exiftoolPath)
+            PipelineMetrics.phase("copyEXIF") {
+                _ = HDRWriter.copyEXIF(from: rawURLs[middleIndex], to: [tiffURL, jpegURL], exiftoolPath: exiftoolPath)
+            }
         }
         progress?(1.0)
     }

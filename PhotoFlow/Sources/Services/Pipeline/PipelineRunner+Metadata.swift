@@ -397,11 +397,18 @@ extension PipelineRunner {
             defer { try? fm.removeItem(at: stdoutURL) }
 
             do {
-                _ = try await runProcess(
-                    executablePath: exiftoolPath,
-                    arguments: ["-@", argfileURL.path, "-common_args", "-progress"],
-                    outputFile: stdoutURL
-                )
+                let chunkFiles = chunk.filter { !$0.hasPrefix("-") && !$0.isEmpty }.map { URL(fileURLWithPath: $0) }
+                try await PipelineMetrics.jobAsync(
+                    step: "metadata", unit: "chunk:\(chunkIndex + 1)/\(chunks.count)",
+                    bytesIn: PipelineMetrics.totalSize(of: chunkFiles),
+                    bytesOut: { (_: Void) in PipelineMetrics.totalSize(of: chunkFiles) }
+                ) {
+                    _ = try await runProcess(
+                        executablePath: exiftoolPath,
+                        arguments: ["-@", argfileURL.path, "-common_args", "-progress"],
+                        outputFile: stdoutURL
+                    )
+                }
                 watcher.cancel()
                 let output = (try? String(contentsOf: stdoutURL, encoding: .utf8)) ?? ""
                 pipelineLog("Exiftool chunk \(chunkIndex + 1)/\(chunks.count) output: \(output)")

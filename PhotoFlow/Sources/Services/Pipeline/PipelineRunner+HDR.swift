@@ -151,20 +151,29 @@ extension PipelineRunner {
                     let imageCount = group.rawURLs.count
                     let state = self.state
                     let reporter = HDRProgressReporter()
-                    try await HDREngine.merge(
-                        rawURLs: group.rawURLs,
-                        options: hdrOptions,
-                        tiffURL: URL(fileURLWithPath: outputPath),
-                        jpegURL: URL(fileURLWithPath: previewPath),
-                        exiftoolPath: exiftoolPath,
-                        progress: { fraction in
-                            guard let phase = reporter.newPhase(for: fraction, imageCount: imageCount) else { return }
-                            Task { @MainActor in
-                                state.statusMessage = "\(engineLabel): \(groupLabel) — \(phase)"
-                                state.appendStepLog(.createHDR, "\(groupLabel): \(phase)")
-                            }
+                    let rawURLs = group.rawURLs
+                    try await PipelineMetrics.jobAsync(
+                        step: "hdr", unit: "group:\(group.groupId)",
+                        bytesIn: PipelineMetrics.totalSize(of: rawURLs),
+                        bytesOut: { (_: Void) in
+                            PipelineMetrics.totalSize(of: [URL(fileURLWithPath: outputPath), URL(fileURLWithPath: previewPath)])
                         }
-                    )
+                    ) {
+                        try await HDREngine.merge(
+                            rawURLs: rawURLs,
+                            options: hdrOptions,
+                            tiffURL: URL(fileURLWithPath: outputPath),
+                            jpegURL: URL(fileURLWithPath: previewPath),
+                            exiftoolPath: exiftoolPath,
+                            progress: { fraction in
+                                guard let phase = reporter.newPhase(for: fraction, imageCount: imageCount) else { return }
+                                Task { @MainActor in
+                                    state.statusMessage = "\(engineLabel): \(groupLabel) — \(phase)"
+                                    state.appendStepLog(.createHDR, "\(groupLabel): \(phase)")
+                                }
+                            }
+                        )
+                    }
                 }
 
                 if FileManager.default.fileExists(atPath: outputPath) {

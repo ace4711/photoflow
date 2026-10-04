@@ -26,6 +26,18 @@ nonisolated enum StepTiming {
         var finishedAt: Date
         /// Inställningar som påverkar tiden (HDR-motor m.m.), för senare jämförelser.
         var settings: [String: String] = [:]
+        // Resursdata per steg (fas 1a, se `ResourceMeter`). Valfria så att poster skrivna
+        // före fälten fanns avkodas som förut (`nil`).
+        /// Processortid (app + barnprocesser), sekunder.
+        var cpuSeconds: Double? = nil
+        /// Disk-I/O för appen och barnprocesserna, bytes.
+        var diskReadBytes: Int64? = nil
+        var diskWriteBytes: Int64? = nil
+        /// Toppminne (phys_footprint, samplat ~1 Hz), MB.
+        var peakMemoryMB: Double? = nil
+        /// "sequential" (stegen i följd, som i dag). Senare "overlapped" — då ska
+        /// `expectedDuration` inte blanda ihop lägena. `nil` = äldre post (alltid i följd).
+        var mode: String? = nil
 
         var secondsPerPhoto: Double? { photos > 0 && seconds > 0 ? seconds / Double(photos) : nil }
     }
@@ -53,8 +65,14 @@ nonisolated enum StepTiming {
             if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
                 dir = FileManager.default.temporaryDirectory.appendingPathComponent("PhotoFlowTestTimings-\(UUID().uuidString)")
             } else {
-                dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-                    .appendingPathComponent("PhotoFlow")
+                if let override = ProcessInfo.processInfo.environment["PHOTOFLOW_SUPPORT_DIR"], !override.isEmpty {
+                    // Riktmärkeskörningar (scripts/benchmark.sh) skriver historiken till sin egen
+                    // resultatmapp, så de varken blandas med eller förstör användarens riktiga tider.
+                    dir = URL(fileURLWithPath: override)
+                } else {
+                    dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+                        .appendingPathComponent("PhotoFlow")
+                }
             }
             return Store(fileURL: dir.appendingPathComponent("step_timings.jsonl"))
         }()

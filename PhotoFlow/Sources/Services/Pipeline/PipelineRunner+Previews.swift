@@ -76,11 +76,21 @@ extension PipelineRunner {
             let pathsList = filesToProcess.map { $0.path }.joined(separator: "\n")
             let formatString = previewDir.path + "/%f.jpg"
 
-            _ = try await runProcess(
-                executablePath: try requireExiftool(),
-                arguments: ["-b", "-JpgFromRaw", "-W", formatString, "-@", "-"],
-                stdinData: pathsList.data(using: .utf8)
-            )
+            let exiftoolPath = try requireExiftool()
+            let previewDirURL = previewDir
+            try await PipelineMetrics.jobAsync(
+                step: "previews", unit: "batch:\(filesToProcess.count) filer",
+                bytesIn: PipelineMetrics.totalSize(of: filesToProcess),
+                bytesOut: { (_: Void) in
+                    PipelineMetrics.totalSize(of: filesToProcess.map { previewDirURL.appendingPathComponent("\($0.deletingPathExtension().lastPathComponent).jpg") })
+                }
+            ) {
+                _ = try await runProcess(
+                    executablePath: exiftoolPath,
+                    arguments: ["-b", "-JpgFromRaw", "-W", formatString, "-@", "-"],
+                    stdinData: pathsList.data(using: .utf8)
+                )
+            }
 
         }
 
@@ -116,11 +126,13 @@ extension PipelineRunner {
     func applyPreviewOrientation(nefFiles: [URL], previewDir: URL) async throws {
         guard !nefFiles.isEmpty else { return }
         let exiftool = try requireExiftool()
-        let listing = try await runProcess(
-            executablePath: exiftool,
-            arguments: ["-q", "-T", "-n", "-FileName", "-Orientation", "-@", "-"],
-            stdinData: nefFiles.map(\.path).joined(separator: "\n").data(using: .utf8)
-        )
+        let listing = try await PipelineMetrics.jobAsync(step: "previews", unit: "orientation:\(nefFiles.count) filer") {
+            try await runProcess(
+                executablePath: exiftool,
+                arguments: ["-q", "-T", "-n", "-FileName", "-Orientation", "-@", "-"],
+                stdinData: nefFiles.map(\.path).joined(separator: "\n").data(using: .utf8)
+            )
+        }
         let rotated = Self.parseOrientations(listing).filter { $0.value != 1 }
         var lines: [String] = []
         for (base, orientation) in rotated.sorted(by: { $0.key < $1.key }) {

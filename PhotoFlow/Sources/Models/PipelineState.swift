@@ -27,6 +27,7 @@ class PipelineState: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.flushCullDecisions()
+                self?.flushManifest()
             }
         }
     }
@@ -313,6 +314,9 @@ class PipelineState: ObservableObject {
         // beslut (med det ÄNNU giltiga `outputDirectory`/`allPhotos` nedanför)
         // innan de nollställs.
         flushCullDecisions()
+        flushManifest()
+        for meter in stepMeters.values { meter.cancel() }
+        stepMeters = [:]
         currentStep = .idle
         progress = 0.0
         currentFileIndex = 0
@@ -403,8 +407,17 @@ class PipelineState: ObservableObject {
         stepStatuses[step]?.lastUpdated = Date()
         if phase == .active {
             stepStatuses[step]?.startedAt = Date()
+            // Mäter resurserna från och med att steget (åter)startar — HDR-kortet sätts aktivt
+            // två gånger och klockan startas om, så mätaren följer med.
+            stepMeters.removeValue(forKey: step)?.cancel()
+            stepMeters[step] = ResourceMeter()
+        } else {
+            // Steget avbröts, felade eller byter fas: ingen mätning att redovisa.
+            stepMeters.removeValue(forKey: step)?.cancel()
         }
-        syncManifest(step: step)
+        // Övergångar som inte är "pågår"/"köad" (klar, fel, avbruten, inaktiverad, behöver
+        // uppmärksamhet) skrivs direkt; förloppsuppdateringar debounceas.
+        syncManifest(step: step, force: !(phase == .active || phase == .queued))
     }
 
     func updateStepProgress(_ step: DashboardStep, processed: Int, total: Int) {
@@ -417,16 +430,17 @@ class PipelineState: ObservableObject {
 
     func completeStep(_ step: DashboardStep, count: Int = 0) {
         let now = Date()
+        let resources = stepMeters.removeValue(forKey: step)?.finish()
         if let startedAt = stepStatuses[step]?.startedAt {
             let duration = now.timeIntervalSince(startedAt)
             stepStatuses[step]?.lastDuration = duration
-            recordTiming(step, duration: duration, count: count, finishedAt: now)
+            recordTiming(step, duration: duration, count: count, finishedAt: now, resources: resources)
         }
         stepStatuses[step]?.phase = .complete
         stepStatuses[step]?.processedCount = count
         stepStatuses[step]?.totalCount = count
         stepStatuses[step]?.lastUpdated = now
-        syncManifest(step: step)
+        syncManifest(step: step, force: true)
     }
 
     // MARK: - Stegtider och prognos (se `StepTiming`)
@@ -457,7 +471,17 @@ class PipelineState: ObservableObject {
         untimedSteps.insert(step)
     }
 
-    private func recordTiming(_ step: DashboardStep, duration: TimeInterval, count: Int, finishedAt: Date) {
+    /// Pågående resursmätare per steg (se `ResourceMeter`).
+    private var stepMeters: [DashboardStep: ResourceMeter] = [:]
+
+    /// Sätts av `PipelineRunner`: skriver en rad till `pipeline.log` (bara filen, inte UI-loggen
+    /// — `recordTiming` loggar redan i UI-loggen).
+    var pipelineLogFileWriter: ((String) -> Void)?
+
+    private func recordTiming(_ step: DashboardStep, duration: TimeInterval, count: Int, finishedAt: Date, resources: StepResources?) {
+        if let resources, duration >= 0.5 {
+            pipelineLogFileWriter?("⏱ Resurser \(step.title): \(resources.summary(wallSeconds: duration))")
+        }
         guard Self.automaticSteps.contains(step), !untimedSteps.contains(step), duration >= 0.5 else { return }
         let photos = step == .copyToInput ? count : (runPhotoCount > 0 ? runPhotoCount : count)
         guard photos > 0 else { return }
@@ -469,7 +493,12 @@ class PipelineState: ObservableObject {
                 "hdrAlign": "\(settings.hdrAlignEnabled)",
                 "hdrMaxDimension": "\(settings.hdrMaxDimension)",
                 "aiDescriptions": "\(settings.aiDescriptionsEnabled)",
-            ]
+            ],
+            cpuSeconds: resources?.cpuSeconds,
+            diskReadBytes: resources?.diskReadBytes,
+            diskWriteBytes: resources?.diskWriteBytes,
+            peakMemoryMB: resources?.peakMemoryMB,
+            mode: "sequential"
         )
         timingHistory.append(record)
         StepTiming.Store.shared.append(record)
@@ -578,7 +607,15 @@ class PipelineState: ObservableObject {
     /// uppdatera adresser/gallringssammanfattning). Uppdaterar också
     /// sessionshistorikregistret (`SessionHistoryStore`) så "Historik"-vyn
     /// alltid speglar den senaste kända statusen.
-    func syncManifest(step: DashboardStep? = nil) {
+    ///
+    /// Fas 1a (#6): minnesmanifestet uppdateras alltid direkt, men skrivningen till disk
+    /// (manifestfilen + historikregistret) debounceas till högst en per
+    /// `manifestWriteInterval`: den första skrivs direkt, och uppdateringar som kommer
+    /// inom intervallet slås ihop till en avslutande skrivning när det löpt ut (alltså
+    /// alltid med det SISTA värdet). `force` skriver direkt — används vid stegavslut,
+    /// fel och avbrott — och `flushManifest()` skriver en väntande ändring (appavslut,
+    /// `reset`, pipelinens slut). Vid en krasch går därför högst ~1 s förlopp förlorat.
+    func syncManifest(step: DashboardStep? = nil, force: Bool = false) {
         guard let outputDir = outputDirectory else { return }
         ensureManifestLoaded()
         guard var manifest = sessionManifest else { return }
@@ -626,8 +663,57 @@ class PipelineState: ObservableObject {
         manifest.updatedAt = Date()
 
         sessionManifest = manifest
+        manifestDirty = true
+        manifestDirtyDirectory = outputDir
+        scheduleManifestWrite(force: force)
+    }
+
+    // MARK: - Debouncad manifestskrivning
+
+    /// Minsta tid mellan två skrivningar av manifestet. Variabel så att tester kan korta den.
+    var manifestWriteInterval: TimeInterval = 1.0
+    private var manifestDirty = false
+    /// Mappen den väntande ändringen hör till (outputmappen kan ha bytts innan den skrivs).
+    private var manifestDirtyDirectory: URL?
+    private var lastManifestWrite: Date = .distantPast
+    private var manifestFlushTask: Task<Void, Never>?
+    /// Antal skrivningar till disk hittills (för tester och mätning).
+    private(set) var manifestWriteCount = 0
+
+    private func scheduleManifestWrite(force: Bool) {
+        let sinceLast = Date().timeIntervalSince(lastManifestWrite)
+        if force || sinceLast >= manifestWriteInterval {
+            writeManifestNow()
+            return
+        }
+        guard manifestFlushTask == nil else { return }
+        let delay = max(0, manifestWriteInterval - sinceLast)
+        manifestFlushTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.manifestFlushTask = nil
+            self?.writeManifestNow()
+        }
+    }
+
+    private func writeManifestNow() {
+        manifestFlushTask?.cancel()
+        manifestFlushTask = nil
+        guard manifestDirty, let outputDir = manifestDirtyDirectory, let manifest = sessionManifest else {
+            manifestDirty = false
+            return
+        }
+        manifestDirty = false
+        lastManifestWrite = Date()
+        manifestWriteCount += 1
         SessionManifestStore.save(manifest, to: outputDir)
         SessionHistoryStore.record(manifest)
+    }
+
+    /// Skriver en väntande manifeständring direkt (no-op om inget väntar).
+    func flushManifest() {
+        guard manifestDirty else { return }
+        writeManifestNow()
     }
 
     func appendStepLog(_ step: DashboardStep, _ text: String, type: LogLine.LogType = .info) {

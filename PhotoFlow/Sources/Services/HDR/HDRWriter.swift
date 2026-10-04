@@ -63,18 +63,22 @@ nonisolated enum HDRWriter {
         // which only offers `.RGBA16` — i.e. with an alpha channel we don't
         // need): a plain 3-channel 16-bit-per-component RGB image, matching
         // "16 bpc RGB" rather than RGBA.
-        let cgImage16 = try makeRGB16CGImage(pixels: pixels, width: width, height: height, colorSpace: colorSpace)
-        try writeTIFF(cgImage16, to: tiffURL)
+        let cgImage16 = try PipelineMetrics.phase("makeRGB16") {
+            try makeRGB16CGImage(pixels: pixels, width: width, height: height, colorSpace: colorSpace)
+        }
+        try PipelineMetrics.phase("writeTIFF") { try writeTIFF(cgImage16, to: tiffURL) }
 
         let longSide = max(width, height)
         let scale = (jpegMaxDimension > 0 && longSide > jpegMaxDimension) ? CGFloat(jpegMaxDimension) / CGFloat(longSide) : 1.0
         let jpegImage = scale < 1.0 ? ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) : ciImage
-        try context.writeJPEGRepresentation(
-            of: jpegImage,
-            to: jpegURL,
-            colorSpace: colorSpace,
-            options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: jpegQuality]
-        )
+        try PipelineMetrics.phase("writeJPEG") {
+            try context.writeJPEGRepresentation(
+                of: jpegImage,
+                to: jpegURL,
+                colorSpace: colorSpace,
+                options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: jpegQuality]
+            )
+        }
     }
 
     /// Unsharp mask på RGBA float32-pixlar (sRGB-kodade, som resten av
@@ -186,7 +190,9 @@ nonisolated enum HDRWriter {
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
+            let observer = ChildDiskTracker.observe(process)
             process.waitUntilExit()
+            observer.finish()
             return process.terminationStatus == 0
         } catch {
             return false

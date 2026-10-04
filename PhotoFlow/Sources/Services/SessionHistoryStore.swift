@@ -49,8 +49,12 @@ enum SessionHistoryStore {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             dir = FileManager.default.temporaryDirectory.appendingPathComponent("PhotoFlowTestSessionHistory-\(UUID().uuidString)")
         } else {
-            dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-                .appendingPathComponent("PhotoFlow")
+            if let override = ProcessInfo.processInfo.environment["PHOTOFLOW_SUPPORT_DIR"], !override.isEmpty {
+                dir = URL(fileURLWithPath: override)   // se StepTiming.Store.shared
+            } else {
+                dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+                    .appendingPathComponent("PhotoFlow")
+            }
         }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("sessions.json")

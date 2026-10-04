@@ -82,7 +82,9 @@ extension PipelineRunner {
                     }
 
                     // No pipes → waitUntilExit cannot deadlock
+                    let diskObserver = ChildDiskTracker.observe(process)
                     process.waitUntilExit()
+                    diskObserver.finish()
 
                     // Close file handles
                     stdoutHandle.closeFile()

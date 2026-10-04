@@ -11,6 +11,11 @@ class PipelineRunner: ObservableObject {
     let audio = AudioService.shared
     var currentTask: Process?
     var pipelineLogHandle: FileHandle?
+    var pipelineLogNeedsSync = false
+    var pipelineLogLastSync = Date.distantPast
+    var pipelineLogSyncTask: Task<Void, Never>?
+    /// Antal `fsync` av pipeline.log hittills (för tester och mätning).
+    var pipelineLogSyncCount = 0
 
     /// Owns the running pipeline's Task so `cancel()` can actually stop it —
     /// previously `RunnerWrapper.start` created an untracked, un-cancellable Task
@@ -41,12 +46,49 @@ class PipelineRunner: ObservableObject {
         return formatter
     }()
 
+    /// Loggraden skrivs direkt till filen (en `write` till kärnan, så den överlever att
+    /// appen kraschar), men `fsync` görs högst en gång per `pipelineLogSyncInterval` —
+    /// förut en per rad, vilket med hundratals rader per steg och en nätverks-/T5-disk
+    /// blev en märkbar kostnad. `flushPipelineLog()` synkar direkt och anropas vid pipelinens
+    /// slut, fel och avbrott. Därför kan bara ett strömavbrott/OS-krasch ta bort de
+    /// senaste ~1 s, aldrig en appkrasch eller ett avbrott.
+    static let pipelineLogSyncInterval: TimeInterval = 1.0
+
     // internal: called from other PipelineRunner extension files.
     func pipelineLog(_ message: String) {
-        let line = "[\(Self.pipelineLogTimeFormatter.string(from: Date()))] \(message)\n"
-        pipelineLogHandle?.write(line.data(using: .utf8)!)
-        pipelineLogHandle?.synchronizeFile()
+        writePipelineLogLine(message)
         state.appendLog(message)
+    }
+
+    /// Bara filen (inte UI-loggen) — används också av `PipelineState` för resursrader.
+    func writePipelineLogLine(_ message: String) {
+        guard let handle = pipelineLogHandle else { return }
+        let line = "[\(Self.pipelineLogTimeFormatter.string(from: Date()))] \(message)\n"
+        handle.write(line.data(using: .utf8)!)
+        pipelineLogNeedsSync = true
+        let sinceLast = Date().timeIntervalSince(pipelineLogLastSync)
+        if sinceLast >= Self.pipelineLogSyncInterval {
+            flushPipelineLog()
+        } else if pipelineLogSyncTask == nil {
+            let delay = Self.pipelineLogSyncInterval - sinceLast
+            pipelineLogSyncTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                self?.pipelineLogSyncTask = nil
+                self?.flushPipelineLog()
+            }
+        }
+    }
+
+    /// `fsync` av `pipeline.log` om något skrivits sedan sist.
+    func flushPipelineLog() {
+        pipelineLogSyncTask?.cancel()
+        pipelineLogSyncTask = nil
+        guard pipelineLogNeedsSync else { return }
+        pipelineLogNeedsSync = false
+        pipelineLogLastSync = Date()
+        pipelineLogSyncCount += 1
+        pipelineLogHandle?.synchronizeFile()
     }
 
     // MARK: - Decision Log (structured JSONL for debugging across runs)
@@ -112,6 +154,7 @@ class PipelineRunner: ObservableObject {
 
     init(state: PipelineState) {
         self.state = state
+        state.pipelineLogFileWriter = { [weak self] line in self?.writePipelineLogLine(line) }
     }
 
     // MARK: - Tool resolution
@@ -160,7 +203,12 @@ class PipelineRunner: ObservableObject {
             options: [.userInitiated, .idleSystemSleepDisabled],
             reason: "PhotoFlow bearbetar bilder"
         )
-        defer { ProcessInfo.processInfo.endActivity(activity) }
+        defer {
+            ProcessInfo.processInfo.endActivity(activity)
+            // Inget får ligga kvar i debounce-/fsync-köerna när körningen är slut (klar, fel eller avbruten).
+            flushPipelineLog()
+            state.flushManifest()
+        }
 
         // Mark upcoming steps as queued so cards aren't grey
         let settings = AppSettings.shared
@@ -182,6 +230,7 @@ class PipelineRunner: ObservableObject {
         try? FileManager.default.createDirectory(at: state.outputDirectory!, withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: logFile.path, contents: nil)
         pipelineLogHandle = FileHandle(forWritingAtPath: logFile.path)
+        JobTimingLog.shared.configure(outputDirectory: state.outputDirectory)
 
         pipelineLog("=== Pipeline startad ===")
         pipelineLog("inputDir: \(inputDir.path)")

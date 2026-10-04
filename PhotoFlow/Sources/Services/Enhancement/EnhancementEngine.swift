@@ -459,6 +459,13 @@ nonisolated enum EnhancementEngine {
         }
     }
 
+    /// Källans storlek på disk (för `timings.jsonl`).
+    private static func sourceSize(_ source: Source) -> Int64 {
+        switch source {
+        case .image(let url), .raw(let url, _): return PipelineMetrics.totalSize(of: [url])
+        }
+    }
+
     /// Läser `source` till en `CIImage` (sRGB-taggad).
     static func loadImage(_ source: Source) throws -> CIImage {
         switch source {
@@ -485,25 +492,27 @@ nonisolated enum EnhancementEngine {
     @concurrent
     static func enhance(_ request: Request) async throws -> Outcome {
         try Task.checkCancellation()
-        let source = try loadImage(request.source)
+        let source = try PipelineMetrics.phase("load", bytesIn: sourceSize(request.source)) { try loadImage(request.source) }
         let context = makeContext()
 
-        guard let small = renderPixels(source, context: context, maxDimension: analysisMaxDimension) else {
+        guard let small = PipelineMetrics.phase("decodeAndDownscale", { renderPixels(source, context: context, maxDimension: analysisMaxDimension) }) else {
             throw EngineError.renderFailed
         }
         try Task.checkCancellation()
         let horizon = (request.profile.straighten && request.allowStraighten)
-            ? await measureHorizon(pixels: small.pixels, width: small.width, height: small.height)
+            ? await PipelineMetrics.phaseAsync("horizon") { await measureHorizon(pixels: small.pixels, width: small.width, height: small.height) }
             : nil
-        let (auto, analysis) = automaticParameters(Input(
-            pixels: small.pixels, width: small.width, height: small.height,
-            horizonDegrees: horizon, alreadySharpened: request.alreadySharpened
-        ))
+        let (auto, analysis) = PipelineMetrics.phase("analysis") {
+            automaticParameters(Input(
+                pixels: small.pixels, width: small.width, height: small.height,
+                horizonDegrees: horizon, alreadySharpened: request.alreadySharpened
+            ))
+        }
         let final = request.profile.finalParameters(auto: auto)
 
         try Task.checkCancellation()
         let enhanced = render(source, parameters: final)
-        guard let full = renderPixels(enhanced, context: context) else { throw EngineError.renderFailed }
+        guard let full = PipelineMetrics.phase("render", { renderPixels(enhanced, context: context) }) else { throw EngineError.renderFailed }
         try Task.checkCancellation()
         try FileManager.default.createDirectory(at: request.tiffURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try HDRWriter.write(
@@ -512,7 +521,9 @@ nonisolated enum EnhancementEngine {
             jpegMaxDimension: request.jpegMaxDimension, jpegQuality: request.jpegQuality
         )
         if let exiftoolPath = request.exiftoolPath {
-            HDRWriter.copyEXIF(from: request.exifSource, to: [request.tiffURL, request.jpegURL], exiftoolPath: exiftoolPath)
+            PipelineMetrics.phase("exif") {
+                _ = HDRWriter.copyEXIF(from: request.exifSource, to: [request.tiffURL, request.jpegURL], exiftoolPath: exiftoolPath)
+            }
         }
         return Outcome(analysis: analysis, autoParameters: auto, parameters: final, width: full.width, height: full.height)
     }

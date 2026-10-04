@@ -353,7 +353,7 @@ nonisolated enum PhotoQualityService {
                 nextIndex += 1
                 inFlight += 1
                 group.addTask {
-                    (idx, await measureImage(url: url))
+                    (idx, await PipelineMetrics.jobAsync(step: "ai.quality", unit: url.deletingPathExtension().lastPathComponent) { await measureImage(url: url) })
                 }
             }
 
@@ -372,7 +372,7 @@ nonisolated enum PhotoQualityService {
             }
         }
 
-        let groupIDs = clusterDuplicates(
+        let groupIDs = PipelineMetrics.job(step: "ai.quality", unit: "cluster") { clusterDuplicates(
             count: items.count,
             threshold: duplicateDistanceThreshold,
             distance: { i, j in
@@ -383,7 +383,7 @@ nonisolated enum PhotoQualityService {
                 guard let ga = items[i].bracketGroupID, let gb = items[j].bracketGroupID else { return false }
                 return ga == gb
             }
-        )
+        ) }
 
         var results: [String: Result] = [:]
         for (i, item) in items.enumerated() {

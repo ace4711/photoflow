@@ -254,9 +254,13 @@ struct PhotoFlowCLI {
         // mönster som `PipelineSmokeTest`.
         if !settings.calendarMatchEnabled {
             print("Kalendermatchning av — kör metadatasteget manuellt (som appens \"Kör om\"-knapp skulle göra).")
+            // `.active` först, så att steget får en starttid (tid + resursdata i step_timings.jsonl).
+            state.updateStep(.writeIPTCTags, phase: .active)
             await runner.writeIPTCMetadata()
             state.completeStep(.writeIPTCTags)
         }
+        runner.flushPipelineLog()
+        state.flushManifest()
 
         var finalKeys: [DashboardStep: String] = [:]
         printStepTransitions(state: state, since: cliStart, lastKeys: &finalKeys, force: true)

@@ -205,7 +205,7 @@ extension PipelineRunner {
 
             let base = file.deletingPathExtension().lastPathComponent
             let start = Date()
-            let result = await service.describe(imageAt: file)
+            let result = await PipelineMetrics.jobAsync(step: "ai.fm", unit: base) { await service.describe(imageAt: file) }
             let elapsed = Date().timeIntervalSince(start)
             durations.append(elapsed)
 

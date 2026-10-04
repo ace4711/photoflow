@@ -181,7 +181,7 @@ actor VisionTaggingService {
                 }
 
                 group.addTask {
-                    let tags = await self.tagPhoto(at: item.url)
+                    let tags = await PipelineMetrics.jobAsync(step: "ai.vision", unit: item.filename) { await self.tagPhoto(at: item.url) }
                     return (item.filename, tags)
                 }
                 inFlight += 1
