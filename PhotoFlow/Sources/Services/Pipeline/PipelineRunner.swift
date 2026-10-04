@@ -489,9 +489,12 @@ class PipelineRunner: ObservableObject {
                     try? FileManager.default.removeItem(at: outputDir.appendingPathComponent("bracket_groups.json"))
                     try? FileManager.default.removeItem(at: outputDir.appendingPathComponent("exif_data.csv"))
                     try? FileManager.default.removeItem(at: outputDir.appendingPathComponent("hdr"))
+                    // Rensa loggen: alla grupper görs om, även de som sorteringen redan flyttat
+                    // till en adressmapp (de skrivs om där de ligger).
+                    try? FileManager.default.removeItem(at: outputDir.appendingPathComponent(HDRLog.fileName))
                 }
                 try await runBracketAnalysis(inputDir: inputDir)
-                try await runHDRMerge()
+                try await runHDRMerge(forceAll: true)
                 try await loadBracketGroups()
                 state.completeStep(step)
 

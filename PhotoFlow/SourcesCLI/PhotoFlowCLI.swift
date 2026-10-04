@@ -74,6 +74,13 @@ struct PhotoFlowCLI {
                              efter HDR; på som standard).
           --no-reel         Stäng av "Filmförslag" (automatisk Objektfilm per adress
                              sist i körningen; på som standard, kräver kalendermatchning).
+          --window-pull on|off
+                            Fönster från mörkaste exponeringen i HDR (standard on).
+          --window-strength <N>
+                            Window pull-styrka i procent, 0–100 (standard 85).
+          --hdr-debug       Skriv felsökningsfiler per HDR-grupp i <output>/hdr_debug/
+                             hdr_group_<id>/: mask.png, dark_matched.jpg, fusion.jpg (utan
+                             window pull), pull.jpg, dark_raw.jpg och hdr_metrics.json.
           --calendar-matches <fil>
                             Kör MED kalender utan EventKit: filen (en calendar_matches.json)
                              kopieras till outputmappen och används som kalendermatchning.
@@ -144,6 +151,9 @@ struct PhotoFlowCLI {
         var noReel = false
         var jsonOutput = false
         var calendarMatchesPath: String?
+        var windowPull: Bool?
+        var windowStrength: Double?
+        var hdrDebug = false
 
         var idx = 0
         while idx < args.count {
@@ -173,6 +183,18 @@ struct PhotoFlowCLI {
                 idx += 1
                 guard idx < args.count else { fail("--calendar-matches kräver ett värde") }
                 calendarMatchesPath = args[idx]
+            case "--window-pull":
+                idx += 1
+                guard idx < args.count, ["on", "off"].contains(args[idx]) else { fail("--window-pull kräver on eller off") }
+                windowPull = args[idx] == "on"
+            case "--window-strength":
+                idx += 1
+                guard idx < args.count, let value = Double(args[idx]), (0...100).contains(value) else {
+                    fail("--window-strength kräver ett tal 0–100 (procent)")
+                }
+                windowStrength = value
+            case "--hdr-debug":
+                hdrDebug = true
             case "--help", "-h":
                 printUsage()
                 exit(0)
@@ -222,6 +244,11 @@ struct PhotoFlowCLI {
         settings.aiTaggingEnabled = !noAI
         settings.enhanceEnabled = !noEnhance
         settings.reelProposalEnabled = !noReel
+        // Window pull: standard på, 85 % (samma som appen) om inget anges — CLI:ns egen
+        // UserDefaults-domän kan annars ha kvar värden från en tidigare körning.
+        settings.hdrWindowPullEnabled = windowPull ?? true
+        settings.hdrWindowPullStrength = windowStrength ?? 85
+        PipelineRunner.hdrDebugEnabled = hdrDebug
         // Ljud/tal/systemnotiser stängs alltid av headless: dels är de
         // meningslösa utan en interaktiv session, dels kraschar
         // `NotificationService` numera bara inte längre (se dess
@@ -234,6 +261,7 @@ struct PhotoFlowCLI {
         print("PhotoFlow CLI — startar pipeline")
         print("  input:  \(inputURL.path)")
         print("  output: \(outputURL.path)")
+        print("  window pull: \(settings.hdrWindowPullEnabled ? "på (\(Int(settings.hdrWindowPullStrength)) %)" : "av")\(hdrDebug ? ", HDR-felsökning på" : "")")
         print("  HDR: \(settings.hdrMergeEnabled ? "på" : "av"), kalender: \(settings.calendarMatchEnabled ? "på" : "av"), AI-taggning: \(settings.aiTaggingEnabled ? "på" : "av"), förbättra bilder: \(settings.enhanceEnabled ? "på (profil \(settings.enhanceProfileID))" : "av"), filmförslag: \(settings.reelProposalEnabled ? "på" : "av")")
 
         let state = PipelineState()

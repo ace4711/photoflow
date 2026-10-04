@@ -50,6 +50,26 @@ class AppSettings: ObservableObject {
     @AppStorage("hdrAlignEnabled") var hdrAlignEnabled: Bool = true
     /// Lätt skärpning av HDR-resultatet (se `HDREngine.Options.sharpenEnabled`).
     @AppStorage("hdrSharpenEnabled") var hdrSharpenEnabled: Bool = true
+    /// Window pull: fönsterutsikten tas från gruppens mörkaste exponering (se `WindowPull`).
+    @AppStorage("hdrWindowPullEnabled") var hdrWindowPullEnabled: Bool = true
+    /// Styrka i procent (0–100).
+    @AppStorage("hdrWindowPullStrength") var hdrWindowPullStrength: Double = 85
+    /// Fönsterljushet i EV (−1…+1), 0 = standard.
+    @AppStorage("hdrWindowBrightness") var hdrWindowBrightness: Double = 0
+    /// Dra även in lampor och himmel (annars sorteras de bort ur fönstermasken).
+    @AppStorage("hdrWindowIncludeLampsSky") var hdrWindowIncludeLampsSky: Bool = false
+    /// "Gör om befintliga HDR när motorn uppdaterats": "never" (Aldrig) eller "always"
+    /// (Alltid). "ask" (Fråga) planeras som standard när dialogen finns (fas 4 i
+    /// docs/plan-hdr-fonster.md); till dess är Aldrig standard och "ask" beter sig som den.
+    @AppStorage("hdrRedoOnEngineUpdate") var hdrRedoOnEngineUpdate: String = HDRLog.RedoPolicy.never.rawValue
+
+    /// Window pull-inställningarna som `WindowPull.Options`.
+    var windowPullOptions: WindowPull.Options {
+        WindowPull.Options(enabled: hdrWindowPullEnabled,
+                           strength: Float(min(max(hdrWindowPullStrength, 0), 100) / 100),
+                           brightnessEV: Float(min(max(hdrWindowBrightness, -2), 2)),
+                           includeLampsAndSky: hdrWindowIncludeLampsSky)
+    }
     /// "Förbättra bilder": automatisk färg-/tonkorrigering av de färdiga bilderna
     /// (HDR-TIFF per bracket, DNG-rendering per singel) efter HDR-steget.
     /// Skriver nya filer i `enhanced/` — originalen rörs aldrig.

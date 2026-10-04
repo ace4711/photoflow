@@ -252,6 +252,37 @@ struct PipelineTab: View {
                         Text("Justeringen rättar små rörelser mellan exponeringarna (även på stativ) och avvisar orimliga mätningar. Påverkar bara HDR som skapas härefter.")
                             .font(.caption)
                             .foregroundColor(.secondary)
+
+                        Toggle("Fönster från mörkaste exponeringen (window pull)", isOn: $settings.hdrWindowPullEnabled)
+                        if settings.hdrWindowPullEnabled {
+                            HStack {
+                                Text("Styrka")
+                                Slider(value: $settings.hdrWindowPullStrength, in: 0...100, step: 5)
+                                Text("\(Int(settings.hdrWindowPullStrength)) %")
+                                    .monospacedDigit()
+                                    .frame(width: 48, alignment: .trailing)
+                            }
+                            HStack {
+                                Text("Fönsterljushet")
+                                Slider(value: $settings.hdrWindowBrightness, in: -1...1, step: 0.25)
+                                Text(String(format: "%+.2f EV", settings.hdrWindowBrightness))
+                                    .monospacedDigit()
+                                    .frame(width: 72, alignment: .trailing)
+                            }
+                            Toggle("Även lampor och himmel", isOn: $settings.hdrWindowIncludeLampsSky)
+                        }
+                        Text("Utfrätta fönster ersätts med utsikten ur bracketens mörkaste exponering (även när den inte ingår i sammanslagningen), exponeringsmatchad och kantförfinad. Lampor och himmel lämnas annars orörda. Fönstermasken sparas i hdr_masks/.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        Picker("Gör om befintliga HDR när motorn uppdaterats", selection: $settings.hdrRedoOnEngineUpdate) {
+                            Text("Aldrig").tag(HDRLog.RedoPolicy.never.rawValue)
+                            Text("Alltid").tag(HDRLog.RedoPolicy.always.rawValue)
+                        }
+                        .pickerStyle(.menu)
+                        Text("Gäller HDR som redan finns när en ny version av sammanslagningen kommer (t.ex. window pull). Aldrig: de ligger kvar som de är. Alltid: de görs om — även levererade filer i adressmapparna skrivs över — nästa gång sessionen körs. Ändrade inställningar ovan gör alltid om berörda HDR.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     } else {
                         Text("Den äldre vägen: python3 + OpenCV (cv2.createMergeMertens) på inbäddade 8-bitars JPEG-förhandsbilder. Kräver att OpenCV är installerat (pip3 install opencv-python numpy).")
                             .font(.caption)

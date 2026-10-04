@@ -96,6 +96,93 @@ extension PipelineRunner {
         ])
     }
 
+    /// Förfrågan till `EnhancementEngine` för ett jobb. Metadatan följer mappen filen ligger
+    /// i (en `<adress> FÖRBÄTTRADE`-mapp), annars den sorteringen flyttar den till.
+    func enhanceRequest(job: EnhanceJob, profile: EnhancementProfile, tiffURL: URL, jpegURL: URL,
+                        exiftoolPath: String?, metadataContext: CreationMetadataContext) -> EnhancementEngine.Request {
+        let settings = AppSettings.shared
+        let source: EnhancementEngine.Source = job.kind == .dng
+            ? .raw(job.source, maxDimension: settings.hdrMaxDimension)
+            : .image(job.source)
+        // Sorteringen flyttar filerna till `<adress> FÖRBÄTTRADE/` (`moveUnsortedEnhanced`).
+        let folderName = Self.addressFolderName(containing: tiffURL) ?? enhancedFolderName(forKey: job.key)
+        return EnhancementEngine.Request(
+            source: source, tiffURL: tiffURL, jpegURL: jpegURL, profile: profile,
+            alreadySharpened: job.kind == .hdr && settings.hdrSharpenEnabled,
+            exifSource: job.source, exiftoolPath: exiftoolPath,
+            tiffMetadata: Self.creationMetadata(for: tiffURL, folderName: folderName, context: metadataContext),
+            jpegMetadata: Self.creationMetadata(for: jpegURL, folderName: folderName, context: metadataContext),
+            allowStraighten: job.isExterior
+        )
+    }
+
+    /// En förbättring av en HDR-grupp är inaktuell när HDR-filen skrevs om efter den
+    /// (`hdr.json`s `mergedAt`). Fingerprintet räcker inte: det bygger på original-NEF:erna,
+    /// som är desamma när bara HDR-motorn eller fönsterinställningarna ändrats.
+    nonisolated static func enhancementIsStale(enhancedAt: Date, hdrMergedAt: Date?) -> Bool {
+        guard let hdrMergedAt else { return false }
+        return hdrMergedAt > enhancedAt
+    }
+
+    /// Gör om förbättringen av en HDR-grupp direkt efter en omsammanslagning i granskningen,
+    /// så att den förbättrade bilden (som granskningen visar och sorteringen levererar) inte
+    /// blir kvar från den förra sammanslagningen. Skriver där den förbättrade filen redan
+    /// ligger (`<adress> FÖRBÄTTRADE/` efter sorteringen). Finns ingen förbättring än görs
+    /// inget — steget "Förbättra bilder" tar den när det körs.
+    /// Returnerar de omskrivna filerna (för bildcachen).
+    @discardableResult
+    func reEnhanceHDRGroup(_ groupId: Int) async -> [URL] {
+        let settings = AppSettings.shared
+        guard settings.enhanceEnabled, let outputDir = state.outputDirectory else { return [] }
+        let key = "hdr_group_\(groupId)"
+        let existing = AddressFolderLayout.locateEnhancedFiles(in: outputDir)[key] ?? []
+        var log = EnhancementLog.load(from: outputDir)
+        guard !existing.isEmpty || log?.entries[key] != nil else { return [] }
+        guard let job = enhanceJobs(outputDir: outputDir).jobs.first(where: { $0.key == key }) else { return [] }
+
+        let profile = EnhancementProfileStore.shared.profile(id: settings.enhanceProfileID)
+        let stagingDir = AddressFolderLayout.enhancedStagingDir(in: outputDir)
+        let tiff = existing.first { ["tiff", "tif"].contains($0.pathExtension.lowercased()) }
+            ?? stagingDir.appendingPathComponent("\(key)\(AddressFolderLayout.enhancedFileSuffix).tiff")
+        let jpeg = existing.first { $0.pathExtension.lowercased() == "jpg" }
+            ?? stagingDir.appendingPathComponent("\(key)\(AddressFolderLayout.enhancedFileSuffix).jpg")
+        try? FileManager.default.createDirectory(at: tiff.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: jpeg.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        let req = enhanceRequest(job: job, profile: profile, tiffURL: tiff, jpegURL: jpeg,
+                                 exiftoolPath: try? requireExiftool(), metadataContext: await creationMetadataContext())
+        state.appendLog("Förbättrar om HDR grupp \(groupId) efter omsammanslagningen...", type: .info)
+        let started = Date()
+        do {
+            let outcome = try await EnhancementEngine.enhance(req)
+            recordCreationStamps([(req.tiffURL, req.tiffMetadata), (req.jpegURL, req.jpegMetadata)],
+                                 metadataWritten: outcome.metadataWritten, outputDir: outputDir)
+            if Self.addressFolderName(containing: tiff) != nil,
+               req.tiffMetadata == nil || req.jpegMetadata == nil || !outcome.metadataWritten {
+                try? FileManager.default.removeItem(at: outputDir.appendingPathComponent("metadata_written.json"))
+            }
+            var updated = log ?? EnhancementLog(engineVersion: EnhancementEngine.version, profileID: profile.id)
+            updated.entries[key] = EnhancementLog.Entry(
+                kind: job.kind.rawValue, source: job.source.lastPathComponent,
+                fingerprint: enhanceFingerprint(job: job, profile: profile), profileID: profile.id, profile: profile,
+                analysis: outcome.analysis, autoParameters: outcome.autoParameters, parameters: outcome.parameters,
+                outputs: [tiff.lastPathComponent, jpeg.lastPathComponent],
+                width: outcome.width, height: outcome.height, seconds: Date().timeIntervalSince(started), date: Date()
+            )
+            updated.updatedAt = Date()
+            updated.save(to: outputDir)
+            log = updated
+            if let idx = state.bracketGroups.firstIndex(where: { $0.id == groupId }) {
+                state.bracketGroups[idx].enhancedPreviewURL = jpeg
+            }
+            state.appendLog("HDR grupp \(groupId) förbättrad igen (\(profile.name)).", type: .success)
+            return [tiff, jpeg]
+        } catch {
+            state.appendLog("Förbättringen av HDR grupp \(groupId) misslyckades: \(error.localizedDescription)", type: .error)
+            return []
+        }
+    }
+
     /// Kör steget. Returnerar antalet bilder som nu är förbättrade (gjorda + redan klara).
     @discardableResult
     func runEnhancePhotos() async throws -> Int {
@@ -115,6 +202,7 @@ extension PipelineRunner {
         log.profileID = profile.id
 
         let existing = AddressFolderLayout.locateEnhancedFiles(in: outputDir)
+        let hdrLog = HDRLog.load(from: outputDir)
         var fingerprints: [String: String] = [:]
         var pending: [EnhanceJob] = []
         var migrated = 0
@@ -125,6 +213,11 @@ extension PipelineRunner {
             let hasTiff = files.contains { ["tiff", "tif"].contains($0.pathExtension.lowercased()) }
             let hasJpeg = files.contains { $0.pathExtension.lowercased() == "jpg" }
             if hasTiff, hasJpeg, let entry = log.entries[job.key] {
+                // HDR-filen omgjord efter förbättringen (ny motor, fönsterinställningar, omsammanslagning).
+                if job.kind == .hdr, Self.enhancementIsStale(enhancedAt: entry.date, hdrMergedAt: hdrLog?.entries[job.key]?.mergedAt) {
+                    pending.append(job)
+                    continue
+                }
                 if entry.fingerprint == fingerprint { continue }
                 // Engångsövergång från det gamla fingerprintet (källans storlek/tid, som
                 // metadatasteget ändrar): samma motor, samma profil och samma källfil →
@@ -190,21 +283,10 @@ extension PipelineRunner {
         let metadataContext = await creationMetadataContext()
 
         func request(for job: EnhanceJob) -> EnhancementEngine.Request {
-            let tiff = stagingDir.appendingPathComponent("\(job.key)\(AddressFolderLayout.enhancedFileSuffix).tiff")
-            let jpeg = stagingDir.appendingPathComponent("\(job.key)\(AddressFolderLayout.enhancedFileSuffix).jpg")
-            let source: EnhancementEngine.Source = job.kind == .dng
-                ? .raw(job.source, maxDimension: settings.hdrMaxDimension)
-                : .image(job.source)
-            // Sorteringen flyttar filerna till `<adress> FÖRBÄTTRADE/` (`moveUnsortedEnhanced`).
-            let folderName = enhancedFolderName(forKey: job.key)
-            return EnhancementEngine.Request(
-                source: source, tiffURL: tiff, jpegURL: jpeg, profile: profile,
-                alreadySharpened: job.kind == .hdr && settings.hdrSharpenEnabled,
-                exifSource: job.source, exiftoolPath: exiftoolPath,
-                tiffMetadata: Self.creationMetadata(for: tiff, folderName: folderName, context: metadataContext),
-                jpegMetadata: Self.creationMetadata(for: jpeg, folderName: folderName, context: metadataContext),
-                allowStraighten: job.isExterior
-            )
+            enhanceRequest(job: job, profile: profile,
+                           tiffURL: stagingDir.appendingPathComponent("\(job.key)\(AddressFolderLayout.enhancedFileSuffix).tiff"),
+                           jpegURL: stagingDir.appendingPathComponent("\(job.key)\(AddressFolderLayout.enhancedFileSuffix).jpg"),
+                           exiftoolPath: exiftoolPath, metadataContext: metadataContext)
         }
 
         // RAW-rendering/Core Image-kedjan per bild är till stor del enkeltrådad, så några bilder körs

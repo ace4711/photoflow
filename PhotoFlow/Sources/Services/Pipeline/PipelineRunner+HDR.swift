@@ -11,7 +11,54 @@ extension PipelineRunner {
     // - "opencv": the original path — Mertens fusion via python3/OpenCV on
     //   the 8-bit embedded JPEG previews. Kept as a fallback/comparison engine.
 
-    func runHDRMerge() async throws {
+    /// Felsökningsläge (`photoflow-cli --hdr-debug`): varje sammanslagning skriver mask,
+    /// exponeringsmatchad mörk ram, fusion utan window pull och `hdr_metrics.json` till
+    /// `<output>/hdr_debug/hdr_group_<id>/`.
+    nonisolated(unsafe) static var hdrDebugEnabled = false
+
+    /// En grupps HDR-jobb.
+    struct HDRMergeJob {
+        var groupId: Int
+        var previewPaths: [String]
+        var frames: [HDREngine.Frame]
+        var windowSource: HDREngine.Frame?
+        /// NEF-filnamnen för fusionsramarna och fönsterkällan (till `hdr.json`).
+        var frameNames: [String]
+        var windowSourceName: String?
+        var manualSelection: Bool
+        var firstPhotoDate: Date?
+        var fingerprint: String
+        var tiffURL: URL
+        var jpegURL: URL
+        var reason: String
+    }
+
+    /// HDR-motorns inställningar som `HDREngine.Options` (mask/felsökning läggs till per grupp).
+    func currentHDROptions() -> HDREngine.Options {
+        HDREngine.Options(
+            maxDimension: AppSettings.shared.hdrMaxDimension,
+            alignEnabled: AppSettings.shared.hdrAlignEnabled,
+            sharpenEnabled: AppSettings.shared.hdrSharpenEnabled,
+            windowPull: AppSettings.shared.hdrEngine == "opencv" ? WindowPull.Options(enabled: false) : AppSettings.shared.windowPullOptions
+        )
+    }
+
+    /// Fingerprint för en grupps HDR med de nuvarande inställningarna (se `HDRLog.fingerprint`).
+    func currentHDRFingerprint(identity: [URL]) -> String {
+        let settings = AppSettings.shared
+        return HDRLog.fingerprint(identity: identity, engine: settings.hdrEngine, maxDimension: settings.hdrMaxDimension,
+                                  align: settings.hdrAlignEnabled, sharpen: settings.hdrSharpenEnabled,
+                                  windowPull: settings.hdrEngine == "opencv" ? WindowPull.Options(enabled: false) : settings.windowPullOptions)
+    }
+
+    /// Fönstermasken för en grupp (`hdr_masks/hdr_group_<id>.png` i outputroten).
+    static func hdrMaskURL(outputDir: URL, groupId: Int) -> URL {
+        outputDir.appendingPathComponent("hdr_masks").appendingPathComponent("hdr_group_\(groupId).png")
+    }
+
+    /// - Parameter forceAll: "Kör om steget" — gör om alla grupper, även aktuella, och skriv
+    ///   där filerna redan ligger (även i en sorterad adressmapp).
+    func runHDRMerge(forceAll: Bool = false) async throws {
         guard let outputDir = state.outputDirectory else { return }
 
         let groupsJSON = outputDir.appendingPathComponent("bracket_groups.json")
@@ -48,21 +95,32 @@ extension PipelineRunner {
             }
         }
 
-        // Build list of groups to merge (skip already-done ones — även de som
-        // sorteringen redan flyttat till en adressmapp)
+        // Vilka grupper som ska slås ihop: saknad fil, ändrat fingerprint (andra exponeringar
+        // eller HDR-inställningar), eller äldre motorversion om inställningen säger det.
+        // Befintliga filer utan post i hdr.json adopteras (migrering) i stället för att göras om.
+        // Filer som sorteringen redan flyttat till en adressmapp skrivs om där de ligger.
         let existingHDR = AddressFolderLayout.locateHDRFiles(in: outputDir)
-        var groupsToMerge: [(groupId: Int, previewPaths: [String], rawURLs: [URL], firstPhotoDate: Date?)] = []
+        var hdrLog = (forceAll ? nil : HDRLog.load(from: outputDir)) ?? HDRLog()
+        let policy = HDRLog.RedoPolicy(setting: AppSettings.shared.hdrRedoOnEngineUpdate)
+        let windowPullOn = engine != "opencv" && AppSettings.shared.hdrWindowPullEnabled
+        var adopted = 0
+        var groupsToMerge: [HDRMergeJob] = []
         for group in bracketGroups {
             let groupId = (group["group_id"] as? Int) ?? 0
+            let key = HDRLog.key(groupId: groupId)
             let files = (group["files"] as? [String]) ?? []
+            let exposures = ((group["exposures"] as? [String]) ?? []).map { (try? ExifReader.parseExposureString($0)) ?? 0 }
             let suggestedIndices = (group["suggested_hdr_indices"] as? [Int]) ?? Array(0..<files.count)
+            let entry = hdrLog.entries[key]
 
-            if existingHDR[groupId]?.tiff != nil { continue }
-
-            let selectedFiles = suggestedIndices.compactMap { i -> String? in
-                guard i < files.count else { return nil }
-                return files[i]
+            func exposure(of index: Int) -> Double { index < exposures.count ? exposures[index] : 0 }
+            // Urvalet: granskningens om gruppen gjorts om manuellt (sparat i hdr.json), annars förslaget.
+            var selectedIndices = suggestedIndices.filter { $0 < files.count }
+            if let entry, entry.manualSelection {
+                let manual = entry.frames.compactMap { files.firstIndex(of: $0) }
+                if manual.count >= 2 { selectedIndices = manual }
             }
+            let selectedFiles = selectedIndices.map { files[$0] }
 
             // Preview JPEGs (full-resolution embedded previews from NEF) — used by the OpenCV engine.
             let previewPaths = selectedFiles.compactMap { filename -> String? in
@@ -72,17 +130,63 @@ extension PipelineRunner {
             }
 
             // RAW files (DNG preferred, NEF fallback) — used by the Core Image engine.
-            let rawURLs = selectedFiles.compactMap { filename -> URL? in
+            func rawURL(_ filename: String) -> URL? {
                 let baseName = filename.replacingOccurrences(of: ".NEF", with: "")
                 let dngURL = dngDir.appendingPathComponent("\(baseName).dng")
                 if FileManager.default.fileExists(atPath: dngURL.path) { return dngURL }
                 return nefLookup[filename]
             }
+            let frames = selectedIndices.compactMap { i in rawURL(files[i]).map { HDREngine.Frame(url: $0, exposureSeconds: exposure(of: i)) } }
 
-            let usable = engine == "opencv" ? previewPaths.count : rawURLs.count
+            // Fönsterkällan: gruppens mörkaste exponering, även om förslaget sorterat bort den.
+            var windowSource: HDREngine.Frame?
+            var windowSourceName: String?
+            if windowPullOn, !files.isEmpty {
+                let darkestIndex = exposures.count == files.count && exposures.allSatisfy({ $0 > 0 })
+                    ? exposures.indices.min(by: { exposures[$0] < exposures[$1] })!
+                    : (selectedIndices.first ?? 0)
+                if let url = rawURL(files[darkestIndex]) {
+                    windowSource = HDREngine.Frame(url: url, exposureSeconds: exposure(of: darkestIndex))
+                    windowSourceName = files[darkestIndex]
+                }
+            }
+
+            let usable = engine == "opencv" ? previewPaths.count : frames.count
             guard usable >= 2 else { continue }
-            groupsToMerge.append((groupId: groupId, previewPaths: previewPaths, rawURLs: rawURLs,
-                                  firstPhotoDate: Self.firstPhotoDate(ofGroup: group)))
+
+            // Identitet: original-NEF:erna (skrivs aldrig till).
+            let identityNames = selectedFiles + (windowSourceName.map { selectedFiles.contains($0) ? [] : [$0] } ?? [])
+            let identity = identityNames.compactMap { nefLookup[$0] }
+            let fingerprint = currentHDRFingerprint(identity: identity)
+            let existing = existingHDR[groupId]
+            let decision = HDRLog.decide(fileExists: existing?.tiff != nil, entry: entry, fingerprint: fingerprint,
+                                         currentVersion: HDREngine.version, policy: policy, force: forceAll,
+                                         identityComplete: identity.count == identityNames.count)
+            switch decision {
+            case .skip:
+                continue
+            case .adopt:
+                hdrLog.entries[key] = HDRLog.Entry(engineVersion: HDRLog.legacyEngineVersion, fingerprint: fingerprint, adopted: true,
+                                                   frames: selectedFiles)
+                adopted += 1
+                continue
+            case .merge(let reason):
+                groupsToMerge.append(HDRMergeJob(
+                    groupId: groupId, previewPaths: previewPaths, frames: frames, windowSource: windowSource,
+                    frameNames: selectedFiles, windowSourceName: windowSourceName,
+                    manualSelection: entry?.manualSelection ?? false,
+                    firstPhotoDate: Self.firstPhotoDate(ofGroup: group), fingerprint: fingerprint,
+                    tiffURL: existing?.tiff ?? hdrDir.appendingPathComponent("hdr_group_\(groupId).tiff"),
+                    jpegURL: existing?.jpeg ?? hdrDir.appendingPathComponent("hdr_group_\(groupId).jpg"),
+                    reason: reason))
+            }
+        }
+        if adopted > 0 || forceAll {
+            hdrLog.updatedAt = Date()
+            hdrLog.save(to: outputDir)
+            if adopted > 0 {
+                state.appendStepLog(.createHDR, "\(adopted) befintliga HDR-filer registrerade i hdr.json (görs inte om)", type: .info)
+            }
         }
 
         if groupsToMerge.isEmpty {
@@ -105,11 +209,8 @@ extension PipelineRunner {
         }
         defer { if engine == "opencv" { try? FileManager.default.removeItem(at: scriptPath) } }
 
-        let hdrOptions = HDREngine.Options(
-            maxDimension: AppSettings.shared.hdrMaxDimension,
-            alignEnabled: AppSettings.shared.hdrAlignEnabled,
-            sharpenEnabled: AppSettings.shared.hdrSharpenEnabled
-        )
+        let baseOptions = currentHDROptions()
+        let debugDir = Self.hdrDebugEnabled ? outputDir.appendingPathComponent("hdr_debug") : nil
 
         // Fas 1b: adress, GPS och bokningsinfo är kända efter kalendersteget, så metadatan skrivs
         // direkt i samma exiftool-anrop som EXIF-kopian (i stället för en omskrivning till i
@@ -131,21 +232,26 @@ extension PipelineRunner {
             state.progress = Double(idx) / Double(groupsToMerge.count)
             state.updateStepProgress(.createHDR, processed: idx, total: groupsToMerge.count)
 
-            let inputCount = engine == "opencv" ? group.previewPaths.count : group.rawURLs.count
+            let inputCount = engine == "opencv" ? group.previewPaths.count : group.frames.count
             state.appendLog("HDR grupp \(group.groupId): \(inputCount) bilder (\(engineLabel))...", type: .info)
 
             // Update detailed progress
             state.currentMergeGroupId = group.groupId
             state.currentMergeInputURLs = engine == "opencv"
                 ? group.previewPaths.map { URL(fileURLWithPath: $0) }
-                : group.rawURLs
+                : group.frames.map(\.url)
             state.currentMergeOutputURL = nil
 
-            let outputPath = hdrDir.appendingPathComponent("hdr_group_\(group.groupId).tiff").path
-            let previewPath = hdrDir.appendingPathComponent("hdr_group_\(group.groupId).jpg").path
+            let outputPath = group.tiffURL.path
+            let previewPath = group.jpegURL.path
+            // TIFF:en byts in först när den är färdigskriven, så en misslyckad omgörning lämnar den gamla.
+            try? FileManager.default.createDirectory(at: group.tiffURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? FileManager.default.createDirectory(at: group.jpegURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
-            let inputNames = (engine == "opencv" ? group.previewPaths.map { URL(fileURLWithPath: $0).lastPathComponent } : group.rawURLs.map(\.lastPathComponent)).joined(separator: ", ")
-            state.appendStepLog(.createHDR, "HDR grupp \(group.groupId): mergar \(inputCount) bilder (\(inputNames))...")
+            let inputNames = (engine == "opencv" ? group.previewPaths.map { URL(fileURLWithPath: $0).lastPathComponent } : group.frames.map(\.url.lastPathComponent)).joined(separator: ", ")
+            let windowNote = group.windowSourceName.map { group.frameNames.contains($0) ? "" : ", fönster från \($0)" } ?? ""
+            state.appendStepLog(.createHDR, "HDR grupp \(group.groupId) (\(group.reason)): mergar \(inputCount) bilder (\(inputNames)\(windowNote))...")
+            var mergeResult: HDREngine.MergeResult?
 
             let groupStarted = Date()
             do {
@@ -157,28 +263,36 @@ extension PipelineRunner {
                     )
                 } else {
                     let groupLabel = "Grupp \(idx + 1)/\(groupsToMerge.count)"
-                    let imageCount = group.rawURLs.count
+                    let imageCount = group.frames.count + (group.windowSourceName.map { group.frameNames.contains($0) ? 0 : 1 } ?? 0)
                     let state = self.state
                     let reporter = HDRProgressReporter()
-                    let rawURLs = group.rawURLs
-                    let tiffURL = URL(fileURLWithPath: outputPath)
-                    let jpegURL = URL(fileURLWithPath: previewPath)
-                    // Sorteringen flyttar filerna till gruppens adressmapp (första bildens fotodatum).
-                    // Okänt datum → okänd mapp: bara EXIF nu, metadatasteget tar resten.
-                    let folderName = group.firstPhotoDate.map { addressFolderName(forPhotoDate: $0) }
-                    let metadata = (
-                        tiff: folderName.flatMap { Self.creationMetadata(for: tiffURL, folderName: $0, context: metadataContext) },
-                        jpeg: folderName.flatMap { Self.creationMetadata(for: jpegURL, folderName: $0, context: metadataContext) }
-                    )
-                    let metadataWritten = try await PipelineMetrics.jobAsync(
+                    let rawURLs = group.frames.map(\.url)
+                    let tiffURL = group.tiffURL
+                    let jpegURL = group.jpegURL
+                    // Sorteringen flyttar filerna till gruppens adressmapp (första bildens fotodatum);
+                    // ligger filen redan i en adressmapp gäller den. Okänt datum → okänd mapp: bara
+                    // EXIF nu, metadatasteget tar resten.
+                    let groupFolder = group.firstPhotoDate.map { addressFolderName(forPhotoDate: $0) }
+                    func fileMetadata(for url: URL) -> IPTCFileMetadata? {
+                        guard let folder = Self.addressFolderName(containing: url) ?? groupFolder else { return nil }
+                        return Self.creationMetadata(for: url, folderName: folder, context: metadataContext)
+                    }
+                    let metadata = (tiff: fileMetadata(for: tiffURL), jpeg: fileMetadata(for: jpegURL))
+                    var hdrOptions = baseOptions
+                    hdrOptions.maskURL = Self.hdrMaskURL(outputDir: outputDir, groupId: group.groupId)
+                    hdrOptions.debugDir = debugDir
+                    let frames = group.frames
+                    let windowSource = group.windowSource
+                    let result = try await PipelineMetrics.jobAsync(
                         step: "hdr", unit: "group:\(group.groupId)",
                         bytesIn: PipelineMetrics.totalSize(of: rawURLs),
-                        bytesOut: { (_: Bool) in
+                        bytesOut: { (_: HDREngine.MergeResult) in
                             PipelineMetrics.totalSize(of: [URL(fileURLWithPath: outputPath), URL(fileURLWithPath: previewPath)])
                         }
                     ) {
                         try await HDREngine.merge(
-                            rawURLs: rawURLs,
+                            frames: frames,
+                            windowSource: windowSource,
                             options: hdrOptions,
                             tiffURL: tiffURL,
                             jpegURL: jpegURL,
@@ -194,10 +308,29 @@ extension PipelineRunner {
                         )
                     }
                     recordCreationStamps([(tiffURL, metadata.tiff), (jpegURL, metadata.jpeg)],
-                                         metadataWritten: metadataWritten, outputDir: outputDir)
+                                         metadataWritten: result.metadataWritten, outputDir: outputDir)
+                    let rewroteSorted = Self.addressFolderName(containing: tiffURL) != nil || Self.addressFolderName(containing: jpegURL) != nil
+                    if rewroteSorted && (metadata.tiff == nil || metadata.jpeg == nil || !result.metadataWritten) {
+                        // En levererad fil skrevs om utan full metadata: metadatasteget måste köras igen.
+                        try? FileManager.default.removeItem(at: outputDir.appendingPathComponent("metadata_written.json"))
+                    }
+                    mergeResult = result
                 }
 
                 if FileManager.default.fileExists(atPath: outputPath) {
+                    hdrLog.entries[HDRLog.key(groupId: group.groupId)] = HDRLog.Entry(
+                        engineVersion: HDREngine.version, fingerprint: group.fingerprint, frames: group.frameNames,
+                        manualSelection: group.manualSelection,
+                        reference: mergeResult.map { $0.referenceFrame.deletingPathExtension().lastPathComponent + ".NEF" },
+                        windowSource: mergeResult?.windowSource == nil ? nil : group.windowSourceName,
+                        window: mergeResult?.window, mergedAt: Date(), seconds: Date().timeIntervalSince(groupStarted))
+                    hdrLog.updatedAt = Date()
+                    hdrLog.save(to: outputDir)
+                    if let window = mergeResult?.window {
+                        state.appendStepLog(.createHDR, window.applied
+                            ? String(format: "HDR grupp %d: fönster från mörkaste exponeringen (%.1f %% av bilden, gain %+.1f EV)", group.groupId, window.maskFraction * 100, window.gainEV)
+                            : "HDR grupp \(group.groupId): ingen window pull — \(window.reason ?? "inget att hämta")")
+                    }
                     successCount += 1
                     let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputPath)[.size] as? Int) ?? 0
                     let sizeMB = String(format: "%.1f", Double(fileSize) / 1_048_576.0)
@@ -269,6 +402,13 @@ extension PipelineRunner {
         state.reMergingGroups.insert(group.id)
         defer { state.reMergingGroups.remove(group.id) }
         var mergeSucceeded = false
+        var mergeResult: HDREngine.MergeResult?
+        let started = Date()
+        // Fönsterkällan: gruppens mörkaste exponering, även om den inte är vald.
+        let groupPhotos = state.photos(in: group)
+        let darkest = groupPhotos.allSatisfy({ $0.exposureSeconds > 0 })
+            ? groupPhotos.min(by: { $0.exposureSeconds < $1.exposureSeconds }) : nil
+        let windowPhoto = AppSettings.shared.hdrWindowPullEnabled && AppSettings.shared.hdrEngine != "opencv" ? darkest : nil
 
         let engine = AppSettings.shared.hdrEngine
         let engineLabel = engine == "opencv" ? "Mertens exposure fusion (OpenCV)" : "Exposure fusion (Core Image RAW)"
@@ -297,16 +437,13 @@ extension PipelineRunner {
                 )
                 mergeSucceeded = true
             } else {
-                let rawURLs = selectedPhotos.compactMap { $0.dngURL ?? $0.nefURL }
-                guard rawURLs.count >= 2 else {
+                let frames = selectedPhotos.map { HDREngine.Frame(url: $0.dngURL ?? $0.nefURL, exposureSeconds: $0.exposureSeconds) }
+                guard frames.count >= 2 else {
                     state.appendLog("Grupp \(group.id): för få RAW-filer (DNG/NEF) för HDR.", type: .warning)
                     return []
                 }
-                let hdrOptions = HDREngine.Options(
-                    maxDimension: AppSettings.shared.hdrMaxDimension,
-                    alignEnabled: AppSettings.shared.hdrAlignEnabled,
-                    sharpenEnabled: AppSettings.shared.hdrSharpenEnabled
-                )
+                var hdrOptions = currentHDROptions()
+                hdrOptions.maskURL = Self.hdrMaskURL(outputDir: outputDir, groupId: group.id)
                 // Samma metadata som metadatasteget skulle skriva (fas 1b): mappen filen redan ligger
                 // i, annars den sorteringen flyttar den till. Saknar adressen GPS ännu, eller är
                 // metadatan okänd, skrivs bara EXIF och stämpeln tas bort så att metadatasteget skriver resten.
@@ -317,14 +454,17 @@ extension PipelineRunner {
                                           context: metadataContext)
                 }
                 let metadata = (tiff: fileMetadata(for: hdrTiff), jpeg: fileMetadata(for: hdrJpeg))
-                let metadataWritten = try await HDREngine.merge(
-                    rawURLs: rawURLs,
+                let result = try await HDREngine.merge(
+                    frames: frames,
+                    windowSource: windowPhoto.map { HDREngine.Frame(url: $0.dngURL ?? $0.nefURL, exposureSeconds: $0.exposureSeconds) },
                     options: hdrOptions,
                     tiffURL: hdrTiff,
                     jpegURL: hdrJpeg,
                     exiftoolPath: try? requireExiftool(),
                     metadata: metadata
                 )
+                mergeResult = result
+                let metadataWritten = result.metadataWritten
                 recordCreationStamps([(hdrTiff, metadata.tiff), (hdrJpeg, metadata.jpeg)],
                                      metadataWritten: metadataWritten, outputDir: outputDir)
                 if metadata.tiff == nil || metadata.jpeg == nil || !metadataWritten {
@@ -338,6 +478,23 @@ extension PipelineRunner {
         }
 
         if mergeSucceeded, FileManager.default.fileExists(atPath: hdrTiff.path) {
+            // Granskningens urval sparas i hdr.json, så att HDR-steget inte går tillbaka till
+            // bracket-analysens förslag (och gör om gruppen) vid nästa körning.
+            let frameNames = selectedPhotos.map(\.filename)
+            let windowName = mergeResult?.windowSource == nil ? nil : windowPhoto?.filename
+            let identityNames = frameNames + (windowName.map { frameNames.contains($0) ? [] : [$0] } ?? [])
+            let nefByName = Dictionary(groupPhotos.map { ($0.filename, $0.nefURL) }, uniquingKeysWith: { a, _ in a })
+            var hdrLog = HDRLog.load(from: outputDir) ?? HDRLog()
+            hdrLog.entries[HDRLog.key(groupId: group.id)] = HDRLog.Entry(
+                engineVersion: HDREngine.version,
+                fingerprint: currentHDRFingerprint(identity: identityNames.compactMap { nefByName[$0] }),
+                frames: frameNames, manualSelection: true,
+                reference: mergeResult.map { $0.referenceFrame.deletingPathExtension().lastPathComponent + ".NEF" },
+                windowSource: windowName, window: mergeResult?.window, mergedAt: Date(),
+                seconds: Date().timeIntervalSince(started))
+            hdrLog.updatedAt = Date()
+            hdrLog.save(to: outputDir)
+
             // Use JPEG preview for UI if available, otherwise TIFF
             let previewURL = FileManager.default.fileExists(atPath: hdrJpeg.path) ? hdrJpeg : hdrTiff
             if let idx = state.bracketGroups.firstIndex(where: { $0.id == group.id }) {
@@ -345,8 +502,11 @@ extension PipelineRunner {
                 state.bracketGroups[idx].enhancedPreviewURL = nil // gammal förbättring hör till den förra sammanslagningen
             }
             state.appendLog("HDR-ommerge klar för grupp \(group.id) (16-bit TIFF).", type: .success)
+            // Förbättra gruppen direkt, annars visar granskningen (och levererar sorteringen)
+            // den förbättrade versionen av den förra sammanslagningen.
+            let enhanced = await reEnhanceHDRGroup(group.id)
             audio.playStepComplete()
-            return [hdrTiff, hdrJpeg]
+            return [hdrTiff, hdrJpeg] + enhanced
         } else {
             state.appendLog("HDR-ommerge misslyckades för grupp \(group.id) — den tidigare sammanslagningen ligger kvar.", type: .error)
             audio.playError()

@@ -20,7 +20,17 @@ nonisolated enum HDREngine {
     /// det som bygger på HDR-filen (t.ex. "Förbättra bilder") vet att göra om.
     /// 2 = rimlig justering (3000 px, avvisade orimliga förskjutningar), skärpning
     /// och rätta kanter i pyramiden.
-    static let version = 2
+    /// 3 = window pull (fönster från mörkaste exponeringen), EV-sortering med
+    /// medianreferens, exponeringsmatchad registrering och straff för klippta pixlar
+    /// i fusionsvikterna (docs/plan-hdr-fonster.md, fas 0–1).
+    static let version = 3
+
+    /// En exponering: RAW-filen (DNG eller NEF) och exponeringstiden i sekunder
+    /// (0 = okänd).
+    struct Frame: Sendable, Equatable {
+        var url: URL
+        var exposureSeconds: Double
+    }
 
     struct Options: Sendable {
         var maxDimension: Int = 6000
@@ -31,6 +41,22 @@ nonisolated enum HDREngine {
         /// Lätt skärpning (unsharp mask) av resultatet, som kamerans och
         /// Lightrooms standardrendering gör — RAW-renderingen skärper inte.
         var sharpenEnabled: Bool = true
+        /// Window pull: fönsterutsikten från den mörkaste exponeringen.
+        var windowPull = WindowPull.Options()
+        /// Var fönstermasken sparas (PNG, ~1500 px) — `nil` = sparas inte.
+        var maskURL: URL?
+        /// Felsökningsmapp: mask, mörkMatchad, fusion utan pull och `hdr_metrics.json`.
+        var debugDir: URL?
+    }
+
+    /// Vad sammanslagningen gjorde — sparas i `hdr.json`.
+    struct MergeResult: Sendable {
+        var metadataWritten: Bool
+        /// Exponeringarna i den ordning de slogs ihop (mörkast först) och referensen.
+        var orderedFrames: [URL]
+        var referenceFrame: URL
+        var windowSource: URL?
+        var window: WindowPull.Stats?
     }
 
     enum EngineError: LocalizedError {
@@ -45,8 +71,36 @@ nonisolated enum HDREngine {
         }
     }
 
-    /// Merges `rawURLs` (already resolved to DNG-if-available/NEF paths, in
-    /// their original bracket order) into one TIFF+JPEG pair at `tiffURL`/`jpegURL`.
+    /// Exponeringarna sorterade från mörkast till ljusast. Kameran tar dem i olika
+    /// ordning (Nikon: 0/−/+), och referensen ska vara medianexponeringen — förut togs
+    /// `count/2` i tagningsordning, vilket gav fel vitbalans/registreringsreferens.
+    /// Saknas en exponeringstid behålls ordningen som den kom.
+    static func orderedFrames(_ frames: [Frame]) -> [Frame] {
+        guard frames.allSatisfy({ $0.exposureSeconds > 0 }) else { return frames }
+        return frames.enumerated().sorted { a, b in
+            a.element.exposureSeconds != b.element.exposureSeconds
+                ? a.element.exposureSeconds < b.element.exposureSeconds
+                : a.offset < b.offset
+        }.map(\.element)
+    }
+
+    /// Referensens index i de sorterade exponeringarna: medianen (vid jämnt antal den
+    /// ljusare av de två mittersta — interiören är det viktiga i en fastighetsbild).
+    static func referenceIndex(count: Int) -> Int { count / 2 }
+
+    /// Fönsterkällan: gruppens mörkaste exponering, men bara om den är mörkare än
+    /// referensen (annars finns inget att hämta).
+    static func windowSource(among group: [Frame]) -> Frame? {
+        let known = group.filter { $0.exposureSeconds > 0 }
+        guard known.count == group.count, let darkest = known.min(by: { $0.exposureSeconds < $1.exposureSeconds }) else {
+            return group.first
+        }
+        return darkest
+    }
+
+    /// Slår ihop `frames` (DNG-if-available/NEF, valfri ordning — sorteras här) till
+    /// ett TIFF+JPEG-par. `windowSource` (gruppens mörkaste exponering, även om den inte
+    /// ingår i `frames`) används för window pull när det är på.
     ///
     /// Checks `Task.checkCancellation()` between each image render and
     /// before/after fusion, so a cancelled pipeline `Task` unwinds promptly
@@ -59,7 +113,6 @@ nonisolated enum HDREngine {
     /// - Parameter metadata: IPTC/XMP/GPS för TIFF- respektive JPEG-filen när den redan är
     ///   känd (fas 1b) — skrivs i samma exiftool-anrop som EXIF-kopian. `nil` = bara EXIF,
     ///   metadatasteget skriver resten.
-    /// - Returns: sant om metadatan (EXIF + ev. IPTC/XMP/GPS) skrevs utan fel.
     ///
     /// `@concurrent`: projektet bygger med `NonisolatedNonsendingByDefault`, så
     /// utan det kördes hela sammanslagningen (sekunder per grupp, pixel för pixel)
@@ -67,24 +120,43 @@ nonisolated enum HDREngine {
     @concurrent
     @discardableResult
     static func merge(
-        rawURLs: [URL],
+        frames inputFrames: [Frame],
+        windowSource: Frame? = nil,
         options: Options = Options(),
         tiffURL: URL,
         jpegURL: URL,
         exiftoolPath: String?,
         metadata: (tiff: IPTCFileMetadata?, jpeg: IPTCFileMetadata?) = (nil, nil),
         progress: (@Sendable (Double) -> Void)? = nil
-    ) async throws -> Bool {
-        guard rawURLs.count >= 2 else { throw EngineError.tooFewImages }
+    ) async throws -> MergeResult {
+        guard inputFrames.count >= 2 else { throw EngineError.tooFewImages }
+        let started = Date()
 
-        let middleIndex = rawURLs.count / 2
+        let frames = orderedFrames(inputFrames)
+        let rawURLs = frames.map(\.url)
+        let middleIndex = referenceIndex(count: frames.count)
         let whiteBalance = try PipelineMetrics.phase("readWhiteBalance") { try RAWRenderer.readWhiteBalance(url: rawURLs[middleIndex]) }
 
+        // Fönsterkällan: en fusionsram om den mörkaste redan ingår, annars en extra rendering.
+        var pullSource: Frame?
+        if options.windowPull.enabled, let candidate = windowSource ?? frames.first {
+            let darkestFused = frames[0]
+            if candidate.url == darkestFused.url || (candidate.exposureSeconds > 0 && darkestFused.exposureSeconds > 0
+                                                      && candidate.exposureSeconds >= darkestFused.exposureSeconds) {
+                pullSource = darkestFused
+            } else {
+                pullSource = candidate
+            }
+        }
+        let extraWindowFrame = pullSource.map { $0.url != frames[0].url } ?? false
+        let renderCount = rawURLs.count + (extraWindowFrame ? 1 : 0)
+
         var rendered: [RAWRenderer.RenderedImage] = []
-        rendered.reserveCapacity(rawURLs.count)
-        for (i, url) in rawURLs.enumerated() {
+        rendered.reserveCapacity(renderCount)
+        let renderList = rawURLs + (extraWindowFrame ? [pullSource!.url] : [])
+        for (i, url) in renderList.enumerated() {
             try Task.checkCancellation()
-            progress?(0.05 + 0.45 * Double(i) / Double(rawURLs.count))
+            progress?(0.05 + 0.45 * Double(i) / Double(renderCount))
             rendered.append(try PipelineMetrics.phase("render", bytesIn: PipelineMetrics.totalSize(of: [url])) {
                 try RAWRenderer.render(url: url, whiteBalance: whiteBalance, maxDimension: options.maxDimension)
             })
@@ -95,7 +167,11 @@ nonisolated enum HDREngine {
         guard rendered.allSatisfy({ $0.width == width && $0.height == height }) else {
             throw EngineError.sizeMismatch
         }
+        let windowIndex: Int? = pullSource == nil ? nil : (extraWindowFrame ? rendered.count - 1 : 0)
 
+        var darkShift: CGPoint?
+        var darkShiftRejected = false
+        var residualShift: CGPoint?
         if options.alignEnabled {
             let reference = rendered[middleIndex]
             for i in rendered.indices where i != middleIndex {
@@ -106,30 +182,74 @@ nonisolated enum HDREngine {
                     )
                 }
                 // Orimliga förskjutningar avvisas, små rundas till hela pixlar — se sanitizedShift.
-                guard let shift = HDRAlignment.sanitizedShift(measured, width: width, height: height), shift != .zero else { continue }
+                let shift = HDRAlignment.sanitizedShift(measured, width: width, height: height)
+                if i == windowIndex {
+                    darkShift = measured
+                    darkShiftRejected = shift == nil
+                }
+                guard let shift, shift != .zero else { continue }
                 rendered[i].pixels = PipelineMetrics.phase("align.shift") {
                     RAWRenderer.shiftRGBA(rendered[i].pixels, width: width, height: height, dx: Float(shift.x), dy: Float(shift.y))
                 }
+            }
+            // Felsökning: kvarvarande förskjutning för fönsterkällan efter justeringen.
+            if options.debugDir != nil, let windowIndex, windowIndex != middleIndex {
+                let residual = try HDRAlignment.computeShift(floating: rendered[windowIndex], reference: reference,
+                                                             maxAlignDimension: HDRAlignment.refinedAlignDimension)
+                residualShift = residual
             }
         }
         progress?(0.55)
         try Task.checkCancellation()
 
-        let images = rendered.map(\.pixels)
-        let fused = try ExposureFusion.fuse(images: images, width: width, height: height) { fraction in
+        let images = rendered.prefix(rawURLs.count).map(\.pixels)
+        let fused = try ExposureFusion.fuse(images: Array(images), width: width, height: height) { fraction in
             try Task.checkCancellation()
-            progress?(0.55 + 0.35 * fraction)
+            progress?(0.55 + 0.30 * fraction)
         }
+
+        try Task.checkCancellation()
+        var pulled = fused
+        var windowStats: WindowPull.Stats?
+        var pullResult: WindowPull.Result?
+        if let windowIndex {
+            let result = PipelineMetrics.phase("windowPull") {
+                WindowPull.apply(fused: fused, reference: rendered[middleIndex].pixels, dark: rendered[windowIndex].pixels,
+                                 width: width, height: height, options: options.windowPull, keepFullMask: options.debugDir != nil)
+            }
+            pulled = result.pixels
+            windowStats = result.stats
+            pullResult = result
+            if let maskURL = options.maskURL {
+                try? FileManager.default.createDirectory(at: maskURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                if result.stats.applied {
+                    try? HDRImageOps.writeGrayPNG(result.mask, to: maskURL)
+                } else {
+                    try? FileManager.default.removeItem(at: maskURL)
+                }
+            }
+        } else if let maskURL = options.maskURL {
+            try? FileManager.default.removeItem(at: maskURL)
+        }
+        progress?(0.9)
 
         try Task.checkCancellation()
         // Radien skalas med upplösningen: 1,2 px vid kamerans 8256 px.
         let finalPixels = options.sharpenEnabled
             ? PipelineMetrics.phase("sharpen") {
-                HDRWriter.sharpen(pixels: fused, width: width, height: height, radius: max(0.6, 1.2 * Double(max(width, height)) / 8256), intensity: 0.6)
+                HDRWriter.sharpen(pixels: pulled, width: width, height: height, radius: max(0.6, 1.2 * Double(max(width, height)) / 8256), intensity: 0.6)
             }
-            : fused
+            : pulled
         try HDRWriter.write(pixels: finalPixels, width: width, height: height, tiffURL: tiffURL, jpegURL: jpegURL, jpegMaxDimension: options.jpegMaxDimension, jpegQuality: options.jpegQuality)
         progress?(0.95)
+
+        if let debugDir = options.debugDir {
+            try? writeDebug(to: debugDir, group: tiffURL.deletingPathExtension().lastPathComponent,
+                            fused: fused, output: pulled, rendered: rendered, middleIndex: middleIndex, windowIndex: windowIndex,
+                            width: width, height: height, pull: pullResult, frames: rawURLs, windowSource: pullSource?.url,
+                            darkShift: darkShift, darkShiftRejected: darkShiftRejected, residualShift: residualShift,
+                            seconds: Date().timeIntervalSince(started))
+        }
 
         var metadataWritten = false
         if let exiftoolPath {
@@ -141,6 +261,40 @@ nonisolated enum HDREngine {
             }
         }
         progress?(1.0)
-        return metadataWritten
+        return MergeResult(metadataWritten: metadataWritten, orderedFrames: rawURLs, referenceFrame: rawURLs[middleIndex],
+                           windowSource: pullSource?.url, window: windowStats)
+    }
+
+    /// Felsökningsfiler per grupp i `<debugDir>/<grupp>/`: `mask.png`, `dark_matched.jpg`,
+    /// `fusion.jpg` (utan pull), `pull.jpg` (med pull, före skärpning), `dark_raw.jpg`
+    /// (mörkaste exponeringen, registrerad) och `hdr_metrics.json`.
+    private static func writeDebug(to dir: URL, group: String, fused: [Float], output: [Float], rendered: [RAWRenderer.RenderedImage],
+                                   middleIndex: Int, windowIndex: Int?, width: Int, height: Int, pull: WindowPull.Result?,
+                                   frames: [URL], windowSource: URL?, darkShift: CGPoint?, darkShiftRejected: Bool,
+                                   residualShift: CGPoint?, seconds: Double) throws {
+        let dir = dir.appendingPathComponent(group, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try HDRImageOps.writeJPEG(fused, width: width, height: height, to: dir.appendingPathComponent("fusion.jpg"))
+        try HDRImageOps.writeJPEG(output, width: width, height: height, to: dir.appendingPathComponent("pull.jpg"))
+        let dark = windowIndex.map { rendered[$0].pixels } ?? rendered[0].pixels
+        try HDRImageOps.writeJPEG(dark, width: width, height: height, to: dir.appendingPathComponent("dark_raw.jpg"))
+        if let pull {
+            try HDRImageOps.writeGrayPNG(pull.mask, to: dir.appendingPathComponent("mask.png"))
+            try HDRImageOps.writeJPEG(WindowPull.matchedDark(dark, gain: pull.gain), width: width, height: height,
+                                      to: dir.appendingPathComponent("dark_matched.jpg"))
+        }
+        let m = WindowPullMetrics.measure(output: output, fusion: fused, dark: dark, reference: rendered[middleIndex].pixels,
+                                          fullMask: pull?.fullMask, width: width, height: height)
+        let report = WindowPullMetrics.Report(
+            group: group, frames: frames.map(\.lastPathComponent), reference: frames[middleIndex].lastPathComponent,
+            windowSource: windowSource?.lastPathComponent, window: pull?.stats, components: pull?.components, maskFraction: m.maskFraction,
+            clippedInMask: m.clipped, structureVsDark: m.structure, lumaSpread: m.spread, chroma: m.chroma,
+            haloWidthPx: m.haloWidth, haloAmplitude: m.haloAmplitude,
+            darkShiftPx: darkShift.map { [Double($0.x), Double($0.y)] }, darkShiftRejected: darkShift == nil ? nil : darkShiftRejected,
+            residualShiftPx: residualShift.map { Double(($0.x * $0.x + $0.y * $0.y).squareRoot()) },
+            residualShiftVector: residualShift.map { [Double($0.x), Double($0.y)] }, seconds: seconds, pullSeconds: pull?.stats.seconds ?? 0)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(report).write(to: dir.appendingPathComponent("hdr_metrics.json"))
     }
 }
