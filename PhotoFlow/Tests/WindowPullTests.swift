@@ -114,8 +114,14 @@ struct WindowPullTests {
         var brighter = WindowPull.Options()
         brighter.brightnessEV = 0.5
         let bright = run(scene, options: brighter)
-        #expect(bright.gain > normal.gain)
-        #expect(luma(bright.pixels, 460, 160) > luma(normal.pixels, 460, 160))
+        var darker = WindowPull.Options()
+        darker.brightnessEV = -0.5
+        let dim = run(scene, options: darker)
+        // Uppåt kan gain slå i `maxGainEV` (utsikten är mörk i scenen), nedåt alltid verkan.
+        #expect(bright.gain >= normal.gain)
+        #expect(luma(bright.pixels, 460, 160) >= luma(normal.pixels, 460, 160))
+        #expect(dim.gain < normal.gain)
+        #expect(luma(dim.pixels, 460, 160) < luma(normal.pixels, 460, 160))
 
         var off = WindowPull.Options()
         off.enabled = false
@@ -209,6 +215,47 @@ struct WindowPullTests {
         #expect(result.mask.data.allSatisfy { $0 >= 0 && $0 <= 1 })
         #expect(result.mask.data[160 * width + 460] > 0.9)
         #expect(result.mask.data[350 * width + 50] == 0)
+    }
+
+    @Test("Högdagerskuldran: identitet under knät, kontinuerlig, monoton och under vitpunkten")
+    func shoulder_isSmoothAndBounded() {
+        let o = WindowPull.Options()
+        #expect(WindowPull.shoulder(o.shoulderStart - 0.1, start: o.shoulderStart, white: o.shoulderWhite) == o.shoulderStart - 0.1)
+        var previous: Float = 0
+        for i in 0...400 {
+            let y = Float(i) / 100 // 0…4 (gammakodat, över 1 efter gain)
+            let v = WindowPull.shoulder(y, start: o.shoulderStart, white: o.shoulderWhite)
+            #expect(v >= previous)
+            #expect(v <= o.shoulderWhite)
+            #expect(abs(v - y) < 0.02 || y > o.shoulderStart) // lutning 1 i knät
+            previous = v
+        }
+        // En överexponerad pixel klipps inte hårt: den hamnar under vitpunkten.
+        #expect(WindowPull.matchedValue(0.95, gain: 2) < o.shoulderWhite)
+    }
+
+    @Test("Ljus himmel i utsikten (p99 nära vitt) hindrar inte att fönstret når sin mål-median")
+    func brightSkyInView_doesNotHoldBackMedian() {
+        // Utsikten är mörk (median ~0,30 i mörka ramen) men övre femtedelen är nästan vit
+        // himmel (0,94) — med det gamla hårda p99-taket blev gain ≈ 0 EV och fönstret mörkt.
+        let scene = makeScene(extra: { x, y, _, d, _ in
+            guard window.contains(x, y) else { return }
+            let v: Float = y < window.y0 + 40 ? 0.94 : ((x / 2) % 2 == 0 ? 0.26 : 0.34)
+            d = (v, v, v)
+        })
+        let result = run(scene)
+        #expect(result.stats.applied)
+        #expect(result.stats.gainEV > 0.4)
+        // Jämfört med det gamla hårda taket (p99 ≤ 0,97 efter gain, axel 0,9 → 1, mål 0,66).
+        var old = WindowPull.Options()
+        old.targetMedian = 0.66; old.maxP99 = 0.97; old.shoulderStart = 0.9; old.shoulderWhite = 1
+        let before = run(scene, options: old)
+        #expect(before.stats.gainEV < 0.2)
+        // Utsiktens del (under himlen): ljusare än förut, med struktur kvar och inget klippt.
+        let a = luma(result.pixels, 460, 200), b = luma(result.pixels, 462, 200)
+        #expect((a + b) / 2 > (luma(before.pixels, 460, 200) + luma(before.pixels, 462, 200)) / 2 + 0.03)
+        #expect(abs(a - b) > 0.04)
+        #expect(clippedFraction(result.pixels, in: window) < 0.02)
     }
 
     @Test("Hålfyllnad: mörkare partier mitt i fönstret blir en del av fönstret")

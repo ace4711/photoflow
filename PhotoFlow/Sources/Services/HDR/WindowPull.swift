@@ -15,7 +15,8 @@ import Foundation
 /// 3. **Spökskydd**: i ett band kring maskkanten dras masken in där referensen och den
 ///    (exponeringsmatchade) mörka ramen skiljer sig — rörelse eller kvarvarande förskjutning.
 /// 4. **Blandning**: den mörka ramen exponeringsmatchas (gain i linjärt ljus så att
-///    fönstrets median hamnar kring `targetMedian`, med tak för p99) och blandas in:
+///    fönstrets median hamnar kring `targetMedian`; toppen komprimeras av en mjuk
+///    högdagerskuldra i stället för att ett hårt p99-tak håller nere hela fönstret) och blandas in:
 ///    `ut = (1 − m·s)·fusion + m·s·mörkMatchad`. Hela fönstret kommer därmed från en ram.
 ///
 /// Ren `nonisolated enum` utan tillstånd: anropas från `HDREngine.merge` (redan utanför
@@ -43,10 +44,18 @@ nonisolated enum WindowPull {
         var darkMinLuma: Float = 0.08
         /// Scenluminansen måste vara minst så här många gånger interiörens median.
         var sceneRatio: Float = 4
-        /// Fönstrets mål-median (gammakodad luma) efter exponeringsmatchningen.
-        var targetMedian: Float = 0.66
-        /// Högsta tillåtna p99 (max-kanal) i masken efter matchningen.
-        var maxP99: Float = 0.97
+        /// Fönstrets mål-median (gammakodad luma) efter exponeringsmatchningen. 0,66 med hårt
+        /// p99-tak (≤ 0,97) gav i praktiken bara +0,1 EV: p99 i utsikten ligger nästan alltid vid
+        /// 0,94–0,95 (nästan vit himmel), så taket band i 14 av 22 grupper. Uppmätt 2026-10-04,
+        /// se docs/plan-hdr-fonster.md ("Ljusare utsikt").
+        var targetMedian: Float = 0.72
+        /// Högsta tillåtna p99 (max-kanal, gammakodad) i masken efter gain men *före*
+        /// högdagerskuldran — får vara över 1: skuldran komprimerar toppen mjukt.
+        var maxP99: Float = 1.12
+        /// Högdagerskuldra (gammakodad, per kanal) på den matchade mörka ramen: identitet
+        /// upp till `shoulderStart`, därefter mjukt mot `shoulderWhite` (nås aldrig).
+        var shoulderStart: Float = 0.8
+        var shoulderWhite: Float = 0.98
         /// Största upp- respektive nedjustering av den mörka ramen, i EV.
         var maxGainEV: Float = 2
         var minGainEV: Float = -1
@@ -229,7 +238,7 @@ nonisolated enum WindowPull {
                             let w = m[p] * strength
                             guard w > 1e-4 else { continue }
                             for c in 0..<3 {
-                                let matched = matchedValue(d[p * 4 + c], gain: gain)
+                                let matched = matchedValue(d[p * 4 + c], gain: gain, options: options)
                                 o[p * 4 + c] = (1 - w) * o[p * 4 + c] + w * matched
                             }
                         }
@@ -247,17 +256,26 @@ nonisolated enum WindowPull {
                       fullMask: keepFullMask ? fullMask : nil, stats: stats, gain: gain, components: components)
     }
 
-    /// Den mörka ramens värde efter gain i linjärt ljus, med mjuk axel över 0,9 så att
-    /// enstaka toppar inte klipps hårt.
-    @inline(__always) static func matchedValue(_ v: Float, gain: Float) -> Float {
-        let y = HDRImageOps.toGamma(HDRImageOps.toLinear(v) * gain)
-        let knee: Float = 0.9
-        guard y > knee else { return y }
-        return knee + (1 - knee) * (1 - expf(-(y - knee) / (1 - knee)))
+    /// Den mörka ramens värde efter gain i linjärt ljus, med högdagerskuldra (se
+    /// `Options.shoulderStart`) så att toppen komprimeras mjukt i stället för att klippas.
+    @inline(__always) static func matchedValue(_ v: Float, gain: Float, options: Options = Options()) -> Float {
+        shoulder(HDRImageOps.toGamma(HDRImageOps.toLinear(v) * gain), start: options.shoulderStart, white: options.shoulderWhite)
+    }
+
+    /// Filmisk skuldra: identitet upp till `start`, därefter `start + (white − start)·(1 − e^(−(y−start)/(white−start)))`
+    /// — lutning 1 i knät, närmar sig `white` utan att nå det.
+    @inline(__always) static func shoulder(_ y: Float, start k: Float, white w: Float) -> Float {
+        guard y > k, w > k else { return y }
+        return k + (w - k) * (1 - expf(-(y - k) / (w - k)))
+    }
+
+    /// Gammakodat värde (får vara > 1) till linjärt ljus, utan klämning uppåt.
+    @inline(__always) static func linearUnclamped(_ v: Float) -> Float {
+        v <= 1 ? HDRImageOps.toLinear(v) : powf((v + 0.055) / 1.055, 2.4)
     }
 
     /// Hela den mörka ramen exponeringsmatchad (felsökningsbild "mörkMatchad").
-    static func matchedDark(_ dark: [Float], gain: Float) -> [Float] {
+    static func matchedDark(_ dark: [Float], gain: Float, options: Options = Options()) -> [Float] {
         var out = dark
         let pixelCount = out.count / 4
         out.withUnsafeMutableBufferPointer { oBuf in
@@ -265,7 +283,7 @@ nonisolated enum WindowPull {
             DispatchQueue.concurrentPerform(iterations: pixelCount / 65536 + 1) { chunk in
                 let start = chunk * 65536, end = min(pixelCount, start + 65536)
                 guard start < end else { return }
-                for p in start..<end { for c in 0..<3 { o[p * 4 + c] = matchedValue(o[p * 4 + c], gain: gain) } }
+                for p in start..<end { for c in 0..<3 { o[p * 4 + c] = matchedValue(o[p * 4 + c], gain: gain, options: options) } }
             }
         }
         return out
@@ -458,7 +476,7 @@ nonisolated enum WindowPull {
                 }
             }
             infos[l]?.ringLuma = Double(HDRImageOps.percentile(ring, 0.5))
-            infos[l]?.matchedLuma = Double(matchedValue(HDRImageOps.percentile(inside, 0.5), gain: gain))
+            infos[l]?.matchedLuma = Double(matchedValue(HDRImageOps.percentile(inside, 0.5), gain: gain, options: options))
         }
         for l in 1...count where keep[l] { detection.kept += 1 }
         detection.mask = maskOf(keep)
@@ -569,7 +587,7 @@ nonisolated enum WindowPull {
     // MARK: - Exponeringsmatchning
 
     /// Gain (linjär faktor) för den mörka ramen: fönstrets median → `targetMedian · 2^brightnessEV`,
-    /// men p99 av max-kanalen ≤ `maxP99`, och inom [minGainEV, maxGainEV].
+    /// men p99 av max-kanalen ≤ `maxP99` före skuldran, och inom [minGainEV, maxGainEV].
     static func matchGain(dark: [Float], mask: Plane, options: Options) -> Float {
         var lumas: [Float] = [], maxes: [Float] = []
         for p in 0..<(mask.width * mask.height) where mask.data[p] >= 0.5
@@ -583,7 +601,7 @@ nonisolated enum WindowPull {
         let p99 = max(HDRImageOps.toLinear(HDRImageOps.percentile(maxes, 0.99)), 1e-5)
         let target = min(options.targetMedian * powf(2, options.brightnessEV), 0.9)
         let gainTarget = HDRImageOps.toLinear(target) / median
-        let gainCap = HDRImageOps.toLinear(options.maxP99) / p99
+        let gainCap = linearUnclamped(options.maxP99) / p99
         let gain = min(gainTarget, gainCap)
         return min(max(gain, powf(2, options.minGainEV)), powf(2, options.maxGainEV))
     }

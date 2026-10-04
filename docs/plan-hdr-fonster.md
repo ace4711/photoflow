@@ -121,3 +121,20 @@ Pull kördes i 22 av 30 grupper (8: inga fönster — oftast när mörkaste rame
 | HDR-tid per grupp (inkl. extra rendering och felsökningsfiler) | 11,8 s | 15,1 s | |
 
 Kända brister: fönster mot mulen himmel blir grå (textur för låg för att sorteras bort, men inget att hämta); reflexer i TV-skärm/spegel dras in; klippta partier som även är klippta i mörka ramen blir jämngrå när gain < 1; halo-måttet mot referensramen är grovt.
+
+### Ljusare utsikt (2026-10-04, `HDREngine.version = 4`)
+
+Önskemål efter jämförelsen: "utsikten lite ljusare". Analys på baslinjen (v2-motorn, 22 grupper med pull, slutbild efter Förbättra): **p99-taket band i 14 av 22 grupper**. p99 av max-kanalen i masken ligger nästan alltid på 0,94–0,95 (nästan vit himmel precis under gränsen för "informativ"), så taket ≤ 0,97 tillät bara ~+0,1 EV medan målet 0,66 hade krävt +0,3 till +3 EV. Förbättra ändrade fönstermedianen lite (±0,05), så det var HDR-steget som höll fönstren mörka.
+
+Ändring i `WindowPull`: hårda taket ersatt med en **högdagerskuldra** på den matchade mörka ramen (per kanal, gammakodad: identitet till 0,8, därefter `0,8 + 0,18·(1 − e^(−(y−0,8)/0,18))` mot 0,98), mål-median 0,72 och p99-gräns *före* skuldran 1,12 (≈ +0,5 EV mer gain än förut i grupperna där taket band). "Fönsterljushet" (EV) verkar som förut på målet. Förbättras dämpning i masken (exponering × 0,5, roll-off från linjärt 0,7) behålls — kandidat B med × 0,75 klippte fönster i Förbättra (32 %, 25 % och 92 % i tre grupper).
+
+Kandidater (`scripts/window-candidates.py`, sida i `~/PhotoFlowBenchmark/results/windows-ljusare-2026-10-04/`), median (värst) över de 22, slutbild efter Förbättra, inre masken:
+
+| Kandidat | Fönstermedian | Klippt i mask (< 2 %) | Struktur vs mörk ram (≥ 0,8) | Gain |
+|---|---|---|---|---|
+| nuvarande (mål 0,66, tak 0,97) | 0,711 (0,354) | 0,0 % (71,7 %) | 0,944 (0,710) | +0,08 EV |
+| **A (vald): mål 0,72, skuldra 0,8→0,98, p99 ≤ 1,12** | 0,757 (0,397) | 0,1 % (73,6 %) | 0,905 (0,656) | +0,55 EV |
+| C: mål 0,74, skuldra 0,85→0,98, p99 ≤ 1,18 | 0,779 (0,414) | 0,4 % (74,2 %) | 0,894 (0,639) | +0,72 EV |
+| B: mål 0,76, p99 ≤ 1,25, Förbättra × 0,75 | 0,803 (0,434) | 0,3 % (91,7 %) | 0,873 (0,617) | +0,90 EV |
+
+Värsta klippta/struktur är samma grupp i alla (frostat glas som är klippt även i mörka ramen). A ger "lite ljusare" (+0,05 i median, +0,5 EV i grupperna där taket band) med i stort sett oförändrad klippning; strukturen sjunker något där himlen trycks in i skuldran (en grupp 0,81 → 0,71, två till 0,82–0,85). En grupp där Förbättra höjer exponeringen klipps mer (3 % → 9 %, i HDR:en 0 %).

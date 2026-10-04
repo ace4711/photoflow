@@ -23,7 +23,8 @@ nonisolated enum HDREngine {
     /// 3 = window pull (fönster från mörkaste exponeringen), EV-sortering med
     /// medianreferens, exponeringsmatchad registrering och straff för klippta pixlar
     /// i fusionsvikterna (docs/plan-hdr-fonster.md, fas 0–1).
-    static let version = 3
+    /// 4 = ljusare fönsterutsikt: högdagerskuldra i stället för hårt p99-tak, mål-median 0,72.
+    static let version = 4
 
     /// En exponering: RAW-filen (DNG eller NEF) och exponeringstiden i sekunder
     /// (0 = okänd).
