@@ -109,6 +109,74 @@ struct BrokerLookTests {
         #expect(abs(r / gg - 1) < 0.02 && abs(b / gg - 1) < 0.02)
     }
 
+    @Test("Fönsterkurvan v4: pressad kring pivoten, monoton, skonar mörka partier och når högst 0,99")
+    func windowCompressMonotone() {
+        let c = BrokerLook.curve(sourcePercentiles: [0.03, 0.12, 0.40, 0.60, 0.75, 0.88, 0.95])
+        let pivot = 0.8
+        var prev = -1.0
+        for i in 0...200 {
+            let x = Double(i) / 200
+            let y = BrokerLook.evaluate(x: c.x, y: c.y, at: x)
+            let v = BrokerLook.windowCompress(x: x, y: y, pivot: pivot)
+            #expect(v >= prev - 1e-12)
+            #expect(v <= BrokerLook.windowCeiling)
+            prev = v
+            if x <= 0.1 { #expect(v == y) }
+            if x >= 0.35 {
+                #expect(abs(v - min(pivot + BrokerLook.windowContrast * (y - pivot) + BrokerLook.windowLift, BrokerLook.windowCeiling)) < 1e-12)
+            }
+        }
+    }
+
+    @Test("Looken med fönstermedian: fönsterkurvan (ev. pressad) och värme; utan median som förut")
+    func lookParametersWindow() {
+        let src = [0.03, 0.12, 0.40, 0.60, 0.75, 0.88, 0.95]
+        let plain = BrokerLook.lookParameters(sourcePercentiles: src)
+        let withWindow = BrokerLook.lookParameters(sourcePercentiles: src, windowMedian: 0.85)
+        #expect(plain.windowWarmth == nil)
+        #expect(withWindow.windowWarmth == BrokerLook.windowWarmth)
+        #expect(withWindow.curveY == plain.curveY)
+        for i in 1..<withWindow.windowCurveY.count { #expect(withWindow.windowCurveY[i] > withWindow.windowCurveY[i - 1]) }
+        #expect(withWindow.windowCurveY.allSatisfy { $0 <= BrokerLook.windowCeiling })
+        // Toppen (x = 1) får nå högre än huvudkurvans tak.
+        #expect(withWindow.windowCurveY.last! >= plain.windowCurveY.last!)
+    }
+
+    @Test("Ljusa ytor avmättas mer än mörka; värme höjer b*")
+    func highlightSaturationAndWarmth() {
+        let flat = [Double](repeating: 1, count: 8)
+        let id: (Double) -> Double = { $0 }
+        func chroma(_ c: (Double, Double, Double)) -> Double {
+            let l = BrokerLook.Lab.fromSRGB(c.0, c.1, c.2); return hypot(l.a, l.b)
+        }
+        let bright = (0.97, 0.92, 0.85), dark = (0.30, 0.25, 0.20)
+        let b1 = BrokerLook.lookColor(bright.0, bright.1, bright.2, curve: id, saturation: 1, hueSaturation: flat)
+        let b08 = BrokerLook.lookColor(bright.0, bright.1, bright.2, curve: id, saturation: 1, hueSaturation: flat, highlightSaturation: 0.8)
+        #expect(chroma(b08) < 0.85 * chroma(b1))
+        let d1 = BrokerLook.lookColor(dark.0, dark.1, dark.2, curve: id, saturation: 1, hueSaturation: flat)
+        let d08 = BrokerLook.lookColor(dark.0, dark.1, dark.2, curve: id, saturation: 1, hueSaturation: flat, highlightSaturation: 0.8)
+        #expect(abs(chroma(d08) - chroma(d1)) < 1e-6)
+        let gray = BrokerLook.lookColor(0.7, 0.7, 0.7, curve: id, saturation: 1, hueSaturation: flat, warmth: 2)
+        let lab = BrokerLook.Lab.fromSRGB(gray.0, gray.1, gray.2)
+        #expect(abs(lab.b - 2) < 0.1)
+    }
+
+    @Test("Fönstrets median räknas bara i masken; nästan tom mask ger nil")
+    func windowMedianInMask() {
+        let w = 40, h = 20
+        var pixels = [Float](repeating: 0, count: w * h * 4)
+        var mask = [Float](repeating: 0, count: w * h)
+        for i in 0..<(w * h) {
+            let v: Float = i % w < 20 ? 0.2 : 0.8
+            pixels[i * 4] = v; pixels[i * 4 + 1] = v; pixels[i * 4 + 2] = v; pixels[i * 4 + 3] = 1
+            if i % w >= 20 { mask[i] = 1 }
+        }
+        let m = BrokerLook.windowMedian(pixels: pixels, width: w, height: h, mask: mask, gains: (1, 1, 1))
+        #expect(abs((m ?? 0) - 0.8) < 1e-3)
+        var tiny = [Float](repeating: 0, count: w * h); tiny[5] = 1
+        #expect(BrokerLook.windowMedian(pixels: pixels, width: w, height: h, mask: tiny, gains: (1, 1, 1)) == nil)
+    }
+
     @Test("Parametrar och profil utan de nya fälten avkodas (gamla JSON-filer)")
     func backwardCompatibleDecoding() throws {
         let params = try JSONDecoder().decode(EnhancementParameters.self, from: Data(#"{"exposureEV":0.5,"temperature":0,"tint":0,"blackPoint":0,"whitePoint":1,"shadows":0,"highlights":0,"contrast":0,"vibrance":0,"saturation":0,"clarity":0.3,"sharpness":0.5,"rotationDegrees":0}"#.utf8))
@@ -120,5 +188,8 @@ struct BrokerLookTests {
         dict.removeValue(forKey: "look")
         let profile = try JSONDecoder().decode(EnhancementProfile.self, from: JSONSerialization.data(withJSONObject: dict))
         #expect(profile.look == nil && profile.id == "auto")
+        // Mäklarstil v1-loggar saknar windowWarmth.
+        let look = try JSONDecoder().decode(LookParameters.self, from: Data(#"{"curveX":[0,1],"curveY":[0,0.97],"windowCurveY":[0,0.97],"saturation":0.8,"hueSaturation":[1,1,1,1,1,1,1,1],"noiseReduction":0.5,"chromaNoiseReduction":0.8,"texture":0.15,"exteriorWeight":0}"#.utf8))
+        #expect(look.windowWarmth == nil)
     }
 }

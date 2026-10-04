@@ -18,7 +18,7 @@ import CoreImage
 /// - Mindre clarity än Automatisk, lite textur.
 /// - **Exteriörer** (taggade, eller mycket grönska/himmel, `exteriorWeight`) blandas mot ett
 ///   eget recept: mörkare toner, klarare färger, knappt någon NR, mer textur och skärpa.
-/// - **Fönstermasken**: kurvan 70 % mot målet och lägre mättnad (ljus, dämpad utsikt).
+/// - **Fönstermasken**: kurvan 70 % mot målet, tak 0,99 och interiörens (varma) vitbalans.
 /// Allt sparas som explicita `LookParameters` i `enhancement.json`.
 nonisolated struct LookParameters: Codable, Sendable, Equatable {
     /// Tonkurvans stödpunkter (gammakodad luma in → ut), strikt växande x.
@@ -37,6 +37,8 @@ nonisolated struct LookParameters: Codable, Sendable, Equatable {
     var texture: Double
     /// 0 = interiörrecept, 1 = exteriörrecept (blandas linjärt), se `BrokerLook.exteriorWeight`.
     var exteriorWeight: Double = 0
+    /// Fönstervariantens b*-tillägg (varmare utsikt, Förbättra v4). `nil` i äldre loggar = 0.
+    var windowWarmth: Double? = nil
 }
 
 nonisolated enum BrokerLook {
@@ -51,11 +53,20 @@ nonisolated enum BrokerLook {
     static let whiteCeiling = 0.97
     /// Andel av vägen mot målet (1 = hela).
     static let curveStrength = 1.0
-    /// Fönsterkurvans andel av vägen mot målet och fönstrets mättnadsfaktor (relativt resten):
-    /// leveransernas utsikt är ljus (median ≈ 0,86, ~1,08 × väggarna), lågkontrastig och
-    /// dämpad i färg (krominans ≈ 8 mot vår 14), se planen.
+    /// Fönsterkurvans andel av vägen mot målet: leveransernas utsikt är ljus (median ≈ 0,86,
+    /// ~1,08 × väggarna), se planen.
     static let windowStrength = 0.7
-    static let windowSaturation = 0.8
+    /// Förbättra v4: ingen extra avmättning i fönstret — leveransernas utsikt är ren och mättad
+    /// (krominans 8,2 mot vår 5,8 med × 0,8, träningsmängden), som genom ett rent glas.
+    static let windowSaturation = 1.0
+    /// Kontrastpressning kring fönstrets median: prövad (× 0,8 gav lägre ΔE i fönstret) men
+    /// förkastad efter visuell granskning — utsikten ska ha naturlig kontrast. 1 = av.
+    static let windowContrast = 1.0
+    static let windowLift = 0.0
+    /// Fönstret får nå 0,99 (leveranserna klipper lite i utsikten) och värms något
+    /// (b* +2: leveransernas utsikt har interiörens vitbalans, b* ≈ +2 mot vår −0,3).
+    static let windowCeiling = 0.99
+    static let windowWarmth = 2.0
     /// Största höjning/sänkning en stödpunkt får (skydd mot extrema bilder, t.ex. kvällsbilder).
     static let maxLift = 0.30
     static let maxDrop = 0.20
@@ -64,6 +75,9 @@ nonisolated enum BrokerLook {
     static let hueCenters: [Double] = [30, 55, 85, 135, 200, 265, 305, 345]
     static let hueSaturation: [Double] = [1.0, 0.9, 0.8, 1.0, 1.0, 1.0, 1.0, 1.0]
     static let saturation = 0.80
+    /// Mättnadsfaktor för ljusa ytor (L* ≥ 85, mjuk övergång från 60) i interiörer, Förbättra v4:
+    /// 0,8 gav ΔE 7,62 → 7,32 (träning, interiörer) i prototypen; exteriörer orörda.
+    static let highlightSaturation = 0.8
     static let noiseReduction = 0.5
     static let chromaNoiseReduction = 0.8
     static let texture = 0.15
@@ -235,19 +249,53 @@ nonisolated enum BrokerLook {
         }
     }
 
+    /// Median av gammakodad luma (efter `gains`) i fönstermasken (m ≥ 0,5); `nil` om masken är
+    /// nästan tom (< 200 pixlar).
+    static func windowMedian(pixels: [Float], width: Int, height: Int, mask: [Float], gains: (r: Float, g: Float, b: Float)) -> Double? {
+        let count = width * height
+        guard count > 0, pixels.count >= count * 4, mask.count >= count else { return nil }
+        var values: [Float] = []
+        for i in 0..<count where mask[i] >= 0.5 {
+            let r = HDRImageOps.toGamma(HDRImageOps.toLinear(pixels[i * 4]) * gains.r)
+            let g = HDRImageOps.toGamma(HDRImageOps.toLinear(pixels[i * 4 + 1]) * gains.g)
+            let b = HDRImageOps.toGamma(HDRImageOps.toLinear(pixels[i * 4 + 2]) * gains.b)
+            values.append(min(max(0.2126 * r + 0.7152 * g + 0.0722 * b, 0), 1))
+        }
+        guard values.count >= 200 else { return nil }
+        return Double(HDRImageOps.percentile(values, 0.5))
+    }
+
     /// Mäklarstilens parametrar för en bild (efter vitbalans `gains`).
-    static func lookParameters(sourcePercentiles: [Double], exteriorWeight e: Double = 0) -> LookParameters {
+    static func lookParameters(sourcePercentiles: [Double], exteriorWeight e: Double = 0,
+                               windowMedian: Double? = nil) -> LookParameters {
         let targets = lerp(targetPercentiles, exteriorTargetPercentiles, e)
         let main = curve(sourcePercentiles: sourcePercentiles, targets: targets)
         let window = curve(sourcePercentiles: sourcePercentiles, targets: targets, strength: windowStrength)
         // Fönsterkurvan utvärderas i huvudkurvans x-punkter, så att båda delar stödpunkter.
-        let windowY = main.x.map { evaluate(x: window.x, y: window.y, at: $0) }
+        var windowY = main.x.map { evaluate(x: window.x, y: window.y, at: $0) }
+        if let windowMedian {
+            let pivot = evaluate(x: window.x, y: window.y, at: windowMedian)
+            windowY = zip(main.x, windowY).map { x, y in windowCompress(x: x, y: y, pivot: pivot) }
+            for i in 1..<windowY.count { windowY[i] = max(windowY[i], windowY[i - 1] + 1e-4) }
+            windowY = windowY.map { min($0, windowCeiling) }
+        }
         return LookParameters(curveX: main.x, curveY: main.y, windowCurveY: windowY,
                               saturation: lerp(saturation, exteriorSaturation, e),
                               hueSaturation: lerp(hueSaturation, exteriorHueSaturation, e),
                               noiseReduction: lerp(noiseReduction, exteriorNoiseReduction, e),
                               chromaNoiseReduction: lerp(chromaNoiseReduction, exteriorChromaNoiseReduction, e),
-                              texture: lerp(texture, exteriorTexture, e), exteriorWeight: e)
+                              texture: lerp(texture, exteriorTexture, e), exteriorWeight: e,
+                              windowWarmth: windowMedian == nil ? nil : windowWarmth)
+    }
+
+    /// Fönsterkurvans värde efter kontrastpressningen kring `pivot` (utvärdet vid fönstrets median)
+    /// och lyftet; under ~0,35 i indata blandas den mjukt tillbaka mot den opressade kurvan så att
+    /// mörka partier i masken inte blir grå. Monoton när `y` är det (pressningen ≥ y under pivoten).
+    static func windowCompress(x: Double, y: Double, pivot: Double) -> Double {
+        let pressed = pivot + windowContrast * (y - pivot) + windowLift
+        let t = min(max((x - 0.1) / 0.25, 0), 1)
+        let w = t * t * (3 - 2 * t)
+        return min(y + (pressed - y) * w, windowCeiling)
     }
 
     // MARK: - Färgtransform (ren): kurva på luminans + mättnad per nyans
@@ -260,7 +308,8 @@ nonisolated enum BrokerLook {
 
     /// Som ovan med kurvan som funktion (t.ex. en tät tabell, se `cubeData`).
     static func lookColor(_ r: Double, _ g: Double, _ b: Double, curve: (Double) -> Double,
-                          saturation: Double, hueSaturation: [Double]) -> (Double, Double, Double) {
+                          saturation: Double, hueSaturation: [Double], highlightSaturation: Double = 1,
+                          warmth: Double = 0, ceiling: Double = 1) -> (Double, Double, Double) {
         // 1. Tonkurva på luma, RGB skalas med samma faktor; nära klippning blandas per-kanal-kurvan in.
         let y = 0.2126 * r + 0.7152 * g + 0.0722 * b
         let fy = curve(y)
@@ -273,14 +322,17 @@ nonisolated enum BrokerLook {
         }
         r1 = min(max(r1, 0), 1); g1 = min(max(g1, 0), 1); b1 = min(max(b1, 0), 1)
         // 2. Mättnad i Lab: krominansen skalas med global faktor × nyansbandets faktor.
+        //    Ljusa ytor (L* 60 → 85) får dessutom `highlightSaturation`: leveransernas tak och väggar
+        //    är nästan neutrala även där lampor och solljus ger ett färgstick.
         var lab = Lab.fromSRGB(r1, g1, b1)
-        let f = saturation * hueFactor(a: lab.a, b: lab.b, factors: hueSaturation)
-        if abs(f - 1) > 1e-6 {
-            lab.a *= f; lab.b *= f
+        let h = min(max((lab.l - 60) / 25, 0), 1)
+        let f = saturation * hueFactor(a: lab.a, b: lab.b, factors: hueSaturation) * (1 + (highlightSaturation - 1) * h * h * (3 - 2 * h))
+        if abs(f - 1) > 1e-6 || warmth != 0 {
+            lab.a *= f; lab.b = lab.b * f + warmth
             let out = lab.toSRGB()
-            return (min(max(out.0, 0), 1), min(max(out.1, 0), 1), min(max(out.2, 0), 1))
+            return (min(max(out.0, 0), ceiling), min(max(out.1, 0), ceiling), min(max(out.2, 0), ceiling))
         }
-        return (r1, g1, b1)
+        return (min(r1, ceiling), min(g1, ceiling), min(b1, ceiling))
     }
 
     /// Nyansbandets faktor: triangelvikter (±45°) kring `hueCenters`; utanför alla band 1.
@@ -335,6 +387,8 @@ nonisolated enum BrokerLook {
         let n = cubeSize
         let ys = window ? p.windowCurveY : p.curveY
         let saturation = window ? p.saturation * windowSaturation : p.saturation
+        let warmth = window ? (p.windowWarmth ?? 0) : 0
+        let highlightSaturation = window ? 1 : lerp(self.highlightSaturation, 1, p.exteriorWeight)
         // Kurvan som tät tabell (linjär interpolation) — snabbt och tillräckligt exakt.
         let tableSize = 4096
         let table = (0...tableSize).map { evaluate(x: p.curveX, y: ys, at: Double($0) / Double(tableSize)) }
@@ -349,7 +403,9 @@ nonisolated enum BrokerLook {
             for gi in 0..<n {
                 for ri in 0..<n {
                     let (r, g, b) = lookColor(Double(ri) / Double(n - 1), Double(gi) / Double(n - 1), Double(bi) / Double(n - 1),
-                                              curve: curve, saturation: saturation, hueSaturation: p.hueSaturation)
+                                              curve: curve, saturation: saturation, hueSaturation: p.hueSaturation,
+                                              highlightSaturation: highlightSaturation, warmth: warmth,
+                                              ceiling: window ? windowCeiling : 1)
                     let o = ((bi * n + gi) * n + ri) * 4
                     values[o] = Float(r); values[o + 1] = Float(g); values[o + 2] = Float(b); values[o + 3] = 1
                 }
@@ -439,7 +495,8 @@ nonisolated enum BrokerLook {
         p.sharpness = min(p.sharpness + exteriorExtraSharpness * e, EnhancementParameters.Key.sharpness.range.upperBound)
         let gains = EnhancementEngine.wbGains(temperature: p.temperature, tint: p.tint)
         p.look = lookParameters(sourcePercentiles: lumaPercentiles(pixels: pixels, width: width, height: height, gains: gains),
-                                exteriorWeight: e)
+                                exteriorWeight: e,
+                                windowMedian: mask.flatMap { windowMedian(pixels: pixels, width: width, height: height, mask: $0, gains: gains) })
         return p
     }
 

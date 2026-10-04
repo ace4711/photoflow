@@ -93,10 +93,15 @@ nonisolated struct EnhancementAnalysis: Codable, Sendable, Equatable {
 /// - "Räta lodlinjer" (`Request.upright`, alla profiler): `VerticalCorrection` skattar
 ///   lodlinjernas flyktpunkt i analysbilden och rätar dem (högst 8° lutning, 3° rotation),
 ///   före allt annat; masken följer med. Ersätter horisonträtningen när den görs.
+///
+/// ## Mäklarstil v2 (version 4)
+/// - Fönstervarianten tillåter tak 0,99, värmer utsikten (b* +2) och avmättas inte längre;
+///   ljusa ytor i interiörer avmättas (×0,8 vid L* ≥ 85).
+///   Se `BrokerLook` och docs/plan-maklarstil.md ("v2").
 nonisolated enum EnhancementEngine {
     /// Höjs när algoritmen/renderingen ändras — del av fingerprintet så gamla
     /// förbättringar görs om.
-    static let version = 3
+    static let version = 4
 
     /// Fönstervarianten (se "Fönstermask"): andel av en positiv exponeringshöjning,
     /// lägsta högdagsdämpning och knät (linjärt) för den mjuka roll-offen.
