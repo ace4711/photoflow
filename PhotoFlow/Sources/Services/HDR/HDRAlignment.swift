@@ -64,17 +64,26 @@ nonisolated enum HDRAlignment {
     static func computeShift(
         floating: RAWRenderer.RenderedImage,
         reference: RAWRenderer.RenderedImage,
-        maxAlignDimension: Int = 800
+        maxAlignDimension: Int = 800,
+        matchExposure: Bool = true
     ) throws -> CGPoint {
         guard floating.width == reference.width, floating.height == reference.height else {
             return .zero
         }
 
-        let floatingSmall = try downscaledGrayscaleCGImage(floating, maxDimension: maxAlignDimension)
-        let referenceSmall = try downscaledGrayscaleCGImage(reference, maxDimension: maxAlignDimension)
+        let floatingLuma = downscaledLuma(floating, maxDimension: maxAlignDimension)
+        let referenceLuma = downscaledLuma(reference, maxDimension: maxAlignDimension)
+        // Exponeringsmatchning före registreringen: den mörkaste ramen (fönsterkällan i window
+        // pull) är ofta 3–5 EV mörkare än referensen, och Vision jämför då nästan svarta
+        // väggar mot en ljus interiör — registreringen blev osäker eller misslyckades. Med
+        // gråskalebilden avbildad till referensens ljushetsfördelning (histogrammatchning,
+        // en monoton "gain" som också tar hand om tonkurvan) ser båda bilderna likadana ut.
+        let floatingPixels = matchExposure ? matchHistogram(floatingLuma.pixels, to: referenceLuma.pixels) : floatingLuma.pixels
+        let floatingSmall = try grayscaleCGImage(floatingPixels, width: floatingLuma.width, height: floatingLuma.height)
+        let referenceSmall = try grayscaleCGImage(referenceLuma.pixels, width: referenceLuma.width, height: referenceLuma.height)
 
-        let request = VNTranslationalImageRegistrationRequest(targetedCGImage: floatingSmall.image, options: [:], completionHandler: nil)
-        let handler = VNImageRequestHandler(cgImage: referenceSmall.image, options: [:])
+        let request = VNTranslationalImageRegistrationRequest(targetedCGImage: floatingSmall, options: [:], completionHandler: nil)
+        let handler = VNImageRequestHandler(cgImage: referenceSmall, options: [:])
         try handler.perform([request])
 
         guard let observation = request.results?.first else { return .zero }
@@ -82,18 +91,44 @@ nonisolated enum HDRAlignment {
 
         // Both small images were downscaled by the same factor from the same
         // full-resolution size, so this ratio is exact (no aspect assumptions).
-        let scaleX = Double(floating.width) / Double(floatingSmall.width)
-        let scaleY = Double(floating.height) / Double(floatingSmall.height)
+        let scaleX = Double(floating.width) / Double(floatingLuma.width)
+        let scaleY = Double(floating.height) / Double(floatingLuma.height)
         return CGPoint(x: transform.tx * scaleX, y: transform.ty * scaleY)
     }
 
-    /// Extracts luminance from `image`, scales it down to `maxDimension` long
-    /// side with `vImageScale_PlanarF`, and wraps it as an 8-bit grayscale
-    /// `CGImage` for Vision.
-    private static func downscaledGrayscaleCGImage(
+    /// Avbildar `source` monotont så att dess fördelning (CDF) blir som `reference`s.
+    /// Båda är luma i 0…1. 1024 nivåer räcker gott för registreringen (som ändå kör på 8 bitar).
+    static func matchHistogram(_ source: [Float], to reference: [Float], bins: Int = 1024) -> [Float] {
+        guard !source.isEmpty, !reference.isEmpty else { return source }
+        func cdf(_ values: [Float]) -> [Double] {
+            var hist = [Double](repeating: 0, count: bins)
+            let scale = Float(bins - 1)
+            for v in values {
+                let i = Int((min(max(v, 0), 1) * scale).rounded())
+                hist[i] += 1
+            }
+            var acc = 0.0
+            let total = Double(values.count)
+            return hist.map { acc += $0; return acc / total }
+        }
+        let srcCDF = cdf(source)
+        let refCDF = cdf(reference)
+        // För varje källnivå: den lägsta referensnivå vars CDF når källans CDF.
+        var lut = [Float](repeating: 0, count: bins)
+        var j = 0
+        for i in 0..<bins {
+            while j < bins - 1 && refCDF[j] < srcCDF[i] { j += 1 }
+            lut[i] = Float(j) / Float(bins - 1)
+        }
+        let scale = Float(bins - 1)
+        return source.map { lut[Int((min(max($0, 0), 1) * scale).rounded())] }
+    }
+
+    /// Luma ur `image`, nedskalad till `maxDimension` på långsidan med `vImageScale_PlanarF`.
+    static func downscaledLuma(
         _ image: RAWRenderer.RenderedImage,
         maxDimension: Int
-    ) throws -> (image: CGImage, width: Int, height: Int) {
+    ) -> (pixels: [Float], width: Int, height: Int) {
         var gray = [Float](repeating: 0, count: image.width * image.height)
         image.pixels.withUnsafeBufferPointer { src in
             gray.withUnsafeMutableBufferPointer { dst in
@@ -107,6 +142,7 @@ nonisolated enum HDRAlignment {
         let scale = longSide > maxDimension ? Double(maxDimension) / Double(longSide) : 1.0
         let smallWidth = max(1, Int((Double(image.width) * scale).rounded()))
         let smallHeight = max(1, Int((Double(image.height) * scale).rounded()))
+        guard smallWidth != image.width || smallHeight != image.height else { return (gray, image.width, image.height) }
 
         var scaledFloat = [Float](repeating: 0, count: smallWidth * smallHeight)
         gray.withUnsafeMutableBufferPointer { srcBuf in
@@ -122,31 +158,20 @@ nonisolated enum HDRAlignment {
                 _ = vImageScale_PlanarF(&srcBuffer, &dstBuffer, nil, vImage_Flags(kvImageNoFlags))
             }
         }
+        return (scaledFloat, smallWidth, smallHeight)
+    }
 
-        var pixels8 = [UInt8](repeating: 0, count: smallWidth * smallHeight)
-        scaledFloat.withUnsafeMutableBufferPointer { srcBuf in
-            pixels8.withUnsafeMutableBufferPointer { dstBuf in
-                var srcBuffer = vImage_Buffer(
-                    data: srcBuf.baseAddress, height: vImagePixelCount(smallHeight), width: vImagePixelCount(smallWidth),
-                    rowBytes: smallWidth * MemoryLayout<Float>.size
-                )
-                var dstBuffer = vImage_Buffer(
-                    data: dstBuf.baseAddress, height: vImagePixelCount(smallHeight), width: vImagePixelCount(smallWidth),
-                    rowBytes: smallWidth
-                )
-                _ = vImageConvert_PlanarFtoPlanar8(&srcBuffer, &dstBuffer, 1.0, 0.0, vImage_Flags(kvImageNoFlags))
-            }
-        }
-
+    /// 8-bitars gråskale-`CGImage` för Vision av luma i 0…1.
+    private static func grayscaleCGImage(_ luma: [Float], width: Int, height: Int) throws -> CGImage {
+        let pixels8 = luma.map { UInt8((min(max($0, 0), 1) * 255).rounded()) }
         guard let provider = CGDataProvider(data: Data(pixels8) as CFData),
               let cgImage = CGImage(
-                width: smallWidth, height: smallHeight, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: smallWidth,
+                width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: width,
                 space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
                 provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
               ) else {
             throw AlignmentError.cgImageCreationFailed
         }
-
-        return (cgImage, smallWidth, smallHeight)
+        return cgImage
     }
 }

@@ -20,13 +20,20 @@ nonisolated enum ExposureFusion {
         /// exposures) still gets a defined, equal share from each image
         /// instead of a 0/0 division.
         var weightEpsilon: Float = 1e-12
+        /// Straff för (delvis) klippta pixlar: vikten skalas ned mjukt när den ljusaste
+        /// kanalen går från `clipKnee` mot `clipLimit`. Utan straffet får en pixel där bara
+        /// en kanal klippt hög mättnadsvikt (kanalerna skiljer sig ju) och ger cyan/gul
+        /// nyans i fönster och lampor (docs/plan-hdr-fonster.md, avsnitt 1B). `nil` = av.
+        var clipPenalty: (knee: Float, limit: Float)? = (0.90, 0.99)
 
-        init(contrastExponent: Float = 1.0, saturationExponent: Float = 1.0, exposureExponent: Float = 1.0, wellExposedSigma: Float = 0.2, weightEpsilon: Float = 1e-12) {
+        init(contrastExponent: Float = 1.0, saturationExponent: Float = 1.0, exposureExponent: Float = 1.0, wellExposedSigma: Float = 0.2, weightEpsilon: Float = 1e-12,
+             clipPenalty: (knee: Float, limit: Float)? = (0.90, 0.99)) {
             self.contrastExponent = contrastExponent
             self.saturationExponent = saturationExponent
             self.exposureExponent = exposureExponent
             self.wellExposedSigma = wellExposedSigma
             self.weightEpsilon = weightEpsilon
+            self.clipPenalty = clipPenalty
         }
     }
 
@@ -157,6 +164,7 @@ nonisolated enum ExposureFusion {
         var gray = [Float](repeating: 0, count: count)
         var saturation = [Float](repeating: 0, count: count)
         var wellExposed = [Float](repeating: 0, count: count)
+        let penalty = options.clipPenalty
         let sigma2 = 2 * options.wellExposedSigma * options.wellExposedSigma
 
         image.withUnsafeBufferPointer { px in
@@ -175,6 +183,14 @@ nonisolated enum ExposureFusion {
                 let wg = exp(-((g - 0.5) * (g - 0.5)) / sigma2)
                 let wb = exp(-((b - 0.5) * (b - 0.5)) / sigma2)
                 wellExposed[p] = wr * wg * wb
+                if let penalty {
+                    let maxC = max(r, g, b)
+                    if maxC > penalty.knee {
+                        // Smoothstep från 1 (vid knäet) till ~0 (vid gränsen).
+                        let t = min((maxC - penalty.knee) / (penalty.limit - penalty.knee), 1)
+                        wellExposed[p] *= max(1 - t * t * (3 - 2 * t), 0.001)
+                    }
+                }
             }
         }
 
