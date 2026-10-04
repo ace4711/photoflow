@@ -73,7 +73,7 @@ class PipelineState: ObservableObject {
     /// `sessionManifest` via `syncManifest(step:)` — satt av pipeline-stegen
     /// (t.ex. `runBracketAnalysis`) INNAN de anropar `updateStep`/
     /// `completeStep` för samma steg, se `setPendingFingerprint`.
-    private var pendingStepFingerprints: [DashboardStep: String] = [:]
+    private(set) var pendingStepFingerprints: [DashboardStep: String] = [:]
 
     func setPendingFingerprint(_ fingerprint: String, for step: DashboardStep) {
         pendingStepFingerprints[step] = fingerprint

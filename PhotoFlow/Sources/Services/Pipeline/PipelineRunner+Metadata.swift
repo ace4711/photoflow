@@ -93,8 +93,8 @@ extension PipelineRunner {
 
     // MARK: - Adressmetadata (fas 1b: beräknas efter kalendersteget, delas av alla steg)
 
-    /// Bokningsinfo och koordinat för en adressmapp (nyckel = mappnamnet för bokningens
-    /// första fotodatum), i bokningarnas ordning.
+    /// Bokningsinfo och koordinat för en adressmapp (nyckel = bokningens mappnamn,
+    /// `CalendarService.sanitizeFolderName(adress)`), i bokningarnas ordning.
     nonisolated struct ResolvedAddress: Equatable, Sendable {
         enum Source: Equatable { case corrected, geocoded, failed }
         var key: String
@@ -133,7 +133,9 @@ extension PipelineRunner {
         var entries: [ResolvedAddress] = []
         var seen: Set<String> = []
         for mapping in calendarMappings {
-            let key = calendar.addressFolder(for: mapping.photoDateRange.lowerBound, mappings: calendarMappings) ?? mapping.address
+            // Bokningens egen mapp (samma som sorteringen ger dess bilder) — inte mappen för dess
+            // första fotodatum, som för en tätt följande bokning kunde bli grannens.
+            let key = CalendarService.sanitizeFolderName(mapping.address)
             guard seen.insert(key).inserted else { continue }
             let titleInfo = await BookingTitleParser.shared.parse(title: mapping.eventTitle)
             let bookingInfo = BookingTitleParser.bookingInfoText(from: titleInfo)
@@ -157,17 +159,11 @@ extension PipelineRunner {
 
     /// Metadatat per adressmapp (nyckel = mappnamnet) så som metadatasteget skriver det.
     func addressMetadataByFolder(_ entries: [ResolvedAddress]) -> [String: AddressMetadata] {
-        let calendar = CalendarService.shared
-        let mappings = calendarMappings
         var resolved: [String: (bookingInfo: String?, latitude: Double, longitude: Double)] = [:]
         for entry in entries {
             resolved[entry.key] = (entry.bookingInfo, entry.latitude ?? 0, entry.longitude ?? 0)
         }
-        return MetadataPlan.addressMetadata(
-            mappings: mappings,
-            folderForDate: { calendar.addressFolder(for: $0, mappings: mappings) },
-            resolved: resolved
-        )
+        return MetadataPlan.addressMetadata(mappings: calendarMappings, resolved: resolved)
     }
 
     /// AI-taggar per basnamn (`DSC_0012`), bara när AI-taggning är på och bilden har taggar.
@@ -320,7 +316,8 @@ extension PipelineRunner {
            let savedVersion = saved["version"] as? Int, savedVersion == Self.metadataMarkerVersion,
            let savedFolderCount = saved["folders_written"] as? Int,
            let savedFileCount = saved["files_written"] as? Int,
-           savedFolderCount == calendarMappings.count,
+           // En mapp per adress (två bokningar med samma adress delar mapp).
+           savedFolderCount == Set(calendarMappings.map { CalendarService.sanitizeFolderName($0.address) }).count,
            // Manifestet matchar, eller (bakåtkompatibilitet) sessionen har
            // inget fingerprint-record för det här steget än.
            (metadataManifestRecord == nil || metadataManifestRecord?.inputFingerprint == metadataFingerprint) {

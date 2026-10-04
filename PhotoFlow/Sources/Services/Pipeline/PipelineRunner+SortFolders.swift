@@ -13,8 +13,11 @@ extension PipelineRunner {
         // (fallback) missade t.ex. en adressrättning (`correctAddress`) på en
         // redan sorterad session — samma antal bilder, men rätt session
         // borde sorteras om till den rättade adressmappen.
+        // Intervallen ingår: en ny kalendermatchning (t.ex. ny tilldelningsregel) kan flytta bilder
+        // mellan adresser utan att adresserna ändras.
+        let iso = ISO8601DateFormatter()
         let addressSignature = calendarMappings
-            .map { "\($0.address)|\($0.eventTitle)" }
+            .map { "\($0.address)|\($0.eventTitle)|\(iso.string(from: $0.photoDateRange.lowerBound))|\(iso.string(from: $0.photoDateRange.upperBound))" }
             .sorted()
             .joined(separator: ";")
         let correctionSignature = state.correctedCoordinates
@@ -26,7 +29,8 @@ extension PipelineRunner {
             settings: [
                 "hdrMergeEnabled": "\(AppSettings.shared.hdrMergeEnabled)",
                 "addresses": addressSignature,
-                "corrections": correctionSignature
+                "corrections": correctionSignature,
+                "rule": Self.sortRuleVersion
             ]
         )
         state.setPendingFingerprint(sortFingerprint, for: .moveToFolders)
@@ -115,6 +119,13 @@ extension PipelineRunner {
             }
         }
 
+        // Omsortering: filer som redan ligger i en annan adressmapp än den bilden hör till nu flyttas
+        // dit (se PipelineRunner+Relocate.swift). Bara med kalendermatchningar — utan dem hör allt
+        // till "Osorterade", och då är det säkrare att låta en redan sorterad session vara.
+        if !calendarMappings.isEmpty {
+            relocateMisplacedFiles(outputDir: outputDir)
+        }
+
         // Kopiera alla foton (sortering sker före gallring)
         let photosToOrganize = state.allPhotos
         var organized = 0
@@ -146,11 +157,23 @@ extension PipelineRunner {
             try? fm.createDirectory(at: extrasDir, withIntermediateDirectories: true)
         }
 
+        // Gallringsbeslut som redan verkställts på disk får inte återuppstå när en redan gallrad
+        // session sorteras om: en avvisad bild får inga nya länkar i "radera"-läget (de raderades),
+        // och i "flytta"-läget hamnar länkarna direkt i Gallrade/.
+        let cullAction = AppSettings.shared.cullAction
+
         // Create symlinks for all files into address folders (fast, no heavy I/O)
         for (index, (photo, folderName)) in photoFolders.enumerated() {
-            let previewDestDir = AddressFolderLayout.previewDir(in: outputDir, folderName: folderName)
-            let dngDestDir = AddressFolderLayout.dngDir(in: outputDir, folderName: folderName)
-            let extrasDestDir = AddressFolderLayout.extrasDir(in: outputDir, folderName: folderName)
+            if photo.rejected && cullAction == "radera" {
+                state.appendStepLog(.moveToFolders, "\(photo.filename) → \(folderName)/ — avvisad i gallringen, inga länkar")
+                organized += 1
+                continue
+            }
+            let culledSubdir = photo.rejected && cullAction == "flytta" ? "Gallrade" : nil
+            func linkDir(_ dir: URL) -> URL { culledSubdir.map { dir.appendingPathComponent($0) } ?? dir }
+            let previewDestDir = linkDir(AddressFolderLayout.previewDir(in: outputDir, folderName: folderName))
+            let dngDestDir = linkDir(AddressFolderLayout.dngDir(in: outputDir, folderName: folderName))
+            let extrasDestDir = linkDir(AddressFolderLayout.extrasDir(in: outputDir, folderName: folderName))
             var linkedFiles = 0
 
             // Symlink preview JPEG → TITTBILDER. Relative destination (target
@@ -222,6 +245,11 @@ extension PipelineRunner {
             }
         }
     }
+
+    /// Regelversion för sorteringen. Ingår i fingerprintet, så att befintliga sessioner sorteras om
+    /// (och felplacerade filer flyttas) när tilldelningen av bilder till adresser ändras.
+    /// 2: tidskluster i kalendermatchningen + omsortering av felplacerade filer.
+    nonisolated static let sortRuleVersion = "2"
 
     /// Delete rejected photos from address folders after culling is done
     func deleteRejectedFiles() async {

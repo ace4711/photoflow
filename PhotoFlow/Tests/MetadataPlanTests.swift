@@ -174,32 +174,41 @@ struct MetadataPlanTests {
         }
     }
 
-    @Test("Adressmetadata per mapp: nyckel från första fotodatumet, adress/titel från första bokningen i mappen, GPS 0,0 = ingen GPS")
-    func addressMetadata_followsLegacyDerivation() {
+    @Test("Adressmetadata per mapp: varje bokning nycklas med sin egen mapp, GPS 0,0 = ingen GPS")
+    func addressMetadata_keysEachMappingByItsOwnFolder() {
         let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         let mappings: [(address: String, eventTitle: String, photoDateRange: ClosedRange<Date>)] = [
             ("Gatan 1", "Gatan 1, Ort", t0...t0.addingTimeInterval(600)),
-            // Startar inom den förras marginal → hamnar i samma mapp ("Gatan 1"), ignoreras.
-            ("Gatan 2", "Gatan 2", t0.addingTimeInterval(700)...t0.addingTimeInterval(900)),
-            ("Vägen 3".decomposedStringWithCanonicalMapping, "", t0.addingTimeInterval(5000)...t0.addingTimeInterval(6000))
+            // Startar inom den förras marginal — fick förut den förras mapp och försvann ur metadatan.
+            ("Gatan 2", "Gatan 2", t0.addingTimeInterval(602)...t0.addingTimeInterval(900)),
+            ("Vägen 3".decomposedStringWithCanonicalMapping, "", t0.addingTimeInterval(5000)...t0.addingTimeInterval(6000)),
+            // Samma adress igen (paus mitt i): samma mapp, första bokningen äger den.
+            ("Gatan 1", "Gatan 1, Ort (forts.)", t0.addingTimeInterval(7000)...t0.addingTimeInterval(7100))
         ]
-        let folderFor: (Date) -> String? = { date in
-            for m in mappings {
-                let slack = m.photoDateRange.lowerBound.addingTimeInterval(-300)...m.photoDateRange.upperBound.addingTimeInterval(300)
-                if slack.contains(date) { return CalendarService.sanitizeFolderName(m.address) }
-            }
-            return nil
-        }
-        let result = MetadataPlan.addressMetadata(mappings: mappings, folderForDate: folderFor, resolved: [
+        let result = MetadataPlan.addressMetadata(mappings: mappings, resolved: [
             "Gatan 1": ("villa", 59.1, 18.1),
+            "Gatan 2": (nil, 59.2, 18.2),
             CalendarService.sanitizeFolderName(mappings[2].address): (nil, 0, 0)
         ])
-        #expect(result.count == 2)
+        #expect(result.count == 3)
         #expect(result["Gatan 1"] == AddressMetadata(address: "Gatan 1", eventTitle: "Gatan 1, Ort", bookingInfo: "villa", latitude: 59.1, longitude: 18.1))
+        #expect(result["Gatan 2"] == AddressMetadata(address: "Gatan 2", eventTitle: "Gatan 2", bookingInfo: "", latitude: 59.2, longitude: 18.2))
         let third = result[CalendarService.sanitizeFolderName(mappings[2].address)]
         #expect(third?.address == "Vägen 3".precomposedStringWithCanonicalMapping)
         #expect(third?.hasGPS == false)
         #expect(third?.latitude == nil)
+    }
+
+    @Test("Adressmetadata för den riktiga sessionens sex bokningar ger sex adresser (förut fyra)")
+    func addressMetadata_realSessionGivesSixAddresses() {
+        let mappings = RealSessionFixture.mappings
+        var resolved: [String: (bookingInfo: String?, latitude: Double, longitude: Double)] = [:]
+        for (i, m) in mappings.enumerated() { resolved[CalendarService.sanitizeFolderName(m.address)] = (nil, 59 + Double(i) / 100, 18) }
+        let result = MetadataPlan.addressMetadata(mappings: mappings, resolved: resolved)
+        #expect(result.count == 6)
+        #expect(Set(result.keys) == Set(mappings.map(\.address)))
+        #expect(result["Kyndelgränd 19"]?.address == "Kyndelgränd 19")
+        #expect(result["Tjärnstigen 55A"]?.eventTitle == "Tjärnstigen 55A")
     }
 
     @Test("Metadata vid skapandet: okänd mapp, okända AI-taggar och Osorterade utan AI ger nil; adressmapp ger samma som metadatasteget")

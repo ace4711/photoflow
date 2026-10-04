@@ -83,25 +83,25 @@ nonisolated enum MetadataPlan {
         )
     }
 
-    /// Adressmetadata per adressmapp (nyckel = mappnamnet). Samma härledning som
-    /// metadatasteget gjort sedan tidigare: nyckeln är mappen för bokningens första fotodatum,
-    /// adress/titel tas från den första bokning som hamnar i samma mapp, bokningsinfo och
-    /// koordinat från den första bokning som gav nyckeln. `resolve` ger (bokningsinfo, koordinat)
-    /// för en bokning (geokodning/manuell rättning — se `PipelineRunner.resolveAddressMetadata`).
+    /// Adressmetadata per adressmapp (nyckel = mappnamnet). Varje bokning nycklas med sin EGEN
+    /// mapp (`CalendarService.sanitizeFolderName(mapping.address)`, samma som sorteringen ger
+    /// bokningens bilder). Förut nycklades den med mappen för bokningens första fotodatum via
+    /// `addressFolder(for:)`, som — när två bokningar låg tätt — gav grannens mapp, så att
+    /// bokningen hoppades över helt i metadatasteget. Adress/titel tas från den första bokning
+    /// som har mappen, bokningsinfo och koordinat från `resolved[mappen]` (geokodning/manuell
+    /// rättning — se `PipelineRunner.resolveAddressMetadata`).
     static func addressMetadata(
         mappings: [(address: String, eventTitle: String, photoDateRange: ClosedRange<Date>)],
-        folderForDate: (Date) -> String?,
         resolved: [String: (bookingInfo: String?, latitude: Double, longitude: Double)]
     ) -> [String: AddressMetadata] {
         var result: [String: AddressMetadata] = [:]
         for mapping in mappings {
-            let key = folderForDate(mapping.photoDateRange.lowerBound) ?? mapping.address
+            let key = CalendarService.sanitizeFolderName(mapping.address)
             guard result[key] == nil, let info = resolved[key] else { continue }
-            let owner = mappings.first { folderForDate($0.photoDateRange.lowerBound) == key }
             let hasGPS = info.latitude != 0 || info.longitude != 0
             result[key] = AddressMetadata(
-                address: (owner?.address ?? key).precomposedStringWithCanonicalMapping,
-                eventTitle: (owner?.eventTitle ?? "").precomposedStringWithCanonicalMapping,
+                address: mapping.address.precomposedStringWithCanonicalMapping,
+                eventTitle: mapping.eventTitle.precomposedStringWithCanonicalMapping,
                 bookingInfo: (info.bookingInfo ?? "").precomposedStringWithCanonicalMapping,
                 latitude: hasGPS ? info.latitude : nil,
                 longitude: hasGPS ? info.longitude : nil
@@ -178,8 +178,10 @@ nonisolated enum ExiftoolMetadataArguments {
                 lines.append("-XMP:Description=\(description)")
             }
         }
+
         return lines
     }
+
 }
 
 /// `metadata_stamps.json` i outputmappen (fas 1b): vilken metadata som skrivits till varje fil,

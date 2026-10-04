@@ -325,86 +325,57 @@ class CalendarService {
         return (street: street, city: city)
     }
 
-    /// Given a set of photo dates, find and group them by calendar event address.
-    /// Returns a dictionary mapping address -> date range of photos for that address.
+    /// Matchar bildtiderna mot kalenderbokningarna via tidskluster (`PhotoClustering`): bilderna
+    /// delas i kluster vid restidsluckor och varje kluster får den bokning det överlappar mest.
+    /// nil = ingen kalenderåtkomst eller inga bildtider.
     ///
     /// Adressen tas fram via `BookingTitleParser` (Fas 3d): Foundation Models
     /// när den är tillgänglig på enheten, annars faller den tillbaka på
     /// `extractAddress` nedan — i båda fallen samma "Gata Nummer, Ort"-format,
     /// så adressmappnamn inte ändras jämfört med tidigare faser.
-    func matchPhotosToAddresses(photoDates: [Date]) async -> [(address: String, eventTitle: String, photoDateRange: ClosedRange<Date>)] {
-        guard accessGranted, !photoDates.isEmpty else { return [] }
+    func matchPhotosToAddresses(photoDates: [Date]) async -> PhotoClusterMatch? {
+        guard accessGranted, !photoDates.isEmpty else { return nil }
 
         let sorted = photoDates.sorted()
-        guard let earliest = sorted.first, let latest = sorted.last else { return [] }
+        guard let earliest = sorted.first, let latest = sorted.last else { return nil }
 
-        // Fetch all events in the photo date range (with margin)
+        // Hämta alla händelser i fotodatumens intervall (med marginal)
         let searchStart = earliest.addingTimeInterval(-2 * 3600)
         let searchEnd = latest.addingTimeInterval(2 * 3600)
         let calendars = resolveCalendar()
         let predicate = store.predicateForEvents(withStart: searchStart, end: searchEnd, calendars: calendars)
         let events = store.events(matching: predicate)
         print("[Calendar] matchPhotosToAddresses: \(events.count) händelser hittades, \(sorted.count) fotodatum att matcha")
-        for event in events {
-            print("[Calendar]   → \"\(event.title ?? "–")\" [\(event.startDate?.description ?? "?") – \(event.endDate?.description ?? "?")]")
-        }
 
-        // Group photos by which event they belong to
-        var eventPhotos: [String: (event: EKEvent, dates: [Date])] = [:]
-
-        for date in sorted {
-            for event in events {
-                guard let start = event.startDate, let end = event.endDate else { continue }
-                let slackStart = start.addingTimeInterval(-15 * 60)
-                let slackEnd = end.addingTimeInterval(15 * 60)
-                if date >= slackStart && date <= slackEnd {
-                    let key = event.eventIdentifier ?? event.title ?? ""
-                    if eventPhotos[key] == nil {
-                        eventPhotos[key] = (event: event, dates: [])
-                    }
-                    eventPhotos[key]!.dates.append(date)
-                    break
-                }
-            }
-        }
-
-        let unmatchedCount = sorted.count - eventPhotos.values.flatMap(\.dates).count
-        if unmatchedCount > 0 {
-            print("[Calendar] ⚠ \(unmatchedCount) foton matchade INGEN händelse")
-        }
-
-        var results: [(address: String, eventTitle: String, photoDateRange: ClosedRange<Date>)] = []
-        for (_, value) in eventPhotos {
-            guard let title = value.event.title else {
-                print("[Calendar] ⚠ Händelse utan titel, hoppar över")
+        // Bokningar = händelser med tid (inte heldag) och en adress i titeln. Händelser utan
+        // adress (lunch, privat) får inte "stjäla" bilder från en bokning, så de räknas inte alls.
+        var bookings: [PhotoClustering.Booking] = []
+        var skipped: [String] = []
+        for event in events.sorted(by: { ($0.startDate ?? .distantPast) < ($1.startDate ?? .distantPast) }) {
+            guard let start = event.startDate, let end = event.endDate else { continue }
+            let title = event.title ?? ""
+            print("[Calendar]   → \"\(title)\" [\(start.description) – \(end.description)]")
+            if event.isAllDay {
+                skipped.append("\"\(title)\" (heldag)")
                 continue
             }
             let info = await BookingTitleParser.shared.parse(title: title)
-            guard let address = BookingTitleParser.addressString(from: info) else {
-                print("[Calendar] ⚠ Kunde inte extrahera adress från: \"\(title)\"")
+            guard !title.isEmpty, let address = BookingTitleParser.addressString(from: info) else {
+                skipped.append("\"\(title)\" (ingen adress)")
                 continue
             }
-            guard let first = value.dates.first, let last = value.dates.last else { continue }
-            print("[Calendar] ✓ \(value.dates.count) foton → \"\(address)\" (från: \"\(title)\")")
-            results.append((address: address, eventTitle: title, photoDateRange: first...last))
+            bookings.append(PhotoClustering.Booking(title: title, address: address, start: start, end: end))
         }
-        results.sort(by: { $0.photoDateRange.lowerBound < $1.photoDateRange.lowerBound })
 
-        print("[Calendar] Resultat: \(results.count) adressmatchningar totalt")
-        return results
+        let result = PhotoClustering.match(dates: sorted, bookings: bookings)
+        print("[Calendar] \(result.assignments.count) kluster (lucka > \(Int(result.gapThreshold)) s), \(result.mappings.count) adressmatchningar")
+        return PhotoClusterMatch(bookings: bookings, result: result, skippedEvents: skipped)
     }
 
-    /// Determine the output subfolder name for a photo based on its capture date.
-    /// Returns nil if no matching calendar event found.
+    /// Adressmappen för en bild (nil = ingen kalendermatchning). Se `PhotoClustering.addressFolder`:
+    /// mappningen vars intervall innehåller bildtiden, annars den närmaste inom 5 min.
     func addressFolder(for photoDate: Date, mappings: [(address: String, eventTitle: String, photoDateRange: ClosedRange<Date>)]) -> String? {
-        // Find mapping where photo date falls within range (with some extra slack)
-        for mapping in mappings {
-            let slackRange = mapping.photoDateRange.lowerBound.addingTimeInterval(-5 * 60)...mapping.photoDateRange.upperBound.addingTimeInterval(5 * 60)
-            if slackRange.contains(photoDate) {
-                return Self.sanitizeFolderName(mapping.address)
-            }
-        }
-        return nil
+        PhotoClustering.addressFolder(for: photoDate, mappings: mappings)
     }
 
     // MARK: - Geocoding
@@ -474,7 +445,7 @@ class CalendarService {
     /// on-disk folder name for an address when resorting folders after a
     /// manual address correction — must stay in perfect sync with
     /// `addressFolder(for:mappings:)` above, hence the shared implementation.
-    static func sanitizeFolderName(_ name: String) -> String {
+    nonisolated static func sanitizeFolderName(_ name: String) -> String {
         let illegal = CharacterSet(charactersIn: ":/\\?*\"<>|")
         let cleaned = name.components(separatedBy: illegal).joined(separator: "_").trimmingCharacters(in: .whitespaces)
         // Slutgranskning: a result of "", "." or ".." is not just an odd folder
@@ -493,4 +464,12 @@ class CalendarService {
         }
         return cleaned
     }
+}
+
+/// Resultatet av kalendermatchningen: bokningarna som deltog och klustertilldelningen.
+nonisolated struct PhotoClusterMatch: Equatable, Sendable {
+    var bookings: [PhotoClustering.Booking]
+    var result: PhotoClustering.Result
+    /// Händelser som inte räknades som bokningar (heldag, ingen adress), för loggen.
+    var skippedEvents: [String]
 }
