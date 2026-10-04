@@ -44,6 +44,8 @@ extension PipelineRunner {
         // Build DNG lookup: search entire output dir (files may be in dng/ staging or address folders)
         var dngLookup: [String: URL] = [:]
         for fileURL in Self.findFiles(withExtension: "dng", in: outputDir) {
+            // Kopiorna i `<adress> skicka/` (urvalssteget) är inte pipelinens DNG.
+            if fileURL.deletingLastPathComponent().lastPathComponent.hasSuffix(SendFolderSync.folderSuffix) { continue }
             dngLookup[fileURL.deletingPathExtension().lastPathComponent] = fileURL
         }
 

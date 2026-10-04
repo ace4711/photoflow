@@ -373,6 +373,12 @@ enum SessionVerifier {
             ) else { continue }
 
             for case let fileURL as URL in enumerator {
+                // Skicka-mapparna (urvalssteget) innehåller kopior, inte pipelinens filer.
+                if fileURL.lastPathComponent.hasSuffix(SendFolderSync.folderSuffix),
+                   (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                    enumerator.skipDescendants()
+                    continue
+                }
                 let resourceValues = try? fileURL.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey])
                 let isSymlink = resourceValues?.isSymbolicLink == true
                 // En katalog dyker också upp i enumeratorn (t.ex. en
