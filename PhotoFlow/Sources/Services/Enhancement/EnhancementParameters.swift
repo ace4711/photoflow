@@ -190,6 +190,10 @@ nonisolated struct EnhancementProfile: Codable, Sendable, Equatable, Identifiabl
     static let neutralID = "neutral"
     static let warmBrightID = "warm-bright"
     static let brokerID = "maklarstil"
+    /// Standardprofilen (appens inställning och CLI): Mäklarstil sedan Förbättra v4. En
+    /// användare som aktivt valt en profil har den sparad i `UserDefaults` och behåller den;
+    /// den som aldrig valt får den nya standarden (`@AppStorage` lagrar bara aktiva val).
+    static let defaultID = brokerID
 
     static let automatic = EnhancementProfile(
         id: automaticID, name: "Automatisk", autoStrength: 1, warmBias: 0.03
@@ -310,7 +314,7 @@ nonisolated final class EnhancementProfileStore: @unchecked Sendable {
 
     /// Profilen med `id`, annars standardprofilen "Automatisk".
     func profile(id: String) -> EnhancementProfile {
-        loadAll().first { $0.id == id } ?? .automatic
+        loadAll().first { $0.id == id } ?? .broker
     }
 
     func save(_ profile: EnhancementProfile) throws {

@@ -79,7 +79,7 @@ class AppSettings: ObservableObject {
     /// 5 bilder) per kalendermatchad adress i `<adress> FILM/`. Rör aldrig en redigerad eller
     /// skickad film.
     @AppStorage("reelProposalEnabled") var reelProposalEnabled: Bool = true
-    @AppStorage("enhanceProfileID") var enhanceProfileID: String = EnhancementProfile.automaticID
+    @AppStorage("enhanceProfileID") var enhanceProfileID: String = EnhancementProfile.defaultID
     /// "Räta lodlinjer": förbättringen rätar nästan lodräta linjer (virtuell kameralutning,
     /// högst 8°, beskärning utan tomma hörn) när skattningen är säker (`VerticalCorrection`).
     @AppStorage("enhanceUprightEnabled") var enhanceUprightEnabled: Bool = true

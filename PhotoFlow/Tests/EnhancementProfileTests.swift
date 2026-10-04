@@ -139,6 +139,13 @@ struct EnhancementProfileTests {
         #expect(loaded.profileID == "x")
     }
 
+    @Test("Standardprofilen är Mäklarstil")
+    func defaultProfile_isBroker() {
+        #expect(EnhancementProfile.defaultID == "maklarstil")
+        #expect(EnhancementProfile.isBuiltIn(id: EnhancementProfile.defaultID))
+        #expect(EnhancementProfile.broker.look == BrokerLook.profileLookID)
+    }
+
     @Test("Profillagring i en temporär katalog")
     func store_roundTripInTempDirectory() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("EnhProfiles-\(UUID().uuidString)")
@@ -158,7 +165,9 @@ struct EnhancementProfileTests {
         let all = store.loadAll()
         #expect(all.map(\.id) == ["auto", "neutral", "warm-bright", "maklarstil", "aaa", "maklare-1"])
         #expect(store.profile(id: "maklare-1") == custom)
-        #expect(store.profile(id: "finns-inte") == .automatic)
+        // Okänt id → standardprofilen (Mäklarstil).
+        #expect(store.profile(id: "finns-inte") == .broker)
+        #expect(store.profile(id: "finns-inte").id == EnhancementProfile.defaultID)
 
         // Inbyggda skrivs aldrig; en användarfil med inbyggt id ignoreras.
         #expect(throws: (any Error).self) { try store.save(.automatic) }

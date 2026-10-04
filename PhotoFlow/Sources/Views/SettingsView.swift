@@ -172,7 +172,7 @@ struct EnhanceSettingsRows: View {
                     Text(profile.name).tag(profile.id)
                 }
                 if !profiles.contains(where: { $0.id == settings.enhanceProfileID }) {
-                    Text("Okänd profil (Automatisk används)").tag(settings.enhanceProfileID)
+                    Text("Okänd profil (Mäklarstil används)").tag(settings.enhanceProfileID)
                 }
             }
             .pickerStyle(.menu)

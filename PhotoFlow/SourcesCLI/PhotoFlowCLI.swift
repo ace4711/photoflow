@@ -76,7 +76,7 @@ struct PhotoFlowCLI {
                              sist i körningen; på som standard, kräver kalendermatchning).
           --enhance-profile <id>
                             Stilprofil för "Förbättra bilder" (auto, neutral, warm-bright,
-                             maklarstil eller en egen profils id). Standard: auto.
+                             maklarstil eller en egen profils id). Standard: maklarstil.
           --upright on|off  Räta lodlinjer i förbättringen (standard on).
           --window-pull on|off
                             Fönster från mörkaste exponeringen i HDR (standard on).
@@ -275,7 +275,7 @@ struct PhotoFlowCLI {
         // en tidigare körning (CLI:ns egen defaults-domän) inte hänger kvar.
         settings.maxParallelism = maxParallel ?? 0
         // Profil och lodlinjer sätts alltid (samma skäl: CLI:ns egen defaults-domän).
-        settings.enhanceProfileID = enhanceProfile ?? EnhancementProfile.automaticID
+        settings.enhanceProfileID = enhanceProfile ?? EnhancementProfile.defaultID
         settings.enhanceUprightEnabled = upright ?? true
         // Ljud/tal/systemnotiser stängs alltid av headless: dels är de
         // meningslösa utan en interaktiv session, dels kraschar
