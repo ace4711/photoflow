@@ -182,6 +182,43 @@ struct WindowPullTests {
         #expect(result.pixels == scene.fused)
     }
 
+    @Test("Släthetsmasken: platt yta är slät, ränder är det inte")
+    func smoothMask_flatVsStripes() {
+        let w = 40, h = 20
+        var luma = [Float](repeating: 0.4, count: w * h)
+        for y in 0..<h { for x in 20..<w { luma[y * w + x] = (x / 2) % 2 == 0 ? 0.3 : 0.5 } }
+        let m = WindowPull.smoothMask(luma, width: w, height: h, radius: 1, threshold: 0.006)
+        #expect(m[10 * w + 5] == 1)
+        #expect(m[10 * w + 30] == 0)
+    }
+
+    @Test("Ljusfall från en lampa som vuxit ihop med fönstret tas bort, fönstret behålls")
+    func glowAttachedToWindow_isRemoved() {
+        // Ljusfall (linjär luminans som avtar mjukt kring (330, 110)) — klippt i referensen nära
+        // mitten, slätt och utan kanter i den mörka ramen. Det når in i fönstrets vänsterkant.
+        func glow(_ x: Int, _ y: Int) -> Float {
+            let dx = Float(x - 330), dy = Float(y - 110)
+            return 2 * expf(-(dx * dx + dy * dy) / (2 * 60 * 60))
+        }
+        let scene = makeScene { x, y, r, d, f in
+            guard !window.contains(x, y) else { return }
+            let lin = glow(x, y)
+            guard lin > HDRImageOps.toLinear(r.0) else { return }
+            let v = HDRImageOps.toGamma(min(lin, 1))
+            let dv = HDRImageOps.toGamma(lin / ratio)
+            r = (v, v, v); f = r; d = (dv, dv, dv)
+        }
+        let result = run(scene)
+        #expect(result.stats.applied)
+        #expect(result.stats.glowRemoved == 1)
+        let mask = try! #require(result.fullMask)
+        #expect(mask.data[110 * width + 330] == 0)
+        #expect(mask.data[160 * width + 460] >= 0.5)
+        // Ljusfallet lämnas som fusionen; fönstret hämtas fortfarande från den mörka ramen.
+        #expect(luma(result.pixels, 330, 110) == luma(scene.fused, 330, 110))
+        #expect(abs(luma(result.pixels, 460, 160) - luma(result.pixels, 462, 160)) > 0.08)
+    }
+
     @Test("Rörelse i kantbandet drar in masken (spökskydd)")
     func motionInEdgeBand_shrinksMask() {
         // En ljus sak som bara finns i referensen, tvärs över fönstrets högra kant.

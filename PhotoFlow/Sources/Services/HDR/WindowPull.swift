@@ -81,6 +81,21 @@ nonisolated enum WindowPull {
         var lampMaxTexture: Float = 0.09
         /// Komponenter vars överkant ligger under denna andel av bildhöjden är golv/reflexer.
         var floorTop: Double = 0.55
+        /// Släta ytor (HDREngine v5): lokal standardavvikelse (7×7 vid 1500 px) i mörka ramens
+        /// luma under `smoothStd` räknas som slät. Utsikter har struktur (0,02–0,2), medan
+        /// ljusfallet från en lampa eller solen på tak och väggar, solbelysta pelare/skåp och
+        /// mulen himmel är nästan helt släta (≤ 0,004). Uppmätt på 48 grupper 2026-10-04.
+        var smoothStd: Float = 0.006
+        /// En komponent där minst denna andel av de informativa inre pixlarna är släta är
+        /// ingen utsikt (solbelyst pelare/skåp, ljusfall, mulen himmel utan något att hämta).
+        var smoothComponentFraction: Double = 0.4
+        /// Ett slätt delområde (minst `glowMinFraction` av bilden) som når komponentens kant
+        /// där mörka ramen saknar kanter (andel kantpixlar < `glowMaxEdgeFraction`) är ljusfall
+        /// — fönster avgränsas av karmar, ljusfall av en isolinje — och tas bort ur masken.
+        var glowMinFraction: Double = 0.0015
+        var glowMaxEdgeFraction: Double = 0.3
+        /// Gradient (gammaluma per pixel vid 1500 px) som räknas som kant.
+        var edgeGradient: Float = 0.02
 
         init(enabled: Bool = true, strength: Float = 0.85, brightnessEV: Float = 0, includeLampsAndSky: Bool = false) {
             self.enabled = enabled
@@ -101,6 +116,8 @@ nonisolated enum WindowPull {
         var smallDropped: Int = 0
         var lampsDropped: Int = 0
         var skyDropped: Int = 0
+        /// Släta delområden (ljusfall på tak/vägg) som togs bort ur annars godkända komponenter.
+        var glowRemoved: Int = 0
         /// Ljusa ytor inne i rummet (solbelyst vägg/golv) som inte drogs in.
         var surfacesDropped: Int = 0
         /// Den mörka ramens exponering relativt referensen (negativ = mörkare), uppmätt.
@@ -164,6 +181,7 @@ nonisolated enum WindowPull {
         stats.smallDropped = detection.small
         stats.lampsDropped = detection.lamps
         stats.skyDropped = detection.sky
+        stats.glowRemoved = detection.glow
         guard detection.ratio >= 1.4 else { return noPull("mörka ramen är inte mörkare än referensen") }
         guard detection.mask.data.contains(where: { $0 > 0 }) else { return noPull("inga fönster hittades") }
 
@@ -314,7 +332,7 @@ nonisolated enum WindowPull {
         var mask: Plane
         /// Linjär ljuskvot referens/mörk ram (uppmätt).
         var ratio: Float
-        var kept = 0, small = 0, lamps = 0, sky = 0, surfaces = 0
+        var kept = 0, small = 0, lamps = 0, sky = 0, surfaces = 0, glow = 0
         var components: [ComponentInfo] = []
     }
 
@@ -460,6 +478,24 @@ nonisolated enum WindowPull {
                 keep[l] = false; detection.surfaces += 1; infos[l]?.verdict = "golv/reflex"
             }
         }
+        // Släta ytor och ljusfall (se `Options.smoothStd`): hela komponenter som till största
+        // delen är släta sorteras bort, och släta delområden som når kanten utan någon karm tas
+        // bort ur masken (t.ex. ljusfallet från en taklampa som vuxit ihop med ett fönster).
+        let smoothR = max(1, Int((3 * scale).rounded()))
+        let smooth = smoothMask(darkLuma, width: width, height: height, radius: smoothR, threshold: options.smoothStd)
+        let insideAll = HDRImageOps.morph(Plane(width: width, height: height, data: labels.map { $0 > 0 ? 1 : 0 }),
+                                          radius: max(1, Int((2 * scale).rounded())), dilate: false)
+        var infoCount = [Int](repeating: 0, count: count + 1), smoothCount = [Int](repeating: 0, count: count + 1)
+        for p in 0..<n where insideAll.data[p] > 0.5 && darkLuma[p] < 0.9 {
+            let l = Int(labels[p])
+            guard l > 0 else { continue }
+            infoCount[l] += 1
+            if smooth[p] > 0.5 { smoothCount[l] += 1 }
+        }
+        for l in 1...count where keep[l] && infoCount[l] >= 50
+            && Double(smoothCount[l]) / Double(infoCount[l]) >= options.smoothComponentFraction {
+            keep[l] = false; detection.surfaces += 1; infos[l]?.verdict = "slät yta"
+        }
         let gain = matchGain(dark: dark, mask: maskOf(keep), options: options)
         for l in 1...count where infos[l] != nil && infos[l]!.verdict != "lampa" && infos[l]!.verdict != "himmel" {
             var single = [Bool](repeating: false, count: count + 1)
@@ -504,8 +540,100 @@ nonisolated enum WindowPull {
                 }
             }
         }
+        // Ljusfall tas bort efter tillväxten, så att en del som är klippt även i mörka ramen
+        // (solen, glödande lampskärm) räknas som slät och hör till samma delområde.
+        var smoothOrClipped = smooth
+        for p in 0..<n where clippedBoth[p] > 0.5 { smoothOrClipped[p] = 1 }
+        let (finalLabels, finalCount) = labelComponents(detection.mask.data, width: width, height: height)
+        if finalCount > 0 {
+            let glowPixels = glowRegions(labels: finalLabels, keep: [Bool](repeating: true, count: finalCount + 1),
+                                         smooth: smoothOrClipped, darkLuma: darkLuma,
+                                         width: width, height: height, scale: scale, options: options)
+            detection.glow = glowPixels.regions
+            if glowPixels.regions > 0 {
+                var removed = [Float](repeating: 0, count: n)
+                for p in 0..<n where glowPixels.remove[p] { detection.mask.data[p] = 0; removed[p] = 1 }
+                // Rester av ljusfallet: smala band (längs väggen, karmen mot taket) intill det borttagna
+                // försvinner vid en öppning; bara nära ljusfallet, så att fönstrens hörn inte rundas.
+                let zone = HDRImageOps.morph(Plane(width: width, height: height, data: removed),
+                                             radius: max(1, Int((16 * scale).rounded())), dilate: true)
+                let openR = max(1, Int((7 * scale).rounded()))
+                let opened = HDRImageOps.morph(HDRImageOps.morph(detection.mask, radius: openR, dilate: false), radius: openR, dilate: true)
+                for p in 0..<n where detection.mask.data[p] > 0.5 && opened.data[p] < 0.5 && zone.data[p] > 0.5 {
+                    detection.mask.data[p] = 0
+                }
+                // Småbitar som blev kvar slängs.
+                let (rest, restCount) = labelComponents(detection.mask.data, width: width, height: height)
+                if restCount > 0 {
+                    var area = [Int](repeating: 0, count: restCount + 1)
+                    for p in 0..<n where rest[p] > 0 { area[Int(rest[p])] += 1 }
+                    for p in 0..<n where rest[p] > 0 && Double(area[Int(rest[p])]) / Double(n) < options.minComponentFraction {
+                        detection.mask.data[p] = 0
+                    }
+                }
+            }
+        }
         detection.components = infos.compactMap { $0 }
         return detection
+    }
+
+    /// Släthetsmask (1 = slät): lokal standardavvikelse av `luma` i en (2r+1)²-ruta under `threshold`.
+    static func smoothMask(_ luma: [Float], width: Int, height: Int, radius: Int, threshold: Float) -> [Float] {
+        let plane = Plane(width: width, height: height, data: luma)
+        let mean = HDRImageOps.boxMean(plane, radius: radius)
+        let meanSq = HDRImageOps.boxMean(Plane(width: width, height: height, data: luma.map { $0 * $0 }), radius: radius)
+        var out = [Float](repeating: 0, count: width * height)
+        for p in 0..<out.count {
+            let variance = max(meanSq.data[p] - mean.data[p] * mean.data[p], 0)
+            out[p] = variance < threshold * threshold ? 1 : 0
+        }
+        return out
+    }
+
+    /// Ljusfall i godkända komponenter: släta delområden (öppnade, minst `glowMinFraction`) vars
+    /// angränsande yttre ring (utanför alla kandidater) nästan saknar kanter i mörka ramen.
+    /// Returnerar pixlarna att ta bort (delområdet något utvidgat, inom komponenterna).
+    static func glowRegions(labels: [Int32], keep: [Bool], smooth: [Float], darkLuma: [Float],
+                            width: Int, height: Int, scale: Double, options: Options) -> (remove: [Bool], regions: Int) {
+        let n = width * height
+        var remove = [Bool](repeating: false, count: n)
+        var candidate = [Float](repeating: 0, count: n)
+        for p in 0..<n where labels[p] > 0 && keep[Int(labels[p])] && smooth[p] > 0.5 { candidate[p] = 1 }
+        guard candidate.contains(1) else { return (remove, 0) }
+        let openR = max(1, Int((2 * scale).rounded()))
+        var plane = Plane(width: width, height: height, data: candidate)
+        plane = HDRImageOps.morph(HDRImageOps.morph(plane, radius: openR, dilate: false), radius: openR, dilate: true)
+        let (sub, subCount) = labelComponents(plane.data, width: width, height: height)
+        guard subCount > 0 else { return (remove, 0) }
+        var area = [Int](repeating: 0, count: subCount + 1)
+        for p in 0..<n where sub[p] > 0 { area[Int(sub[p])] += 1 }
+        // Gradient av mörka ramens luma efter 3×3-medel (centrala differenser).
+        let blurred = HDRImageOps.boxMean(Plane(width: width, height: height, data: darkLuma), radius: 1).data
+        func gradient(_ p: Int) -> Float {
+            let x = p % width, y = p / width
+            guard x > 0, y > 0, x < width - 1, y < height - 1 else { return 0 }
+            let gx = (blurred[p + 1] - blurred[p - 1]) / 2, gy = (blurred[p + width] - blurred[p - width]) / 2
+            return (gx * gx + gy * gy).squareRoot()
+        }
+        let ringR = max(1, Int((3 * scale).rounded()))
+        let border = max(2, Int((2 * scale).rounded()))
+        var regions = 0
+        for r in 1...subCount where Double(area[r]) >= options.glowMinFraction * Double(n) {
+            let region = Plane(width: width, height: height, data: sub.map { $0 == Int32(r) ? 1 : 0 })
+            let grown = HDRImageOps.morph(region, radius: ringR, dilate: true)
+            var ring = 0, edges = 0
+            for p in 0..<n where grown.data[p] > 0.5 && labels[p] == 0 {
+                let x = p % width, y = p / width
+                guard x >= border, y >= border, x < width - border, y < height - border else { continue }
+                ring += 1
+                if gradient(p) > options.edgeGradient { edges += 1 }
+            }
+            guard ring >= 20, Double(edges) / Double(ring) < options.glowMaxEdgeFraction else { continue }
+            regions += 1
+            let cut = HDRImageOps.morph(region, radius: max(1, ringR - 1), dilate: true)
+            for p in 0..<n where cut.data[p] > 0.5 && labels[p] > 0 { remove[p] = true }
+        }
+        return (remove, regions)
     }
 
     /// Fyller hål: bakgrundsområden (0) som inte når bildkanten blir 1.

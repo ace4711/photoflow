@@ -24,7 +24,9 @@ nonisolated enum HDREngine {
     /// medianreferens, exponeringsmatchad registrering och straff för klippta pixlar
     /// i fusionsvikterna (docs/plan-hdr-fonster.md, fas 0–1).
     /// 4 = ljusare fönsterutsikt: högdagerskuldra i stället för hårt p99-tak, mål-median 0,72.
-    static let version = 4
+    /// 5 = window pull sorterar bort släta ytor och ljusfall (lampa/sol på tak och väggar,
+    /// solbelysta pelare) som tidigare blev grå fläckar (docs/plan-maklarstil.md, v2).
+    static let version = 5
 
     /// En exponering: RAW-filen (DNG eller NEF) och exponeringstiden i sekunder
     /// (0 = okänd).
