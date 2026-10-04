@@ -8,7 +8,9 @@ struct BracketReviewView: View {
     @StateObject private var dictation = DictationService()
     @State private var selectedGroupIndex: Int = 0
     @State private var selectedPhotoIndex: Int = 0
-    @State private var showHDRPreview: Bool = false
+    /// Användaren har valt att bläddra bland källexponeringarna. Har gruppen en
+    /// färdig HDR visas den som standard (se `ReviewImageSelection`).
+    @State private var showSources: Bool = false
     @State private var showNotes: Bool = false
     @FocusState private var isFocused: Bool
 
@@ -24,12 +26,18 @@ struct BracketReviewView: View {
         return pipeline.photos(in: group)
     }
 
+    /// Sant när slutprodukten (förbättrad/sammanslagen HDR) visas i stora bilden.
+    private var showHDRPreview: Bool {
+        get { currentGroup?.finalPreviewURL != nil && !showSources }
+        nonmutating set { showSources = !newValue }
+    }
+
     var currentPhoto: PhotoItem? {
         guard selectedPhotoIndex < currentGroupPhotos.count else { return nil }
         return currentGroupPhotos[selectedPhotoIndex]
     }
 
-    /// Reflects which HDR engine actually produced `mergedHDRPreviewURL` (see
+    /// Reflects which HDR engine actually produced `finalPreviewURL` (see
     /// `AppSettings.hdrEngine`) — previously hardcoded to "Mertens Exposure
     /// Fusion (OpenCV)" even after Fas 3a added the Core Image RAW engine.
     private var engineLabel: String {
@@ -95,7 +103,7 @@ struct BracketReviewView: View {
         .onKeyPress(.return) { acceptCurrentPhoto(); return .handled }
         .onKeyPress(.delete) { rejectCurrentPhoto(); return .handled }
         .onKeyPress(characters: CharacterSet(charactersIn: "h")) { _ in
-            if currentGroup?.mergedHDRPreviewURL != nil { showHDRPreview.toggle() }
+            if currentGroup?.finalPreviewURL != nil { showHDRPreview.toggle() }
             return .handled
         }
         .onKeyPress(characters: CharacterSet(charactersIn: "d")) { _ in finishReview(); return .handled }
@@ -198,7 +206,7 @@ struct BracketReviewView: View {
     private var groupList: some View {
         List(selection: Binding(
             get: { selectedGroupIndex },
-            set: { selectedGroupIndex = $0; selectedPhotoIndex = 0; showHDRPreview = false }
+            set: { selectedGroupIndex = $0; selectedPhotoIndex = 0; showSources = false }
         )) {
             ForEach(Array(pipeline.bracketGroups.enumerated()), id: \.element.id) { index, group in
                 HStack {
@@ -223,7 +231,7 @@ struct BracketReviewView: View {
                     }
                     Spacer()
                     VStack(spacing: 2) {
-                        if group.mergedHDRPreviewURL != nil {
+                        if group.finalPreviewURL != nil {
                             Label("HDR", systemImage: "photo.stack")
                                 .font(.system(.caption2, weight: .bold))
                                 .foregroundColor(.white)
@@ -256,7 +264,7 @@ struct BracketReviewView: View {
         ZStack {
             Color(nsColor: .windowBackgroundColor)
 
-            if showHDRPreview, let hdrURL = currentGroup?.mergedHDRPreviewURL {
+            if showHDRPreview, let hdrURL = currentGroup?.finalPreviewURL {
                 // Show merged HDR preview
                 VStack(spacing: 12) {
                     LocalImageView(url: hdrURL)
@@ -267,7 +275,7 @@ struct BracketReviewView: View {
                         .overlay(alignment: .topTrailing) {
                             GlassEffectContainer {
                                 VStack(alignment: .trailing, spacing: 6) {
-                                    Label("HDR-sammanslagning", systemImage: "photo.stack")
+                                    Label(currentGroup?.enhancedPreviewURL != nil ? "HDR · förbättrad" : "HDR-sammanslagning", systemImage: "photo.stack")
                                         .font(.title3.bold())
                                         .foregroundColor(.white)
                                         .padding(.horizontal, 12)
@@ -292,7 +300,7 @@ struct BracketReviewView: View {
                         Label(engineLabel, systemImage: "cpu")
                             .font(.system(.body, design: .monospaced))
                         Button("Visa enskilda bilder (H)") {
-                            showHDRPreview = false
+                            showSources = true
                         }
                         .buttonStyle(.bordered)
                     }
@@ -307,7 +315,7 @@ struct BracketReviewView: View {
                                 .padding(12)
                         }
                         .overlay(alignment: .topLeading) {
-                            if currentGroup?.mergedHDRPreviewURL != nil {
+                            if currentGroup?.finalPreviewURL != nil {
                                 Button(action: { showHDRPreview = true }) {
                                     Label("Visa HDR (H)", systemImage: "photo.stack")
                                         .font(.caption.bold())
@@ -319,6 +327,10 @@ struct BracketReviewView: View {
                         }
 
                     HStack(spacing: 24) {
+                        if currentGroup?.finalPreviewURL != nil {
+                            Label("Exponering \(selectedPhotoIndex + 1) av \(currentGroupPhotos.count)", systemImage: "square.stack.3d.up")
+                                .foregroundColor(.accentColor)
+                        }
                         Label(photo.displayName, systemImage: "photo")
                         Label(photo.exposureDisplay, systemImage: "timer")
                         Label("f/\(String(format: "%.1f", photo.fNumber))", systemImage: "camera.aperture")
@@ -389,9 +401,9 @@ struct BracketReviewView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     // HDR preview thumbnail (if available)
-                    if let group = currentGroup, group.mergedHDRPreviewURL != nil {
+                    if let group = currentGroup, group.finalPreviewURL != nil {
                         VStack(spacing: 4) {
-                            LocalThumbnailView(url: group.mergedHDRPreviewURL)
+                            LocalThumbnailView(url: group.finalPreviewURL)
                                 .id(hdrIdentity)
                                 .frame(width: 100, height: 75)
                                 .clipped()
@@ -426,7 +438,7 @@ struct BracketReviewView: View {
                                 .id(index)
                                 .onTapGesture {
                                     selectedPhotoIndex = index
-                                    showHDRPreview = false
+                                    showSources = true
                                 }
                         }
                     }
@@ -490,7 +502,11 @@ struct BracketReviewView: View {
 
     private func navigatePhoto(_ direction: Int) {
         guard currentGroup != nil else { return }
-        showHDRPreview = false
+        // Pil åt höger från HDR-bilden går till första exponeringen, åt vänster stannar kvar.
+        if showHDRPreview {
+            if direction > 0 { showSources = true; selectedPhotoIndex = 0 }
+            return
+        }
         let newIndex = selectedPhotoIndex + direction
         if newIndex >= 0 && newIndex < currentGroupPhotos.count {
             selectedPhotoIndex = newIndex
@@ -502,7 +518,7 @@ struct BracketReviewView: View {
         if newIndex >= 0 && newIndex < pipeline.bracketGroups.count {
             selectedGroupIndex = newIndex
             selectedPhotoIndex = 0
-            showHDRPreview = false
+            showSources = false
         }
     }
 

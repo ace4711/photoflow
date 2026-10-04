@@ -342,6 +342,7 @@ extension PipelineRunner {
             let previewURL = FileManager.default.fileExists(atPath: hdrJpeg.path) ? hdrJpeg : hdrTiff
             if let idx = state.bracketGroups.firstIndex(where: { $0.id == group.id }) {
                 state.bracketGroups[idx].mergedHDRPreviewURL = previewURL
+                state.bracketGroups[idx].enhancedPreviewURL = nil // gammal förbättring hör till den förra sammanslagningen
             }
             state.appendLog("HDR-ommerge klar för grupp \(group.id) (16-bit TIFF).", type: .success)
             audio.playStepComplete()

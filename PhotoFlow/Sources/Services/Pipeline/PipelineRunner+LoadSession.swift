@@ -39,6 +39,7 @@ extension PipelineRunner {
         let previewDir = outputDir.appendingPathComponent("previews")
         let dngStagingDir = outputDir.appendingPathComponent("dng")
         let existingHDR = AddressFolderLayout.locateHDRFiles(in: outputDir)
+        let existingEnhanced = AddressFolderLayout.locateEnhancedFiles(in: outputDir)
 
         // Build DNG lookup: search entire output dir (files may be in dng/ staging or address folders)
         var dngLookup: [String: URL] = [:]
@@ -212,7 +213,9 @@ extension PipelineRunner {
                 timeStart: timeStart,
                 timeEnd: timeEnd,
                 exposureRangeStops: expRange,
-                mergedHDRPreviewURL: hdrPreviewURL
+                mergedHDRPreviewURL: hdrPreviewURL,
+                enhancedPreviewURL: hdrPreviewURL == nil ? nil
+                    : ReviewImageSelection.preferredURL(existingEnhanced["hdr_group_\(groupId)"] ?? [])
             )
             bracketGroups.append(group)
         }

@@ -20,6 +20,11 @@ struct BracketGroup: Identifiable, Hashable {
     let timeEnd: String
     let exposureRangeStops: Double
     var mergedHDRPreviewURL: URL?
+    /// Förbättrad HDR (`hdr_group_N_enh.*`) — slutprodukten när den finns.
+    var enhancedPreviewURL: URL?
+
+    /// Bilden granskningen visar som standard: förbättrad, annars sammanslagen HDR.
+    var finalPreviewURL: URL? { enhancedPreviewURL ?? mergedHDRPreviewURL }
 
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
