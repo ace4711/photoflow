@@ -133,7 +133,10 @@ struct WindowPullTests {
             if lampCore.contains(x, y) {
                 r = (1, 1, 1); d = (1, 1, 1); f = (1, 1, 1)
             } else if lampHalo.contains(x, y) {
-                r = (1, 1, 1); d = (0.7, 0.68, 0.6); f = (0.97, 0.97, 0.97)
+                // Mjuk glorian: avtar från kärnan utåt (en riktig lampa har inga skarpa kanter).
+                let dist = Float(max(abs(x - 106), abs(y - 86)) - 6) / 6
+                let v = 0.85 - 0.5 * dist
+                r = (1, 1, 1); d = (v, v * 0.97, v * 0.9); f = (0.97, 0.97, 0.97)
             }
         }
         let result = run(scene)

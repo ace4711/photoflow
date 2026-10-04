@@ -68,6 +68,8 @@ nonisolated enum WindowPull {
         var minTexture: Float = 0.02
         var minTextureColored: Float = 0.045
         var coloredSurfaceChroma: Float = 0.25
+        /// En lampa har lägre textur än så här (annars är det ett litet fönster).
+        var lampMaxTexture: Float = 0.09
         /// Komponenter vars överkant ligger under denna andel av bildhöjden är golv/reflexer.
         var floorTop: Double = 0.55
 
@@ -403,7 +405,10 @@ nonisolated enum WindowPull {
                 coreClipped: core / Double(boxW * boxH), ringLuma: 0, matchedLuma: 0, verdict: "fönster")
             // Lampa: liten, och antingen en klippt kärna även i mörka ramen (ringen runt
             // glödtråden/skärmen är det som blev kandidat) eller platt nästan vit.
-            let isLamp = fraction < 0.006 && (core >= 0.1 * Double(area[l]) || meanDark >= 0.7)
+            // Små fönster med bländande himmel ser likadana ut, men har karmar och utsikt:
+            // hög textur (0,10–0,25 mot lampornas 0,003–0,10 i testmängden).
+            let isLamp = fraction < 0.006 && info.darkTexture < Double(options.lampMaxTexture)
+                && (core >= 0.1 * Double(area[l]) || meanDark >= 0.7)
             // Himmel: stor yta som når överkanten och spänner över mycket av bredden.
             let isSky = minY[l] <= max(1, height / 100) && fraction >= 0.08 && Double(boxW) >= 0.4 * Double(width)
             if isLamp && !options.includeLampsAndSky {
