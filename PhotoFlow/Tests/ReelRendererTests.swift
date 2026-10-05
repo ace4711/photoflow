@@ -108,7 +108,7 @@ struct ReelRendererTests {
         await #expect(throws: (any Error).self) { try await task.value }
         #expect(!FileManager.default.fileExists(atPath: out.path))
         let remaining = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".mp4") || $0.contains(".tmp") }
-        #expect(remaining.isEmpty)
+        #expect(remaining.isEmpty, "kvar: \(remaining)")
     }
 
     @Test("Saknad bildfil ger ett fel direkt")

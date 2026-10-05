@@ -387,8 +387,28 @@ nonisolated final class ReelRenderer: @unchecked Sendable {
             }
         } catch {
             if writer.status == .writing { writer.cancelWriting() }
-            try? fm.removeItem(at: tmp)
+            Self.removeTemporaryFiles(for: tmp)
             throw error
+        }
+    }
+
+    /// Tar bort temporärfilen och AVAssetWriters egna syskonfiler (`<tmp>.sb-…`). De senare kan
+    /// dyka upp en kort stund efter `cancelWriting()`, så vi tittar några gånger (högst ~200 ms).
+    /// Blockerande väntan med flit: uppgiften är redan avbruten, så `Task.sleep` skulle inte vänta.
+    nonisolated static func removeTemporaryFiles(for tmp: URL) {
+        let fm = FileManager.default
+        let directory = tmp.deletingLastPathComponent()
+        let prefix = tmp.lastPathComponent
+        var quietRounds = 0
+        for _ in 0..<10 where quietRounds < 2 {
+            let leftovers = ((try? fm.contentsOfDirectory(atPath: directory.path)) ?? []).filter { $0.hasPrefix(prefix) }
+            if leftovers.isEmpty {
+                quietRounds += 1
+            } else {
+                quietRounds = 0
+                for name in leftovers { try? fm.removeItem(at: directory.appendingPathComponent(name)) }
+            }
+            usleep(20_000)
         }
     }
 
