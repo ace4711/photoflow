@@ -138,7 +138,7 @@ extension PipelineRunner {
             Self.cleanDNGPartial(in: dngDir)
             try FileManager.default.createDirectory(at: partialDir, withIntermediateDirectories: true)
             let batchUnit = "batch:\(chunkIndex + 1)/\(chunks.count)"
-            try await PipelineMetrics.jobAsync(
+            _ = try await PipelineMetrics.jobAsync(
                 step: "dng", unit: batchUnit,
                 bytesIn: PipelineMetrics.totalSize(of: chunk.map { URL(fileURLWithPath: $0) }),
                 bytesOut: { (moved: [URL]) in PipelineMetrics.totalSize(of: moved) }

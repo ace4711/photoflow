@@ -196,6 +196,7 @@ nonisolated enum RadianceMerge {
         // fullupplöst karta per ram — sparar ~100 MB per ram vid 6000 px); ankaret närmaste granne.
         let sx = Float(s.width) / Float(width), sy = Float(s.height) / Float(height)
         let sw = s.width, sh = s.height
+        let anchors = anchorIndex   // oföränderlig kopia för den parallella slingan
 
         // 2. Sammanslagning per pixel.
         var out = [Float](repeating: 1, count: count * 4)
@@ -229,7 +230,7 @@ nonisolated enum RadianceMerge {
                         o[p * 4] = sr / sum; o[p * 4 + 1] = sg / sum; o[p * 4 + 2] = sb / sum
                     } else {
                         // Ingen användbar ram (klippt i alla eller svart i alla): ankarets värde.
-                        let a = anchorIndex[ys * sw + min(Int(Float(x) * sx), sw - 1)]
+                        let a = anchors[ys * sw + min(Int(Float(x) * sx), sw - 1)]
                         let img = imgs[a]
                         o[p * 4] = img[p * 4] * inv[a]; o[p * 4 + 1] = img[p * 4 + 1] * inv[a]; o[p * 4 + 2] = img[p * 4 + 2] * inv[a]
                     }

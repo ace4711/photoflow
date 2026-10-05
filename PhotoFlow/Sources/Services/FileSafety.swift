@@ -64,7 +64,8 @@ enum FileSafety {
     nonisolated static func resolvedPath(_ url: URL) -> URL {
         var buffer = [Int8](repeating: 0, count: Int(PATH_MAX))
         guard realpath(url.path, &buffer) != nil else { return url }
-        return URL(fileURLWithPath: String(cString: buffer), isDirectory: true)
+        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return URL(fileURLWithPath: String(decoding: bytes, as: UTF8.self), isDirectory: true)
     }
 
     /// True when `url` is a filesystem symlink (as opposed to a real file).

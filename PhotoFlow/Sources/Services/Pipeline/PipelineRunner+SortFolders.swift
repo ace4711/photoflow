@@ -123,7 +123,7 @@ extension PipelineRunner {
         // dit (se PipelineRunner+Relocate.swift). Bara med kalendermatchningar — utan dem hör allt
         // till "Osorterade", och då är det säkrare att låta en redan sorterad session vara.
         if !calendarMappings.isEmpty {
-            relocateMisplacedFiles(outputDir: outputDir)
+            _ = relocateMisplacedFiles(outputDir: outputDir)
         }
 
         // Kopiera alla foton (sortering sker före gallring)
