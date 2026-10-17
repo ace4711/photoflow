@@ -465,6 +465,18 @@ struct ReelSelectorTests {
         #expect(sel2.picks.first?.candidateID != sel2.picks.last?.candidateID)
     }
 
+    @Test("Utan annan utomhusbild avslutar en andra fasadbild (som skiljer sig från öppningen) före ett inomhusrum")
+    func closingPrefersSecondFacadeOverIndoor() {
+        let list = [cand("f1", room: "Fasad", q: 0.9, axis: 0), cand("f2", room: "Fasad", q: 0.75, axis: 7),
+                    cand("v", room: "Vardagsrum", q: 0.88, axis: 1), cand("k", room: "Kök", q: 0.8, axis: 2),
+                    cand("s", room: "Sovrum", q: 0.7, axis: 3)]
+        let sel = ReelSelector.select(list)
+        #expect(sel.picks.first?.candidateID == "f1")
+        #expect(sel.picks.last?.candidateID == "f2")
+        #expect(sel.picks.last?.reason.hasPrefix("Avslut: Fasad, skiljer sig från öppningen") == true)
+        #expect(sel.picks.contains { $0.candidateID == "v" })
+    }
+
     @Test("Samma rum flera gånger: fördelas över rumstyperna när det finns få")
     func repeatsAreSpread() {
         var list: [ReelCandidate] = []

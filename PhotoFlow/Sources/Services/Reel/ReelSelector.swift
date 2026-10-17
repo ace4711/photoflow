@@ -558,6 +558,12 @@ nonisolated enum ReelSelector {
                 isExterior(c) == true && !isMontage(c) && (typeOf(c) != "fasad" || isDusk(c))
             }
             if let c = best(outdoor) { return ClosingChoice(candidate: c, kind: .outdoor) }
+            // Hellre en annan utomhusbild av fasadtyp (t.ex. en altan som modellen kallat "Fasad") än
+            // ett inomhusrum som avslut; `best` kräver fortfarande att den skiljer sig från öppningen.
+            let outdoorFacade = rest.filter { c in isExterior(c) == true && !isMontage(c) && typeOf(c) == "fasad" }
+            if let o = opening, let c = best(outdoorFacade), similarity(c.id, o.id) <= weights.maxClosingSimilarity {
+                return ClosingChoice(candidate: c, kind: .outdoor)
+            }
             if let c = best(rest.filter(isHero)) { return ClosingChoice(candidate: c, kind: .hero) }
             if let c = best(lowestClass(rest)) { return ClosingChoice(candidate: c, kind: .other) }
             return nil
