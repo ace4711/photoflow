@@ -101,6 +101,22 @@ struct ReelSelectionEditTests {
         #expect(model.undoActionName == undoName)
     }
 
+    @Test("Full film: en bild som redan är med får släppas i en skarv (flytt), en ny får inte")
+    func fullFilmAcceptsMoveDrop() throws {
+        let (model, root) = try makeModel(images: 15)
+        defer { try? FileManager.default.removeItem(at: root) }
+        model.setCount(ReelEditorModel.countRange.upperBound)
+        #expect(!model.canAddClip)
+        let spare = try #require(model.candidateRows.first { $0.clipIndex == nil })
+        let inFilm = try #require(model.candidateRows.first { $0.clipIndex == 5 })
+        #expect(model.canInsertCandidate(inFilm.id))
+        #expect(!model.canInsertCandidate(spare.id))
+        #expect(!model.canInsertCandidate(nil))
+        model.insertCandidate(inFilm.id, at: 0)
+        #expect(shas(model).first == inFilm.id)
+        #expect(model.spec!.timeline.count == 12)
+    }
+
     @Test("Infoga en bild som redan är med flyttar klippet (ingen dubblett)")
     func insertExistingMoves() throws {
         let (model, root) = try makeModel()

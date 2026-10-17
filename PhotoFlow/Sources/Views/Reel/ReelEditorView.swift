@@ -433,7 +433,10 @@ struct ReelEditorView: View {
                                       onPin: { model.togglePinned(row.id) },
                                       onExclude: { model.toggleExcluded(row.id) })
                             .onTapGesture { model.selectCandidate(row.id) }
-                            .onDrag { NSItemProvider(object: ReelCandidateDrag.payload(row.id) as NSString) }
+                            .onDrag {
+                                model.draggedCandidateID = row.id
+                                return NSItemProvider(object: ReelCandidateDrag.payload(row.id) as NSString)
+                            }
                             .contextMenu { candidateMenu(row) }
                     }
                 }

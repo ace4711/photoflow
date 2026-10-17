@@ -570,6 +570,16 @@ final class ReelEditorModel {
     /// Får en bild till läggas till (filmen har färre än `countRange.upperBound` klipp)?
     var canAddClip: Bool { order.count < Self.countRange.upperBound }
 
+    /// Får bilden (sha256) släppas i en skarv i tidslinjen? Ja om det finns plats, eller om den redan
+    /// är med (då flyttas klippet, se `insertCandidate`). nil (okänd bild) räknas som ny.
+    func canInsertCandidate(_ id: String?) -> Bool {
+        canAddClip || id.flatMap(assetID(forCandidate:)) != nil
+    }
+
+    /// Bilden som just nu dras från rutnätet (sätts när dragningen börjar), så att tidslinjen kan visa
+    /// om ett släpp i en skarv går innan dragdatan lästs. Kan vara kvar efter en avbruten dragning.
+    var draggedCandidateID: String?
+
     /// Klippets asset-id om bilden (sha256) redan är med i filmen.
     func assetID(forCandidate id: String) -> String? {
         guard let spec else { return nil }

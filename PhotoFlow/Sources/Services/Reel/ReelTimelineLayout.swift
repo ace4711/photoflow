@@ -138,6 +138,33 @@ nonisolated enum ReelTimelineLayout {
         return min(max(snapped, range.lowerBound), range.upperBound)
     }
 
+    /// Rörelse (pixlar) som högerkanten måste dras innan det räknas som en längdändring; mindre är ett klick.
+    static let edgeDragThreshold = 2.0
+
+    /// Längden efter dragning av högerkanten (`draggedDuration`), eller nil om rörelsen är högst
+    /// `threshold` pixlar: ett klick på kanten markerar bara klippet. Annars skulle snäppningen till
+    /// 0,1 s ändra och låsa en automatisk längd som ligger mellan stegen (t.ex. 2,125 s i snabbt tempo).
+    static func edgeDrag(from original: Double, dx: Double, pixelsPerSecond: Double, range: ClosedRange<Double>,
+                         threshold: Double = edgeDragThreshold) -> Double? {
+        guard abs(dx) > threshold else { return nil }
+        return draggedDuration(from: original, dx: dx, pixelsPerSecond: pixelsPerSecond, range: range)
+    }
+
+    /// Rörelse (pixlar) som ett övergångschip måste dras innan det räknas som en längdändring.
+    static let transitionDragThreshold = 3.0
+
+    /// Övergångens nya längd när chipet dragits `dx` pixlar, eller nil om ingenting ändras: hårt klipp,
+    /// ett klick (högst `threshold` pixlar), eller samma längd som nu. Dragningen utgår från den
+    /// effektiva längden `min(inställd, limit)`, alltså det chipet ritas för, så att chipet följer
+    /// pekaren direkt och en liten darrning inte låser och kortar en inställd längd som klampas.
+    static func transitionDrag(_ configured: ReelSpec.Transition, limit: Double, dx: Double, pixelsPerSecond: Double,
+                               threshold: Double = transitionDragThreshold) -> Double? {
+        guard configured.type != .cut, abs(dx) > threshold else { return nil }
+        let start = min(configured.duration, limit)
+        let d = draggedTransition(from: start, dx: dx, pixelsPerSecond: pixelsPerSecond, limit: limit)
+        return abs(d - start) > 1e-9 ? d : nil
+    }
+
     /// Längsta/kortaste övergång i redigeraren, och steget vid dragning (sekunder).
     static let transitionStep = 0.05
 

@@ -169,4 +169,39 @@ struct ReelTimelineLayoutTests {
         #expect(abs(after.joins[0].centerX - (before.joins[0].centerX - 10)) < 1e-9)
         #expect(ReelTimelineLayout.hit(after, x: after.joins[0].centerX, overChip: true) == .transition(1))
     }
+
+    @Test("Klick på högerkanten (ingen eller liten rörelse) ändrar inte längden, även när den ligger mellan 0,1 s-stegen")
+    func edgeClickIsNotAResize() {
+        let r = ReelEditorModel.durationRange
+        // Snabbt tempo: 2,5 · 0,85 = 2,125 s, som snäppning annars gör till 2,1.
+        #expect(ReelTimelineLayout.edgeDrag(from: 2.125, dx: 0, pixelsPerSecond: 60, range: r) == nil)
+        #expect(ReelTimelineLayout.edgeDrag(from: 2.125, dx: -2, pixelsPerSecond: 60, range: r) == nil)
+        #expect(ReelTimelineLayout.edgeDrag(from: 2.125, dx: 1.5, pixelsPerSecond: 60, range: r) == nil)
+        let d = ReelTimelineLayout.edgeDrag(from: 2.125, dx: 30, pixelsPerSecond: 60, range: r)
+        #expect(d.map { abs($0 - 2.6) < 1e-9 } == true)
+    }
+
+    @Test("Övergångsdragning utgår från den effektiva längden när den inställda överskrider klippens tak")
+    func transitionDragFromEffective() {
+        let set = ReelSpec.Transition(type: .crossfade, direction: nil, duration: 1.5)
+        // Tak 1,0 s (ett klipp på 1,0 s): chipet ritas för 1,0 s.
+        #expect(ReelTimelineLayout.transitionDrag(set, limit: 1.0, dx: 0, pixelsPerSecond: 50) == nil)
+        // 4 px åt höger kortar redan: 1,0 − 2·4/50 = 0,84 → 0,85 s.
+        #expect(ReelTimelineLayout.transitionDrag(set, limit: 1.0, dx: 4, pixelsPerSecond: 50).map { abs($0 - 0.85) < 1e-9 } == true)
+        // Vänster (längre) går inte förbi taket: ingen ändring, inget lås.
+        #expect(ReelTimelineLayout.transitionDrag(set, limit: 1.0, dx: -4, pixelsPerSecond: 50) == nil)
+        #expect(ReelTimelineLayout.transitionDrag(set, limit: 1.0, dx: -40, pixelsPerSecond: 50) == nil)
+        // Höger (kortare) följer pekaren direkt från 1,0 s: 10 px vid 50 px/s = 0,4 s kortare.
+        let shorter = ReelTimelineLayout.transitionDrag(set, limit: 1.0, dx: 10, pixelsPerSecond: 50)
+        #expect(shorter.map { abs($0 - 0.6) < 1e-9 } == true)
+        // Under tröskeln (3 px) är det ett klick; hårt klipp har ingen längd att dra.
+        #expect(ReelTimelineLayout.transitionDrag(.init(type: .crossfade, direction: nil, duration: 0.5),
+                                                  limit: 3, dx: 3, pixelsPerSecond: 50) == nil)
+        #expect(ReelTimelineLayout.transitionDrag(.init(type: .cut, direction: nil, duration: 0),
+                                                  limit: 3, dx: -30, pixelsPerSecond: 50) == nil)
+        let longer = ReelTimelineLayout.transitionDrag(.init(type: .crossfade, direction: nil, duration: 0.5),
+                                                       limit: 3, dx: -10, pixelsPerSecond: 50)
+        #expect(longer.map { abs($0 - 0.9) < 1e-9 } == true)
+    }
 }
+

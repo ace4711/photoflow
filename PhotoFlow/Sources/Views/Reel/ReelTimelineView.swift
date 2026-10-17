@@ -32,12 +32,16 @@ struct ReelTimelineView: View {
         case transition(index: Int, duration: Double)
     }
 
-    /// Vad dragningen gäller, bestämt av första träffen.
+    /// Vad dragningen gäller, bestämt av första träffen. Klippet anges med asset-id och slås upp
+    /// på nytt vid varje händelse: specen kan ändras mitt i en dragning (⌘Z, Delete, en hämtning),
+    /// och ett sparat index kunde då peka utanför filmen.
     private enum Mode: Equatable {
         case scrub
-        case clip(Int)
-        case edge(Int)
-        case transition(Int)
+        case clip(String)
+        case edge(String)
+        case transition(String)
+        /// Klippet försvann under dragningen; resten av dragningen ignoreras.
+        case cancelled
     }
 
     @State private var drag: Drag?
@@ -109,7 +113,7 @@ struct ReelTimelineView: View {
                 }
 
                 dropIndicator(layout)
-                externalDropIndicator(layout)
+                externalDropIndicator(layout, canInsert: canInsertDragged)
                 PlayheadView(preview: preview, pixelsPerSecond: pps, inset: Self.inset)
                     .frame(width: width, height: Self.height, alignment: .topLeading)
                     .allowsHitTesting(false)
@@ -118,7 +122,7 @@ struct ReelTimelineView: View {
             .contentShape(Rectangle())
             .gesture(dragGesture(layout, spec: committed))
             .onDrop(of: [.plainText], delegate: CandidateDropDelegate(
-                layout: layout, inset: Self.inset, canInsert: model.canAddClip, target: $externalDrop,
+                layout: layout, inset: Self.inset, canInsert: canInsertDragged, target: $externalDrop,
                 perform: { [model, preview] id, target in Self.dropCandidate(id, target: target, model: model, preview: preview) }))
             .onContinuousHover { phase in updateCursor(phase, layout: layout) }
         }
@@ -227,20 +231,20 @@ struct ReelTimelineView: View {
     /// Släppindikator för en bild från rutnätet: lodrät linje med plustecken i skarven (infoga), eller
     /// en ram runt klippet (byt bild). Röd när filmen redan har det högsta antalet klipp.
     @ViewBuilder
-    private func externalDropIndicator(_ layout: ReelTimelineLayout.Layout) -> some View {
+    private func externalDropIndicator(_ layout: ReelTimelineLayout.Layout, canInsert: Bool) -> some View {
         switch externalDrop {
         case .insert(let index):
             let x = ReelTimelineLayout.insertionX(layout, at: index)
-            let color: Color = model.canAddClip ? .accentColor : .red
+            let color: Color = canInsert ? .accentColor : .red
             ZStack(alignment: .top) {
                 Rectangle().fill(color).frame(width: 3, height: Self.blockHeight + 8)
-                Image(systemName: model.canAddClip ? "plus.circle.fill" : "nosign")
+                Image(systemName: canInsert ? "plus.circle.fill" : "nosign")
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(.white, color)
                     .background(Circle().fill(color))
                     .offset(y: -10)
             }
-            .help(model.canAddClip ? "Infoga här" : "Filmen är full (högst \(ReelEditorModel.countRange.upperBound) bilder)")
+            .help(canInsert ? "Infoga här" : "Filmen är full (högst \(ReelEditorModel.countRange.upperBound) bilder)")
             .offset(x: Self.inset + x - 1.5, y: Self.blockTop - 4)
             .allowsHitTesting(false)
             .zIndex(40)
@@ -265,6 +269,10 @@ struct ReelTimelineView: View {
             EmptyView()
         }
     }
+
+    /// Får bilden som dras från rutnätet infogas i en skarv: plats kvar, eller bilden är redan med
+    /// (då blir släppet en flytt).
+    private var canInsertDragged: Bool { model.canInsertCandidate(model.draggedCandidateID) }
 
     /// Utför ett släpp från rutnätet och flyttar spelhuvudet till klippet.
     private static func dropCandidate(_ id: String, target: ReelTimelineLayout.ExternalDrop,
@@ -316,24 +324,24 @@ struct ReelTimelineView: View {
                 switch mode {
                 case .scrub:
                     scrub(toX: value.location.x, layout: layout)
-                case .clip(let i):
-                    if abs(value.translation.width) > 4 { drag = .move(index: i, dx: value.translation.width) }
-                case .edge(let i):
-                    let original = spec.timeline[i].duration
-                    let d = ReelTimelineLayout.draggedDuration(from: original, dx: value.translation.width,
-                                                               pixelsPerSecond: layout.pixelsPerSecond,
-                                                               range: ReelEditorModel.durationRange)
-                    drag = .resize(index: i, duration: d)
-                case .transition(let i):
-                    // Hårt klipp har ingen längd att dra i: då blir det bara ett klick.
-                    // Utgå från den sparade specen (layouten visar redan utkastet).
+                case .clip(let id):
+                    guard let i = index(of: id, spec: spec, layout: layout) else { return cancelDrag() }
+                    drag = abs(value.translation.width) > 4 ? .move(index: i, dx: value.translation.width) : nil
+                case .edge(let id):
+                    guard let i = index(of: id, spec: spec, layout: layout) else { return cancelDrag() }
+                    drag = ReelTimelineLayout.edgeDrag(from: spec.timeline[i].duration, dx: value.translation.width,
+                                                       pixelsPerSecond: layout.pixelsPerSecond,
+                                                       range: ReelEditorModel.durationRange)
+                        .map { .resize(index: i, duration: $0) }
+                case .transition(let id):
+                    guard let i = index(of: id, spec: spec, layout: layout), i > 0 else { return cancelDrag() }
+                    // Utgå från den sparade specen (layouten visar redan utkastet). Hårt klipp har ingen
+                    // längd att dra i, och utan ändring blir det bara ett klick.
                     let original = spec.timeline[i].transitionIn ?? spec.style.defaultTransition
-                    guard original.type != .cut, abs(value.translation.width) > 3 else { break }
-                    let d = ReelTimelineLayout.draggedTransition(from: original.duration, dx: value.translation.width,
-                                                                 pixelsPerSecond: layout.pixelsPerSecond,
-                                                                 limit: min(spec.timeline[i - 1].duration, spec.timeline[i].duration))
-                    drag = .transition(index: i, duration: d)
-                case nil:
+                    drag = ReelTimelineLayout.transitionDrag(original, limit: min(spec.timeline[i - 1].duration, spec.timeline[i].duration),
+                                                             dx: value.translation.width, pixelsPerSecond: layout.pixelsPerSecond)
+                        .map { .transition(index: i, duration: $0) }
+                case .cancelled, nil:
                     break
                 }
             }
@@ -342,45 +350,57 @@ struct ReelTimelineView: View {
                 switch mode {
                 case .scrub:
                     scrub(toX: value.location.x, layout: layout)
-                case .clip(let i):
+                case .clip(let id):
+                    guard let i = index(of: id, spec: spec, layout: layout) else { return }
                     if case .move(_, let dx) = drag {
-                        let id = layout.blocks[i].assetID
                         model.moveClip(id, to: ReelTimelineLayout.dropIndex(layout, dragging: i, dx: dx))
                         model.selectedAssetID = id
                     } else {
                         selectClip(layout.blocks[i])
                     }
-                case .edge(let i):
-                    if case .resize(_, let d) = drag {
-                        let block = layout.blocks[i]
-                        if abs(d - spec.timeline[i].duration) > 1e-9 { model.setDuration(block.assetID, seconds: d) }
-                        model.selectedAssetID = block.assetID
+                case .edge(let id):
+                    guard let i = index(of: id, spec: spec, layout: layout) else { return }
+                    if case .resize(_, let d) = drag, abs(d - spec.timeline[i].duration) > 1e-9 {
+                        model.setDuration(id, seconds: d)
+                        model.selectedAssetID = id
                     } else {
                         selectClip(layout.blocks[i])
                     }
-                case .transition(let i):
-                    if let join = layout.joins.first(where: { $0.index == i }) {
+                case .transition(let id):
+                    guard let i = index(of: id, spec: spec, layout: layout), i > 0 else { return }
+                    if case .transition(_, let d) = drag {
+                        // Dragning låser övergången och behåller typ och riktning.
                         var t = spec.timeline[i].transitionIn ?? spec.style.defaultTransition
-                        if case .transition(_, let d) = drag, abs(d - t.duration) > 1e-9 {
-                            // Dragning låser övergången och behåller typ och riktning.
-                            t.duration = d
-                            model.setTransition(join.assetID, t)
-                        }
-                        model.selectedTransitionAssetID = join.assetID
+                        t.duration = d
+                        model.setTransition(id, t)
                     }
-                case nil:
+                    model.selectedTransitionAssetID = id
+                case .cancelled, nil:
                     break
                 }
             }
+    }
+
+    /// Klippets plats i den sparade specen, om det finns kvar och layouten har samma klipp där.
+    private func index(of assetID: String, spec: ReelSpec, layout: ReelTimelineLayout.Layout) -> Int? {
+        guard let i = spec.timeline.firstIndex(where: { $0.asset == assetID }),
+              layout.blocks.indices.contains(i), layout.blocks[i].assetID == assetID else { return nil }
+        return i
+    }
+
+    /// Klippet som dras finns inte längre (specen ändrades under dragningen): avbryt.
+    private func cancelDrag() {
+        mode = .cancelled
+        drag = nil
     }
 
     private func startMode(at p: CGPoint, layout: ReelTimelineLayout.Layout) -> Mode {
         guard p.y >= Self.rulerHeight else { return .scrub }
         let overChip = abs(p.y - Self.chipCenterY) <= ReelTimelineLayout.chipHalfWidth
         switch ReelTimelineLayout.hit(layout, x: p.x - Self.inset, overChip: overChip) {
-        case .clip(let i): return .clip(i)
-        case .clipEdge(let i): return .edge(i)
-        case .transition(let i): return .transition(i)
+        case .clip(let i): return .clip(layout.blocks[i].assetID)
+        case .clipEdge(let i): return .edge(layout.blocks[i].assetID)
+        case .transition(let i): return .transition(layout.blocks[i].assetID)
         case .empty: return .scrub
         }
     }
