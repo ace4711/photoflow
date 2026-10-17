@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 /// Filmlistan för en session: alla renderade filmer i sessionens FILM-mappar, med miniatyr, format,
-/// längd, serverstatus och knapparna Spela, Visa i Finder, Dela och Öppna i Bildspel. Öppnas som eget
+/// längd, serverstatus och knapparna Spela, Visa i Finder, Dela och Redigera. Öppnas som eget
 /// fönster (`ReelFilmsWindow.id`) från Historiken ("Filmer") och dashboardens Bildspel-meny.
 /// Logiken ligger i `ReelFilmListModel`; vyn ritar bara.
 struct ReelFilmListView: View {
@@ -69,6 +69,11 @@ struct ReelFilmListView: View {
         }
     }
 
+    /// Öppnar FILM-mappens filmförslag i bildspelsredigeraren.
+    private func edit(_ folder: ReelFilmFolder) {
+        openWindow(id: ReelWindow.id, value: ReelLaunchRequest.forFilmFolder(folder, outputDirectory: outputDirectory))
+    }
+
     private var newReelRequest: ReelLaunchRequest {
         ReelLaunchRequest(startPath: outputDirectory.path, outputPath: outputDirectory.path)
     }
@@ -86,9 +91,8 @@ struct ReelFilmListView: View {
                         .background(badgeColor(badge).opacity(0.2), in: Capsule())
                 }
                 Spacer()
-                Button("Öppna i Bildspel", systemImage: "slider.horizontal.3") {
-                    openWindow(id: ReelWindow.id, value: ReelLaunchRequest.forFilmFolder(folder, outputDirectory: outputDirectory))
-                }
+                Button("Redigera", systemImage: "slider.horizontal.3") { edit(folder) }
+                    .help("Öppna filmförslaget i Bildspel: ändra urval, ordning, övergångar, panorering och kollage")
                 if folder.remote != nil {
                     Button("Ny länk…", systemImage: "link.badge.plus") {
                         openWindow(id: ReelWindow.id, value: ReelLaunchRequest.forFilmFolder(
@@ -145,6 +149,8 @@ struct ReelFilmListView: View {
                 Spacer()
                 Button("Spela", systemImage: "play.fill") { play(film, in: folder) }
                     .buttonStyle(.borderedProminent)
+                Button("Redigera", systemImage: "slider.horizontal.3") { edit(folder) }
+                    .help("Öppna filmförslaget i Bildspel för att ändra det")
                 Button("Visa i Finder", systemImage: "folder") {
                     NSWorkspace.shared.activateFileViewerSelecting([film.url])
                 }

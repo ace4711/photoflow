@@ -25,7 +25,7 @@ struct ReelPlayerRequest: Codable, Hashable {
     var title: String
     var width: Int
     var height: Int
-    /// FILM-mappen och sessionens outputmapp, för "Öppna i Bildspel".
+    /// FILM-mappen och sessionens outputmapp, för "Redigera".
     var folderPath: String?
     var outputPath: String?
 

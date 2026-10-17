@@ -4,7 +4,7 @@ import AVKit
 
 /// Spelarfönstret: filmen i rätt proportioner (9:16 får ett högt fönster) med AVPlayerViews egna
 /// kontroller (spela/pausa/skrubba), mellanslag för spela/pausa och knapparna Visa i Finder, Dela och
-/// Öppna i Bildspel i verktygsfältet. Spelar den lokala MP4:n, annars serverns rendering via signerad URL.
+/// Redigera i verktygsfältet. Spelar den lokala MP4:n, annars serverns rendering via signerad URL.
 struct ReelPlayerView: View {
     let request: ReelPlayerRequest
 
@@ -34,7 +34,7 @@ struct ReelPlayerView: View {
                     FilmShareButton(url: file)
                 }
                 if let launch = launchRequest {
-                    Button("Öppna i Bildspel", systemImage: "slider.horizontal.3") {
+                    Button("Redigera", systemImage: "slider.horizontal.3") {
                         openWindow(id: ReelWindow.id, value: launch)
                     }
                 }
