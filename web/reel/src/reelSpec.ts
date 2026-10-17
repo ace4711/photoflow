@@ -61,6 +61,8 @@ export interface Clip {
   durationLocked?: boolean;
   /** Övergången är satt för hand och följer klippet; saknas `transitionIn` gäller `style.defaultTransition`. */
   transitionLocked?: boolean;
+  /** Fotografens oklampade egna start/slut (bara när klampning mot formatet ändrat dem), se docs/reel-spec-v1.md 2.3. */
+  customMotion?: Motion;
 }
 
 /** Redigerarens val (fotografens), bara metadata: renderare ignorerar det. Se docs/reel-spec-v1.md. */

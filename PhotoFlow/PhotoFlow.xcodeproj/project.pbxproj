@@ -220,6 +220,7 @@
 		855303EF0B8F782DBB8A33BE /* PreflightView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F72B7B72B20B3D41D044522 /* PreflightView.swift */; };
 		858050BFEFDD9F632CE822B5 /* ReelMotionEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC631062CE2777F4AB6250A5 /* ReelMotionEditor.swift */; };
 		85B5CBAD80A706F7C0AE7083 /* ReelCandidateFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C68E4EFBD3436133A30B1B01 /* ReelCandidateFilter.swift */; };
+		8638BC686B7C67BCBAC4C2FD /* ReelWebParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 047A4F34D1248758CFABEBF3 /* ReelWebParityTests.swift */; };
 		87C31168908BAB2F262EB099 /* VisionTaggingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C75DCF5203EC0F7258AF011 /* VisionTaggingService.swift */; };
 		8998BCF97C56B038DA8BDFE3 /* SendableAudioBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC8847514CC4525E567967E4 /* SendableAudioBuffer.swift */; };
 		89BC4F5B43DCA138E6ABB560 /* PhotoFlowShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9C613A5C0AB46074022ED10 /* PhotoFlowShortcuts.swift */; };
@@ -421,6 +422,7 @@
 		021B848F61D8295ECE12EB76 /* timeline-vectors.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "timeline-vectors.json"; sourceTree = "<group>"; };
 		0264E2771F1F365950FADCDE /* AppIntents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppIntents.framework; path = System/Library/Frameworks/AppIntents.framework; sourceTree = SDKROOT; };
 		035E46527E4A4040C9004FA8 /* ReelTimelineLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelTimelineLayout.swift; sourceTree = "<group>"; };
+		047A4F34D1248758CFABEBF3 /* ReelWebParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelWebParityTests.swift; sourceTree = "<group>"; };
 		04F7EB11531DBB10EA697354 /* PipelineRunner+Lightroom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+Lightroom.swift"; sourceTree = "<group>"; };
 		07F438E24E4E1E4884E9C260 /* PipelineRunner+HDR.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+HDR.swift"; sourceTree = "<group>"; };
 		0831F4831D87ACC606120BAD /* ReelImageAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelImageAnalyzer.swift; sourceTree = "<group>"; };
@@ -977,6 +979,7 @@
 				2965BF8EAB3ADDA902702B5F /* ReelTransitionStyleTests.swift */,
 				8F1987E2A76904677A75B8A5 /* ReelUndoTests.swift */,
 				CD06F83CB1752838347B9F54 /* ReelUploadPlannerTests.swift */,
+				047A4F34D1248758CFABEBF3 /* ReelWebParityTests.swift */,
 				2A3FC2DB9406841FF32D7631 /* ReelWebVariantTests.swift */,
 				FFC0D72E52852B08D544E35C /* ReelWhyTests.swift */,
 				446A39077D50EA9167EF9C75 /* ResourceGovernorTests.swift */,
@@ -1563,6 +1566,7 @@
 				3C63456D893D367FDF2474C4 /* ReelTransitionStyleTests.swift in Sources */,
 				41708C5B95635D02C78BCFD5 /* ReelUndoTests.swift in Sources */,
 				49A35421E5489A3ECD3B767E /* ReelUploadPlannerTests.swift in Sources */,
+				8638BC686B7C67BCBAC4C2FD /* ReelWebParityTests.swift in Sources */,
 				0B982544AC07E2C9EB008100 /* ReelWebVariantTests.swift in Sources */,
 				719FCD8F86909A8F7BDA0F9C /* ReelWhyTests.swift in Sources */,
 				4931BDF2F61C3440F62610D3 /* ResourceGovernorTests.swift in Sources */,

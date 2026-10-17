@@ -1,9 +1,7 @@
 // R5: webben respekterar fotografens lås (custom, transitionLocked, durationLocked,
 // editor {pinnedAssets, excludedAssets, orderLocked, tempo}). Fixturen
 // test/fixtures/reel-locks-v1.json är handskriven efter Swift-kodningen i ReelSpec.swift.
-// Inget Swift-test läser den än: rundturen här är TS → JSON → TS, och testet
-// "fixturen följer Swift-kodningen" kontrollerar bara reglerna för hur Swift skriver
-// låsen. Ett rundturstest Swift ↔ TS (plan R5) återstår tills Swift-filerna är lediga.
+// Samma fixtur läses av PhotoFlow/Tests/ReelWebParityTests.swift (Swift-sidan av rundturen).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -401,4 +399,16 @@ test("låst längd har synlig text, inte bara en ikon", () => {
   assert.equal(/icon-only/.test(src), false, "inget märke med bara ikon");
   assert.equal(/setAttribute\("aria-label", (title|l\.title)\)/.test(src), false, "ingen aria-label på span utan roll");
   assert.match(src, /sr-only/);
+});
+
+test("byte från egen rörelse tar bort fotografens oklampade nycklar (customMotion)", () => {
+  const s = load();
+  const c = byAsset(s, "a2");
+  c.customMotion = { from: { cx: 0.62, cy: 0.6, zoom: 1.05 }, to: { cx: 0.33, cy: 0.6, zoom: 1.05 } };
+  // Omordning och längd behåller fältet.
+  regi.moveClip(s, 1, 3, ASPECT);
+  assert.ok(byAsset(s, "a2").customMotion, "customMotion följer klippet vid omordning");
+  const i = order(s).indexOf("a2");
+  regi.setPreset(s, i, "panLeft", ASPECT);
+  assert.equal(byAsset(s, "a2").customMotion, undefined);
 });

@@ -289,6 +289,7 @@ export function setPreset(spec: ReelSpec, i: number, preset: Preset | typeof CUS
       current: wasCustom ? undefined : c, tempo: tempoFactor(spec.editor?.tempo),
     });
     c.fit = p.fit; c.motion = p.motion; c.duration = p.duration;
+    delete c.customMotion; // fotografens oklampade nycklar gäller inte längre
     if (preset === "auto") delete c.motionPreset;
     else c.motionPreset = preset;
   }

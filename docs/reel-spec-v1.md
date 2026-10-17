@@ -55,7 +55,7 @@ Läsare **ska** ignorera okända fält på alla nivåer. Skrivare **bör** skriv
 
 ### 2.3 `timeline[]`
 
-`{asset, duration, fit, motion, transitionIn?, motionPreset?, durationLocked?, transitionLocked?}`
+`{asset, duration, fit, motion, transitionIn?, motionPreset?, durationLocked?, transitionLocked?, customMotion?}`
 
 - `duration`: sekunder, > 0.
 - `fit`: `"cover"` eller `"contain-blur"`.
@@ -63,6 +63,7 @@ Läsare **ska** ignorera okända fält på alla nivåer. Skrivare **bör** skriv
 - `transitionIn`: `{type, direction?, duration}` med `type` ∈ `crossfade`, `cut`, `fadeThroughBlack`, `push`. `direction` ∈ `left`, `right`, `up`, `down` (bara `push`; saknas den används `left`). Ignoreras för klipp 0.
 - `motionPreset?`, `durationLocked?`: fotografens val i redigeraren (`zoomIn`, `zoomOut`, `panRight`, `panLeft`, `contain`; `true` när längden satts för hand). Bara metadata så att en ombyggnad bevarar valen; renderare läser `motion` och `duration`. Tillägg inom v1.
 - `motionPreset: "custom"`: start och slut har satts för hand (`fit` och `motion` är då fotografens). En ombyggnad behåller `fit` och `motion` men klampar om mittpunkterna mot aktuellt format (avsnitt 5) och `zoom` till minst 1.
+- `customMotion?`: `{from, to}` som `motion`, fotografens oklampade nycklar. Skrivs bara när klampningen ändrat dem, så att ett formatbyte fram och tillbaka inte ändrar rörelsen för gott. En ombyggnad utgår från `customMotion` så länge `motion` är just dess klampning; har `motion` ändrats på annat sätt gäller `motion`. Den som byter bort en egen rörelse bör ta bort fältet. Bara metadata; tillägg inom v1.
 - `transitionLocked?`: `true` när övergången satts för hand; en ombyggnad behåller då `transitionIn`, även `{"type":"cut"}`. Låst och `transitionIn` saknas betyder "använd `style.defaultTransition`". Tillägg inom v1.
 
 ## 3. Tid
