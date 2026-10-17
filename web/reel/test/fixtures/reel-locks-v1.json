@@ -1,0 +1,337 @@
+{
+  "schema": "photoflow.reel",
+  "version": 1,
+  "minReaderVersion": 1,
+  "id": "0b6d7c1e-5f2a-4a8e-9c3b-7e1d2f4a6b80",
+  "revision": 7,
+  "status": "draft",
+  "createdAt": "2026-10-03T09:12:00Z",
+  "updatedAt": "2026-10-16T14:02:10Z",
+  "updatedBy": {
+    "role": "photographer",
+    "name": "Fredrik"
+  },
+  "property": {
+    "address": "Lindvägen 12, Tyresö",
+    "sessionID": "2B0E…",
+    "kind": "house"
+  },
+  "assets": [
+    {
+      "id": "a1",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "width": 6048,
+      "height": 4024,
+      "sources": [
+        {
+          "kind": "local",
+          "path": "../Lindvägen 12, Tyresö FÄRDIGA/DSC_1201.jpg"
+        }
+      ],
+      "analysis": {
+        "room": "Fasad",
+        "category": "Exteriör",
+        "focus": {
+          "x": 0.52,
+          "y": 0.47
+        },
+        "salientWidth": 0.71
+      }
+    },
+    {
+      "id": "a2",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "width": 6048,
+      "height": 4024,
+      "sources": [
+        {
+          "kind": "local",
+          "path": "../Lindvägen 12, Tyresö FÄRDIGA/DSC_1244.jpg"
+        }
+      ],
+      "analysis": {
+        "room": "Vardagsrum",
+        "category": "Interiör",
+        "focus": {
+          "x": 0.4,
+          "y": 0.55
+        },
+        "salientWidth": 0.62
+      }
+    },
+    {
+      "id": "a3",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "width": 6048,
+      "height": 4024,
+      "sources": [
+        {
+          "kind": "local",
+          "path": "../Lindvägen 12, Tyresö FÄRDIGA/DSC_1260.jpg"
+        }
+      ],
+      "analysis": {
+        "room": "Kök",
+        "category": "Interiör",
+        "focus": {
+          "x": 0.58,
+          "y": 0.5
+        },
+        "salientWidth": 0.3
+      }
+    },
+    {
+      "id": "a4",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "width": 6048,
+      "height": 4024,
+      "sources": [
+        {
+          "kind": "local",
+          "path": "../Lindvägen 12, Tyresö FÄRDIGA/DSC_1302.jpg"
+        }
+      ],
+      "analysis": {
+        "room": "Altan",
+        "category": "Exteriör",
+        "focus": {
+          "x": 0.45,
+          "y": 0.6
+        },
+        "salientWidth": 0.55
+      }
+    },
+    {
+      "id": "a5",
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "width": 6048,
+      "height": 4024,
+      "sources": [
+        {
+          "kind": "local",
+          "path": "../Lindvägen 12, Tyresö FÄRDIGA/DSC_1355.jpg"
+        }
+      ],
+      "analysis": {
+        "room": "Trädgård",
+        "category": "Exteriör",
+        "focus": {
+          "x": 0.5,
+          "y": 0.45
+        },
+        "salientWidth": 0.9
+      }
+    },
+    {
+      "id": "a6",
+      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "width": 6048,
+      "height": 4024,
+      "sources": [
+        {
+          "kind": "local",
+          "path": "../Lindvägen 12, Tyresö FÄRDIGA/DSC_1450.jpg"
+        }
+      ],
+      "analysis": {
+        "room": "Badrum",
+        "category": "Interiör",
+        "focus": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "salientWidth": 0.4
+      }
+    },
+    {
+      "id": "a7",
+      "sha256": "1010101010101010101010101010101010101010101010101010101010101010",
+      "width": 6048,
+      "height": 4024,
+      "sources": [
+        {
+          "kind": "local",
+          "path": "../Lindvägen 12, Tyresö FÄRDIGA/DSC_1460.jpg"
+        }
+      ],
+      "analysis": {
+        "room": "Sovrum",
+        "category": "Interiör",
+        "focus": {
+          "x": 0.45,
+          "y": 0.5
+        },
+        "salientWidth": 0.4
+      }
+    }
+  ],
+  "style": {
+    "defaultTransition": {
+      "type": "crossfade",
+      "duration": 0.5
+    },
+    "easing": "easeInOut",
+    "background": {
+      "type": "blur",
+      "amount": 0.6
+    }
+  },
+  "timeline": [
+    {
+      "asset": "a1",
+      "duration": 3.6,
+      "fit": "cover",
+      "motion": {
+        "from": {
+          "cx": 0.51,
+          "cy": 0.47,
+          "zoom": 1
+        },
+        "to": {
+          "cx": 0.53,
+          "cy": 0.47,
+          "zoom": 1.12
+        }
+      }
+    },
+    {
+      "asset": "a2",
+      "duration": 3.36,
+      "fit": "cover",
+      "motionPreset": "custom",
+      "transitionLocked": true,
+      "transitionIn": {
+        "type": "cut",
+        "duration": 0
+      },
+      "motion": {
+        "from": {
+          "cx": 0.62,
+          "cy": 0.55,
+          "zoom": 1.05
+        },
+        "to": {
+          "cx": 0.33,
+          "cy": 0.52,
+          "zoom": 1.05
+        }
+      }
+    },
+    {
+      "asset": "a3",
+      "duration": 4,
+      "durationLocked": true,
+      "transitionLocked": true,
+      "fit": "cover",
+      "motion": {
+        "from": {
+          "cx": 0.59,
+          "cy": 0.5,
+          "zoom": 1.12
+        },
+        "to": {
+          "cx": 0.57,
+          "cy": 0.5,
+          "zoom": 1
+        }
+      }
+    },
+    {
+      "asset": "a4",
+      "duration": 3,
+      "fit": "cover",
+      "motionPreset": "zoomIn",
+      "transitionIn": {
+        "type": "crossfade",
+        "duration": 0.5
+      },
+      "motion": {
+        "from": {
+          "cx": 0.44,
+          "cy": 0.6,
+          "zoom": 1
+        },
+        "to": {
+          "cx": 0.46,
+          "cy": 0.6,
+          "zoom": 1.12
+        }
+      }
+    },
+    {
+      "asset": "a5",
+      "duration": 4.08,
+      "fit": "contain-blur",
+      "transitionIn": {
+        "type": "crossfade",
+        "duration": 0.6
+      },
+      "motion": {
+        "from": {
+          "cx": 0.5,
+          "cy": 0.45,
+          "zoom": 1
+        },
+        "to": {
+          "cx": 0.5,
+          "cy": 0.45,
+          "zoom": 1.036
+        }
+      }
+    }
+  ],
+  "audio": null,
+  "overlays": [],
+  "brand": null,
+  "outputs": [
+    {
+      "id": "vertical",
+      "aspect": "9:16",
+      "width": 1080,
+      "height": 1920,
+      "fps": 30,
+      "encoding": {
+        "codec": "h264",
+        "bitrateMbps": 14,
+        "audio": "aac-silent"
+      }
+    }
+  ],
+  "provenance": {
+    "generator": "PhotoFlow macOS 1.x / ReelSelector v1",
+    "autoSelection": [
+      {
+        "asset": "a1",
+        "slot": "opening",
+        "reason": "Fasad, kvalitet 0.82"
+      },
+      {
+        "asset": "a5",
+        "slot": "closing",
+        "reason": "Trädgård, skiljer sig från öppningen"
+      }
+    ],
+    "edits": [
+      {
+        "at": "2026-10-03T09:20:41Z",
+        "by": "photographer",
+        "op": "reorder"
+      },
+      {
+        "at": "2026-10-16T14:02:10Z",
+        "by": "photographer",
+        "op": "lock"
+      }
+    ]
+  },
+  "editor": {
+    "pinnedAssets": [
+      "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    ],
+    "excludedAssets": [
+      "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    ],
+    "orderLocked": true,
+    "tempo": "calm"
+  }
+}

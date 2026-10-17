@@ -107,6 +107,34 @@ test("mäklarens 412 och idempotens via /share/spec", async () => {
   assert.equal(stale.json.currentRevision, 3);
 });
 
+test("R5: fotografens lås (editor, transitionLocked, custom, durationLocked) överlever rundturen via mäklaren", async () => {
+  const id = await seedObject(env);
+  const locked = specBody([0, 1, 2], {
+    editor: { pinnedAssets: [SHAS[1]], excludedAssets: [SHAS[3]], orderLocked: true, tempo: "calm" },
+  });
+  const tl = locked.timeline as any[];
+  Object.assign(tl[1], {
+    motionPreset: "custom", transitionLocked: true, transitionIn: { type: "cut", duration: 0 },
+    motion: { from: { cx: 0.62, cy: 0.55, zoom: 1.05 }, to: { cx: 0.33, cy: 0.52, zoom: 1.05 } },
+  });
+  Object.assign(tl[2], { transitionLocked: true, durationLocked: true, duration: 4 });
+  const w = await put(id, locked, 1);
+  assert.equal(w.status, 200, w.text);
+  const { token } = await makeLink(env, id);
+  const share = await call(env, "GET", "/api/v1/share", { auth: link(token) });
+  const spec = share.json.spec;
+  assert.deepEqual(spec.editor, locked.editor);
+  assert.deepEqual(spec.timeline, tl);
+  // Mäklaren ordnar om (som webben gör: låsta fält följer klippen) och sparar.
+  spec.timeline = [spec.timeline[1], spec.timeline[0], spec.timeline[2]];
+  const a = await call(env, "PUT", "/api/v1/share/spec", { auth: link(token), body: spec, headers: { "If-Match": '"2"' } });
+  assert.equal(a.status, 200, a.text);
+  const stored = (await call(env, "GET", `/api/v1/objects/${id}`, { auth: pf(env) })).json.spec;
+  assert.deepEqual(stored.editor, locked.editor);
+  assert.deepEqual(stored.timeline, [tl[1], tl[0], tl[2]]);
+  assert.equal(stored.updatedBy.role, "agent");
+});
+
 test("statusflöde: draft → proposed → approved → rendered, tillbaka till proposed vid ändring", async () => {
   const id = await seedObject(env);
   const st = async () => (await call(env, "GET", `/api/v1/objects/${id}`, { auth: pf(env) })).json;
