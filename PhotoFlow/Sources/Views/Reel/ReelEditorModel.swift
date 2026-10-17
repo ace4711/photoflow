@@ -149,12 +149,44 @@ final class ReelEditorModel {
     /// Vilken ruta i det markerade rutklippet som nästa bild i rutnätet byter (0 = första). Sätts av rutredigeraren.
     var selectedPanelIndex = 0
 
+    /// Bakgrundsanalysen av alla bilder i källmappen medan en befintlig film redan visas.
+    struct BackgroundAnalysis: Equatable {
+        var done: Int
+        var total: Int
+    }
+
+    /// Pågående bakgrundsanalys (nil = klar, eller aldrig behövd: filmen öppnades efter full analys).
+    private(set) var backgroundAnalysis: BackgroundAnalysis?
+    /// Felet om bakgrundsanalysen misslyckades; funktionerna som kräver analysen förblir avstängda.
+    private(set) var backgroundAnalysisError: String?
+    /// Tid från `open` tills filmen visades (sekunder), för mätning och diagnostik.
+    private(set) var timeToFilm: Double?
+
+    /// Är hela källmappen analyserad? Utan analys finns bara filmens egna bilder (kandidatrutnätet,
+    /// poängen och urvalet saknas), så förslag, antal, "Börja om", byte/tillägg av bild och "Dela ruta
+    /// med…" är avstängda.
+    var analysisReady: Bool { backgroundAnalysis == nil && backgroundAnalysisError == nil }
+
+    /// Förklaringen till att de avstängda funktionerna väntar, eller nil när analysen är klar.
+    var analysisWaitNote: String? {
+        if let p = backgroundAnalysis { return "Väntar på analysen av bilderna (\(p.done) av \(p.total))" }
+        if backgroundAnalysisError != nil { return "Analysen av bilderna misslyckades" }
+        return nil
+    }
+
     static let specFileName = "reel.json"
     static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "tif", "tiff", "heic"]
     static let durationRange = 1.0...10.0
     static let countRange = 3...ReelSelector.maxCount
 
     @ObservationIgnored private var analysisTask: Task<Void, Never>?
+    /// Räknas upp vid varje `open`, så att en avbruten analys inte skriver över nästa öppnings tillstånd.
+    @ObservationIgnored private var openGeneration = 0
+    /// Analysen av bilderna (byts i tester).
+    @ObservationIgnored var analyzer: @Sendable ([URL], URL, URL, @escaping @Sendable @MainActor (Int, Int) -> Void) async throws
+        -> [ReelImageAnalyzer.Item] = { files, cache, tags, progress in
+            try await ReelEditorModel.analyze(files: files, cacheDirectory: cache, aiTagsDirectory: tags, progress: progress)
+        }
     @ObservationIgnored private var renderTask: Task<Void, Never>?
     /// Fönstrets `UndoManager` (sätts av vyn). Modellen äger historiken; managern får ett anrop
     /// per steg så att ⌘Z, ⇧⌘Z och menyn Redigera fungerar och visar stegets namn.
@@ -325,7 +357,8 @@ final class ReelEditorModel {
         restored.status = "draft"
         restored.provenance.edits = (restored.provenance.edits ?? []) + [.init(at: stamp, by: restored.updatedBy.role, op: op)]
         spec = restored
-        selection = entry.selection
+        // Steg från före bakgrundsanalysen har inget urval: då behålls det nuvarande.
+        if let restoredSelection = entry.selection { selection = restoredSelection }
         format = ReelFormat(rawValue: restored.outputs.first?.id ?? "") ?? format
         count = min(max(restored.timeline.count, Self.countRange.lowerBound), Self.countRange.upperBound)
         adaptedCustomMotions = 0
@@ -442,9 +475,13 @@ final class ReelEditorModel {
         ReelFileIndex.filmImages(in: directory, filmDirectory: filmDirectory)
     }
 
-    /// Öppnar en källmapp: analyserar (cache i `reel_analysis.json` i utmappen) och föreslår film.
+    /// Öppnar en källmapp. Finns en läsbar `reel.json` i filmmappen vars bilder ligger i källmappen och
+    /// har cachade analyser visas filmen genast (`prepareQuick`), och analysen av alla bilder körs i
+    /// bakgrunden (`completeAnalysis` blandar in resultatet utan att röra fotografens ändringar).
+    /// Annars analyseras bilderna först (cache i `reel_analysis.json` i utmappen) och filmen föreslås.
     func open(source: URL, address: String? = nil, sessionID: String? = nil, aiTagsDirectory: URL? = nil) {
         cancelAll()
+        let started = ContinuousClock.now
         let source = source.resolvingSymlinksInPath()
         let reelDir = AddressFolderLayout.reelDir(forSource: source)
         let files = Self.imageFiles(in: source, filmDirectory: reelDir)
@@ -458,27 +495,163 @@ final class ReelEditorModel {
         self.address = address ?? AddressFolderLayout.addressName(fromSourceDir: source.lastPathComponent) ?? source.lastPathComponent
         self.sessionID = sessionID
         phase = .analyzing(done: 0, total: files.count)
-        let ownerDir = reelDir
+        timeToFilm = nil
+        openGeneration += 1
+        let generation = openGeneration
         let tags = aiTagsDirectory ?? source
+        let analyzer = self.analyzer
         analysisTask = Task { [weak self] in
+            // Snabb väg: filmen från reel.json och cachen, utan att läsa bilderna.
+            if let quick = await Self.loadQuickOpen(source: source, reelDirectory: reelDir) {
+                guard let self, !Task.isCancelled, generation == self.openGeneration else { return }
+                self.prepareQuick(quick, totalImages: files.count)
+                self.timeToFilm = Self.seconds(since: started)
+                do {
+                    let items = try await analyzer(files, reelDir, tags) { done, total in
+                        self.backgroundProgress(done: done, total: total, generation: generation)
+                    }
+                    guard !Task.isCancelled, generation == self.openGeneration else { return }
+                    self.completeAnalysis(items: items)
+                } catch is CancellationError {
+                    // Fönstret stängdes eller en annan mapp öppnades.
+                } catch {
+                    guard generation == self.openGeneration else { return }
+                    self.failBackgroundAnalysis(error.localizedDescription)
+                }
+                return
+            }
             do {
-                let items = try await Self.analyze(files: files, cacheDirectory: ownerDir, aiTagsDirectory: tags) { done, total in
+                let items = try await analyzer(files, reelDir, tags) { done, total in
                     self?.analysisProgress(done: done, total: total)
                 }
-                guard let self, !Task.isCancelled else { return }
+                guard let self, !Task.isCancelled, generation == self.openGeneration else { return }
                 guard !items.isEmpty else { self.phase = .failed("Ingen av bilderna gick att analysera."); return }
                 self.prepare(items: items)
+                self.timeToFilm = Self.seconds(since: started)
             } catch is CancellationError {
-                self?.phase = .idle
+                guard let self, generation == self.openGeneration else { return }
+                self.phase = .idle
             } catch {
-                self?.phase = .failed(error.localizedDescription)
+                guard let self, generation == self.openGeneration else { return }
+                self.phase = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private nonisolated static func seconds(since start: ContinuousClock.Instant) -> Double {
+        let d = start.duration(to: .now).components
+        return Double(d.seconds) + Double(d.attoseconds) / 1e18
+    }
+
+    /// Det som behövs för att visa en befintlig film utan att analysera källmappen.
+    nonisolated struct QuickOpen: Sendable {
+        var spec: ReelSpec
+        /// Filmens egna bilder (med cachad analys), i specens ordning.
+        var items: [ReelImageAnalyzer.Item]
+    }
+
+    /// Läser `reel.json` och cachen (`reel_analysis.json`). Nil om filmen inte kan visas direkt: ingen
+    /// läsbar spec, en bild som inte ligger i källmappen eller saknas, eller en bild utan cachad analys.
+    /// Bilderna hashas inte (specens `sha256` slås upp i cachen), så bara små json-filer läses.
+    @concurrent
+    static func loadQuickOpen(source: URL, reelDirectory: URL) async -> QuickOpen? {
+        quickOpen(source: source, reelDirectory: reelDirectory)
+    }
+
+    nonisolated static func quickOpen(source: URL, reelDirectory: URL) -> QuickOpen? {
+        let file = reelDirectory.appendingPathComponent(ReelLibrary.specFileName)
+        guard let data = try? Data(contentsOf: file), var spec = try? ReelSpec.decode(from: data),
+              spec.isReadable, !spec.timeline.isEmpty else { return nil }
+        let specDir = URL(fileURLWithPath: reelDirectory.path, isDirectory: true)
+        let cache = ReelImageAnalyzer.loadCache(from: reelDirectory)
+        let fm = FileManager.default
+        var items: [ReelImageAnalyzer.Item] = []
+        for i in spec.assets.indices {
+            let asset = spec.assets[i]
+            guard let path = asset.sources.first(where: { $0.kind == .local })?.path, let analysis = cache[asset.sha256] else { return nil }
+            let resolved = URL(fileURLWithPath: path, relativeTo: specDir).standardizedFileURL
+            // Bara bilder i källmappen (en film byggd på en annan mapp går den långsamma vägen).
+            guard resolved.deletingLastPathComponent().resolvingSymlinksInPath().path == source.path,
+                  fm.fileExists(atPath: resolved.path) else { return nil }
+            let url = source.appendingPathComponent(resolved.lastPathComponent)
+            spec.assets[i].sources = [.init(kind: .local, path: ReelComposer.relativePath(from: specDir, to: url))]
+            if !items.contains(where: { $0.analysis.sha256 == asset.sha256 }) { items.append(.init(url: url, analysis: analysis)) }
+        }
+        let known = Set(spec.assets.map(\.id))
+        guard spec.timeline.allSatisfy({ clip in clip.referencedAssetIDs.allSatisfy(known.contains) }) else { return nil }
+        return QuickOpen(spec: spec, items: items)
+    }
+
+    /// Visar en befintlig film direkt med bara dess egna bilder; resten av källmappen analyseras sedan i
+    /// bakgrunden (`completeAnalysis`). Kandidatrutnätet visar tills dess bara filmens bilder, utan poäng.
+    func prepareQuick(_ quick: QuickOpen, totalImages: Int) {
+        items = quick.items
+        candidates = quick.items.map(ReelComposer.candidate(from:))
+        urls = ReelFileIndex.index(from: quick.items)
+        selection = nil
+        spec = quick.spec
+        format = ReelFormat(rawValue: quick.spec.outputs.first?.id ?? "") ?? format
+        count = min(max(quick.spec.timeline.count, Self.countRange.lowerBound), Self.countRange.upperBound)
+        clearSelection()
+        clearHistory()
+        backgroundAnalysis = .init(done: 0, total: totalImages)
+        backgroundAnalysisError = nil
+        revisionToken += 1
+        phase = .ready
+    }
+
+    private func backgroundProgress(done: Int, total: Int, generation: Int) {
+        guard generation == openGeneration, backgroundAnalysis != nil else { return }
+        backgroundAnalysis = .init(done: done, total: total)
+    }
+
+    func failBackgroundAnalysis(_ message: String) {
+        backgroundAnalysis = nil
+        backgroundAnalysisError = message
+    }
+
+    /// Bakgrundsanalysen är klar: alla bilder, kandidater, poäng och urval blandas in. Filmen (`spec`),
+    /// ångra-historiken och markeringen rörs inte; fotografens ändringar sedan öppnandet finns kvar och
+    /// går att ångra. Filmens egna bilder behålls även om de inte ingick i analysen.
+    func completeAnalysis(items full: [ReelImageAnalyzer.Item]) {
+        let fullShas = Set(full.map(\.analysis.sha256))
+        items = full + items.filter { !fullShas.contains($0.analysis.sha256) }
+        let specDir = reelDirectory ?? FileManager.default.temporaryDirectory
+        // Urvalet räknas på alla bilder med filmens lås, men resultatets spec kastas: filmen är fotografens.
+        let result = ReelComposer.compose(items: items, specDirectory: specDir, options: options(), preserving: spec)
+        candidates = result.candidates
+        urls = result.urls
+        selection = result.selection
+        backgroundAnalysis = nil
+        backgroundAnalysisError = nil
+    }
+
+    /// Försöker bakgrundsanalysen igen efter ett fel.
+    func retryAnalysis() {
+        guard backgroundAnalysisError != nil, let source = sourceDirectory, let reelDir = reelDirectory else { return }
+        let files = Self.imageFiles(in: source, filmDirectory: reelDir)
+        backgroundAnalysisError = nil
+        backgroundAnalysis = .init(done: 0, total: files.count)
+        let generation = openGeneration
+        let analyzer = self.analyzer
+        analysisTask = Task { [weak self] in
+            do {
+                let items = try await analyzer(files, reelDir, source) { done, total in
+                    self?.backgroundProgress(done: done, total: total, generation: generation)
+                }
+                guard let self, !Task.isCancelled, generation == self.openGeneration else { return }
+                self.completeAnalysis(items: items)
+            } catch is CancellationError {
+            } catch {
+                guard let self, generation == self.openGeneration else { return }
+                self.failBackgroundAnalysis(error.localizedDescription)
             }
         }
     }
 
     /// Analysen körs utanför huvudtråden (cacheläsning och skrivning ingår).
     @concurrent
-    private static func analyze(files: [URL], cacheDirectory: URL, aiTagsDirectory: URL,
+    static func analyze(files: [URL], cacheDirectory: URL, aiTagsDirectory: URL,
                                 progress: @escaping @Sendable @MainActor (Int, Int) -> Void) async throws -> [ReelImageAnalyzer.Item] {
         try await ReelImageAnalyzer.analyze(urls: files, cacheDirectory: cacheDirectory,
                                             aiTagsDirectory: aiTagsDirectory, progress: progress)
@@ -510,6 +683,8 @@ final class ReelEditorModel {
         }
         clearSelection()
         clearHistory()
+        backgroundAnalysis = nil
+        backgroundAnalysisError = nil
         revisionToken += 1
         phase = .ready
     }
@@ -544,6 +719,7 @@ final class ReelEditorModel {
 
     private func reset() {
         items = []; candidates = []; urls = [:]; selection = nil; spec = nil
+        backgroundAnalysis = nil; backgroundAnalysisError = nil
         clearSelection(); saveError = nil
         clearHistory()
         revisionToken += 1
@@ -610,7 +786,7 @@ final class ReelEditorModel {
     }
 
     func newAsset(forCandidate id: String) -> ReelSpec.Asset? {
-        guard let item = items.first(where: { $0.analysis.sha256 == id }) else { return nil }
+        guard analysisReady, let item = items.first(where: { $0.analysis.sha256 == id }) else { return nil }
         return ReelComposer.asset(id: nextAssetID(), item: item, specDirectory: reelDirectory ?? FileManager.default.temporaryDirectory)
     }
 
@@ -644,7 +820,7 @@ final class ReelEditorModel {
     /// Får bilden (sha256) släppas i en skarv i tidslinjen? Ja om det finns plats, eller om den redan
     /// är med (då flyttas klippet, se `insertCandidate`). nil (okänd bild) räknas som ny.
     func canInsertCandidate(_ id: String?) -> Bool {
-        canAddClip || id.flatMap(assetID(forCandidate:)) != nil
+        (canAddClip && analysisReady) || id.flatMap(assetID(forCandidate:)) != nil
     }
 
     /// Bilden som just nu dras från rutnätet (sätts när dragningen börjar), så att tidslinjen kan visa
@@ -720,6 +896,7 @@ final class ReelEditorModel {
     /// Klick i kandidatrutnätet: redan vald bild markeras, annars byts det markerade klippets bild,
     /// och utan markerat klipp läggs bilden till sist.
     func selectCandidate(_ id: String) {
+        guard analysisReady || partnerPickAssetID == nil else { partnerPickAssetID = nil; return }
         // "Dela ruta med…" pågår: bilden blir partner (en ogiltig bild avbryter inte läget).
         if let anchor = partnerPickAssetID {
             if pairClip(anchor, withCandidate: id) { partnerPickAssetID = nil }
@@ -727,6 +904,8 @@ final class ReelEditorModel {
         }
         if let row = candidateRows.first(where: { $0.id == id }), let i = row.clipIndex {
             selectedAssetID = order[i]
+        } else if !analysisReady {
+            return      // byte och tillägg väntar på analysen
         } else if let selectedAssetID, order.contains(selectedAssetID) {
             if panelKind(forAsset: selectedAssetID) == .collage {
                 replacePanel(selectedAssetID, panel: selectedPanelIndex, withCandidate: id)
@@ -1019,7 +1198,7 @@ final class ReelEditorModel {
     /// `count` är antalet förslaget ska ha (nil = automatiskt); utan angivet värde behålls nuvarande
     /// läge (fast antal eller automatiskt).
     private func recompose(preserving previous: ReelSpec?, op: String, changesCount: Bool = false, count requested: Int? = nil) {
-        guard !items.isEmpty else { return }
+        guard !items.isEmpty, analysisReady else { return }
         recordStep(op: op)
         let specDir = reelDirectory ?? FileManager.default.temporaryDirectory
         var opts = options()

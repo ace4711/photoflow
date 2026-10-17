@@ -175,6 +175,7 @@ struct ReelTimelineView: View {
                 selectClip(block)
                 model.beginPickingPartner(for: id)
             }
+            .disabled(!model.analysisReady)
         } else {
             Button(row.panelKind == .montage ? "Dela upp (hela bilden)" : "Dela upp", systemImage: "rectangle.split.2x1.slash") {
                 model.splitPanels(id)

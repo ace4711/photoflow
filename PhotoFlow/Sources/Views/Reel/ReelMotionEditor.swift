@@ -111,7 +111,8 @@ struct ReelMotionEditor: View {
                     Label(picking ? "Avbryt" : "Dela ruta med…", systemImage: "rectangle.split.1x2")
                 }
                 .controlSize(.small)
-                .help("Visa två bilder i samma filmruta: klicka sedan på den andra bilden i rutnätet, eller dra hit den")
+                .disabled(!model.analysisReady && !picking)
+                .help(model.analysisWaitNote ?? "Visa två bilder i samma filmruta: klicka sedan på den andra bilden i rutnätet, eller dra hit den")
                 if picking {
                     Text("Klicka på den andra bilden i rutnätet.").font(.caption).foregroundStyle(.secondary)
                 }

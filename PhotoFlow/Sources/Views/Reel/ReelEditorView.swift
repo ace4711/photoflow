@@ -128,12 +128,13 @@ struct ReelEditorView: View {
                         in: ReelEditorModel.countRange) {
                     Text(model.fixedCount == nil ? "Bilder: \(model.count) (auto)" : "Bilder: \(model.count)")
                 }
-                .help("Antal bilder. Automatiskt antal är en bild per viktig rumstyp (5–8). Ändrar du antalet blir det fast och ger ett nytt förslag som behåller dina lås (låsta bilder, längder, rörelser och övergångar).")
-                .disabled(model.isBusy)
+                .help(model.analysisWaitNote
+                      ?? "Antal bilder. Automatiskt antal är en bild per viktig rumstyp (5–8). Ändrar du antalet blir det fast och ger ett nytt förslag som behåller dina lås (låsta bilder, längder, rörelser och övergångar).")
+                .disabled(model.isBusy || !model.analysisReady)
                 if model.fixedCount != nil {
                     Button("Auto") { model.useAutoCount() }
-                        .help("Låt PhotoFlow välja antalet efter rummen i objektet.")
-                        .disabled(model.isBusy)
+                        .help(model.analysisWaitNote ?? "Låt PhotoFlow välja antalet efter rummen i objektet.")
+                        .disabled(model.isBusy || !model.analysisReady)
                 }
 
                 Menu {
@@ -145,8 +146,8 @@ struct ReelEditorView: View {
                     model.suggestAgain()
                 }
                 .fixedSize()
-                .disabled(model.isBusy)
-                .help("Föreslå igen behåller allt du låst. Börja om helt kastar alla lås.")
+                .disabled(model.isBusy || !model.analysisReady)
+                .help(model.analysisWaitNote ?? "Föreslå igen behåller allt du låst. Börja om helt kastar alla lås.")
 
                 undoControls
 
@@ -440,6 +441,8 @@ struct ReelEditorView: View {
             .padding(.horizontal, 10)
             .padding(.top, 8)
 
+            analysisBar
+
             if let anchor = model.partnerPickAssetID, let index = model.clipRows.firstIndex(where: { $0.id == anchor }) {
                 HStack(spacing: 8) {
                     Image(systemName: "rectangle.split.1x2")
@@ -477,6 +480,35 @@ struct ReelEditorView: View {
         }
     }
 
+    /// Förloppsraden ovanför rutnätet medan bilderna analyseras i bakgrunden (filmen är redan redigerbar).
+    @ViewBuilder
+    private var analysisBar: some View {
+        if let progress = model.backgroundAnalysis {
+            HStack(spacing: 8) {
+                ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
+                    .frame(width: 140)
+                Text("Analyserar bilderna i bakgrunden… \(progress.done) av \(progress.total)")
+                Spacer()
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.top, 6)
+            .help("Rutnätet, poängen och förslagen blir klara när analysen är färdig. Du kan redigera filmen under tiden.")
+        } else if let error = model.backgroundAnalysisError {
+            HStack(spacing: 8) {
+                Label("Analysen av bilderna misslyckades: \(error)", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Button("Försök igen") { model.retryAnalysis() }
+                    .controlSize(.small)
+                Spacer()
+            }
+            .font(.caption)
+            .padding(.horizontal, 10)
+            .padding(.top, 6)
+        }
+    }
+
     /// Samma val som knapparna i cellen, plus lägg till/byt/markera.
     @ViewBuilder
     private func candidateMenu(_ row: ReelEditorModel.CandidateRow) -> some View {
@@ -491,7 +523,7 @@ struct ReelEditorView: View {
             Button("Markera klipp \(i + 1)") { model.selectCandidate(row.id) }
         } else {
             Button("Lägg till sist") { model.addCandidate(row.id) }
-                .disabled(!model.canAddClip)
+                .disabled(!model.canAddClip || !model.analysisReady)
             if let selected = model.selectedAssetID, let index = model.clipRows.firstIndex(where: { $0.id == selected }) {
                 if model.panelKind(forAsset: selected) == .collage {
                     Button("Byt ruta \(model.selectedPanelIndex + 1) i klipp \(index + 1)") {
@@ -499,6 +531,7 @@ struct ReelEditorView: View {
                     }
                 } else {
                     Button("Byt bild i klipp \(index + 1)") { model.replaceClip(selected, withCandidate: row.id) }
+                        .disabled(!model.analysisReady)
                 }
             }
         }

@@ -95,7 +95,7 @@ extension ReelEditorModel {
 
     /// Startar "Dela ruta med…": nästa bild som väljs i rutnätet blir klippets partner. Bara vanliga klipp.
     func beginPickingPartner(for assetID: String) {
-        guard let clip = clip(forAsset: assetID), clip.fit != .panels else { return }
+        guard analysisReady, let clip = clip(forAsset: assetID), clip.fit != .panels else { return }
         selectedAssetID = assetID
         partnerPickAssetID = assetID
     }
@@ -105,7 +105,7 @@ extension ReelEditorModel {
     /// Kan bilden (sha256) bli partner till klippet? Inte bilden själv, och inte en bild som redan är med i ett
     /// annat rutklipp (dela upp det först): ett kollage ska aldrig ta en ruta från ett annat.
     func canPair(_ assetID: String, withCandidate id: String) -> Bool {
-        guard let spec, let clip = clip(forAsset: assetID), clip.fit != .panels, sha(assetID) != id else { return false }
+        guard analysisReady, let spec, let clip = clip(forAsset: assetID), clip.fit != .panels, sha(assetID) != id else { return false }
         let inFilm = Set(order)
         for other in spec.timeline where other.fit == .panels {
             if other.referencedAssetIDs.contains(where: { rid in self.sha(rid) == id }) { return false }
