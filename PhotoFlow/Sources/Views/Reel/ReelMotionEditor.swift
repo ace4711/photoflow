@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Rörelseeditorn (Regi R3): förvalsmeny, hela källbilden med dragbara start- och slutramar
-/// (`ReelKeyframeCanvas`), snabbknappar, motivlager, tempovarning, längd och skäl.
+/// (`ReelKeyframeCanvas`), snabbknappar, motivlager, tempovarning, längd och "Varför": skälet till
+/// den automatiska rörelsen (`ReelEditorModel.motionReason`, "Vald av dig" för låsta) och till urvalet.
 ///
 /// **Under dragning** ändras inte redigeringsmodellen: vyn håller en lokal, osparad rörelse och
 /// visar den i förhandsvisningen som en isolerad spec med bara det här klippet
@@ -61,10 +62,16 @@ struct ReelMotionEditor: View {
                 }
             }
 
-            Text(row.reason)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Varför").font(.subheadline.weight(.semibold))
+                if let reason = model.motionReason(forAsset: row.id) {
+                    Label("Rörelse: \(reason.text)", systemImage: reason == .chosenByUser ? "lock.fill" : "wand.and.stars")
+                }
+                Label("Urval: \(row.reason)", systemImage: row.reason == "Vald av dig" ? "lock.fill" : "wand.and.stars")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
         }
         .task(id: asset?.sha256) { await loadImage() }
         .onDisappear { nudgeTask?.cancel(); endNudge() }

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 /// Tidslinjen i bildspelsfönstret (ersätter filmremsan): klippblock med bredd proportionell mot
 /// längden, övergångar som överlapp med ett chip i skarven, och ett spelhuvud som följer
@@ -13,6 +14,12 @@ import AppKit
 ///   längd) och låser den med behållen typ. Chipet valdes framför överlappets kant eftersom
 ///   överlappet bara är ca 20–40 px brett och kanten därför ligger under chipet,
 /// - linjalen och tom yta: klick och dragning flyttar spelhuvudet.
+///
+/// Bilder från rutnätet tas emot med dra-och-släpp (`onDrop`, se `CandidateDropDelegate`): släpp
+/// mellan två klipp infogar bilden där, släpp mitt på ett klipp byter dess bild
+/// (`ReelTimelineLayout.externalDrop`). Den interna flytten ovan är en vanlig `DragGesture` som
+/// aldrig skapar något dragobjekt, och släppet tar bara emot rutnätets egen dragdata
+/// (`ReelCandidateDrag`), så de två kan inte förväxlas.
 struct ReelTimelineView: View {
     let model: ReelEditorModel
     let preview: ReelPreviewModel
@@ -36,6 +43,8 @@ struct ReelTimelineView: View {
     @State private var drag: Drag?
     @State private var mode: Mode?
     @State private var cursorPushed = false
+    /// Var en bild från rutnätet skulle hamna just nu (medan den dras över tidslinjen).
+    @State private var externalDrop: ReelTimelineLayout.ExternalDrop?
     @FocusState private var focused: Bool
 
     private static let inset = 12.0
@@ -100,6 +109,7 @@ struct ReelTimelineView: View {
                 }
 
                 dropIndicator(layout)
+                externalDropIndicator(layout)
                 PlayheadView(preview: preview, pixelsPerSecond: pps, inset: Self.inset)
                     .frame(width: width, height: Self.height, alignment: .topLeading)
                     .allowsHitTesting(false)
@@ -107,6 +117,9 @@ struct ReelTimelineView: View {
             .frame(width: width, height: Self.height, alignment: .topLeading)
             .contentShape(Rectangle())
             .gesture(dragGesture(layout, spec: committed))
+            .onDrop(of: [.plainText], delegate: CandidateDropDelegate(
+                layout: layout, inset: Self.inset, canInsert: model.canAddClip, target: $externalDrop,
+                perform: { [model, preview] id, target in Self.dropCandidate(id, target: target, model: model, preview: preview) }))
             .onContinuousHover { phase in updateCursor(phase, layout: layout) }
         }
         .focusable()
@@ -208,6 +221,64 @@ struct ReelTimelineView: View {
                 .offset(x: Self.inset + x - 1.5, y: Self.blockTop - 4)
                 .allowsHitTesting(false)
                 .zIndex(40)
+        }
+    }
+
+    /// Släppindikator för en bild från rutnätet: lodrät linje med plustecken i skarven (infoga), eller
+    /// en ram runt klippet (byt bild). Röd när filmen redan har det högsta antalet klipp.
+    @ViewBuilder
+    private func externalDropIndicator(_ layout: ReelTimelineLayout.Layout) -> some View {
+        switch externalDrop {
+        case .insert(let index):
+            let x = ReelTimelineLayout.insertionX(layout, at: index)
+            let color: Color = model.canAddClip ? .accentColor : .red
+            ZStack(alignment: .top) {
+                Rectangle().fill(color).frame(width: 3, height: Self.blockHeight + 8)
+                Image(systemName: model.canAddClip ? "plus.circle.fill" : "nosign")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white, color)
+                    .background(Circle().fill(color))
+                    .offset(y: -10)
+            }
+            .help(model.canAddClip ? "Infoga här" : "Filmen är full (högst \(ReelEditorModel.countRange.upperBound) bilder)")
+            .offset(x: Self.inset + x - 1.5, y: Self.blockTop - 4)
+            .allowsHitTesting(false)
+            .zIndex(40)
+        case .replace(let index) where layout.blocks.indices.contains(index):
+            let block = layout.blocks[index]
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 3, dash: [6, 3]))
+                .background(Color.accentColor.opacity(0.18), in: RoundedRectangle(cornerRadius: 6))
+                .overlay {
+                    Label("Byt bild", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.caption.bold())
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.accentColor, in: Capsule())
+                        .foregroundStyle(.white)
+                        .fixedSize()
+                }
+                .frame(width: block.width, height: Self.blockHeight)
+                .offset(x: Self.inset + block.x, y: Self.blockTop)
+                .allowsHitTesting(false)
+                .zIndex(40)
+        default:
+            EmptyView()
+        }
+    }
+
+    /// Utför ett släpp från rutnätet och flyttar spelhuvudet till klippet.
+    private static func dropCandidate(_ id: String, target: ReelTimelineLayout.ExternalDrop,
+                                      model: ReelEditorModel, preview: ReelPreviewModel) {
+        switch target {
+        case .insert(let index):
+            model.insertCandidate(id, at: index)
+        case .replace(let index):
+            guard let spec = model.spec, spec.timeline.indices.contains(index) else { return }
+            model.replaceClip(spec.timeline[index].asset, withCandidate: id)
+        }
+        if let spec = model.spec, let selected = model.selectedAssetID,
+           let i = spec.timeline.firstIndex(where: { $0.asset == selected }) {
+            preview.seek(to: ReelTimeline.clipStarts(spec)[i])
         }
     }
 
@@ -389,6 +460,54 @@ struct ReelTimelineView: View {
         if row.preset != .auto { parts.append("rörelse") }
         if clip.transitionLocked == true { parts.append("övergång") }
         return "Låst: " + parts.joined(separator: ", ")
+    }
+}
+
+// MARK: - Släpp från rutnätet
+
+/// Tar emot en bild som dras från rutnätet. Platsen räknas om för varje rörelse
+/// (`ReelTimelineLayout.externalDrop`) och visas av tidslinjen via `target`. En infogning i en full
+/// film avvisas (pekaren visar förbjudet); byte av bild går alltid.
+private struct CandidateDropDelegate: DropDelegate {
+    let layout: ReelTimelineLayout.Layout
+    let inset: Double
+    let canInsert: Bool
+    @Binding var target: ReelTimelineLayout.ExternalDrop?
+    let perform: @MainActor @Sendable (String, ReelTimelineLayout.ExternalDrop) -> Void
+
+    private func dropTarget(_ info: DropInfo) -> ReelTimelineLayout.ExternalDrop {
+        ReelTimelineLayout.externalDrop(layout, x: info.location.x - inset)
+    }
+
+    private func allowed(_ t: ReelTimelineLayout.ExternalDrop) -> Bool {
+        if case .insert = t { return canInsert }
+        return true
+    }
+
+    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [.plainText]) }
+
+    func dropEntered(info: DropInfo) { target = dropTarget(info) }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        let t = dropTarget(info)
+        if t != target { target = t }
+        return DropProposal(operation: allowed(t) ? .copy : .forbidden)
+    }
+
+    func dropExited(info: DropInfo) { target = nil }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let t = dropTarget(info)
+        target = nil
+        guard allowed(t), let provider = info.itemProviders(for: [.plainText]).first else { return false }
+        let perform = self.perform
+        _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+            // Dragdata som inte kommer från rutnätet ignoreras.
+            guard let text = (object as? NSString).map({ String($0) }),
+                  let id = ReelCandidateDrag.candidateID(from: text) else { return }
+            Task { @MainActor in perform(id, t) }
+        }
+        return true
     }
 }
 

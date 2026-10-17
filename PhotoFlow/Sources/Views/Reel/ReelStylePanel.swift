@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Filmens stil (R2), visas i sidopanelen när ingenting är markerat: tempo, standardövergång,
-/// rörelsekurva och bakgrund för "hela bilden"-klipp. Allt går via `ReelEditorModel.setStyle`
-/// (ångringsbart, sparas). Standardövergången ändrar inte låsta övergångar.
+/// Filmens stil (R2), visas i sidopanelen när ingenting är markerat: "Så valde PhotoFlow"-sammandraget
+/// (R4, `ReelChoiceSummary`), tempo, standardövergång, rörelsekurva och bakgrund för "hela
+/// bilden"-klipp. Stilen går via `ReelEditorModel.setStyle` (ångringsbart, sparas).
+/// Standardövergången ändrar inte låsta övergångar.
 struct ReelStylePanel: View {
     let model: ReelEditorModel
     let spec: ReelSpec
@@ -13,6 +14,10 @@ struct ReelStylePanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            choiceSummary(ReelChoiceSummary.summary(spec))
+
+            Divider()
+
             Text("Filmens stil").font(.headline)
 
             if model.adaptedCustomMotions > 0 {
@@ -89,6 +94,51 @@ struct ReelStylePanel: View {
             Text("Markera ett klipp eller en övergång (chipet mellan klippen) i tidslinjen för att ändra just den. Dra ett klipps högerkant för att ändra längden, och dra ett övergångschip i sidled för att ändra övergångens längd.")
                 .font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    /// "Så valde PhotoFlow": mall, antal bilder och låsta val, och en rad per klipp med låsikon.
+    /// Klick på en rad markerar klippet.
+    private func choiceSummary(_ summary: ReelChoiceSummary.Summary) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Så valde PhotoFlow").font(.headline)
+            Text(Self.headline(summary))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 3) {
+                ForEach(summary.rows, id: \.assetID) { r in
+                    GridRow {
+                        Text("\(r.index + 1)").monospacedDigit().foregroundStyle(.secondary)
+                        Text(r.room).lineLimit(1)
+                        Text(r.motion).lineLimit(1)
+                        Text(r.transition.map { "in: \($0)" } ?? "–").lineLimit(1).foregroundStyle(.secondary)
+                        Image(systemName: "lock.fill")
+                            .foregroundStyle(.orange)
+                            .opacity(r.locked ? 1 : 0)
+                            .help("Har val du låst")
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { model.selectedAssetID = r.assetID }
+                }
+            }
+            .font(.caption)
+            Text("Rörelse och övergång räknas om automatiskt när du ändrar filmen, utom det du låst. Markera ett klipp för att se varför det rör sig som det gör.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// T.ex. "Mall: villa · 6 bilder · 2 låsta val".
+    static func headline(_ s: ReelChoiceSummary.Summary) -> String {
+        var parts: [String] = []
+        if let t = s.template { parts.append("Mall: \(t.lowercased())") }
+        parts.append(s.clipCount == 1 ? "1 bild" : "\(s.clipCount) bilder")
+        switch s.lockedChoices {
+        case 0: parts.append("inga låsta val")
+        case 1: parts.append("1 låst val")
+        default: parts.append("\(s.lockedChoices) låsta val")
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func row<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {

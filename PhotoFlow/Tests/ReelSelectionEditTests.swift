@@ -263,4 +263,13 @@ struct ReelSelectionEditTests {
         #expect(ReelTimelineLayout.insertionIndex(l, x: 140) == 2)
         #expect(ReelTimelineLayout.dropIndex(l, dragging: 0, dx: 100) == ReelTimelineLayout.insertionIndex(l, x: 150, excluding: 0))
     }
+
+    @Test("Dragdata från rutnätet: eget prefix, annan text avvisas")
+    func dragPayload() {
+        let id = String(format: "%064x", 7)
+        #expect(ReelCandidateDrag.candidateID(from: ReelCandidateDrag.payload(id)) == id)
+        #expect(ReelCandidateDrag.candidateID(from: id) == nil)
+        #expect(ReelCandidateDrag.candidateID(from: ReelCandidateDrag.prefix) == nil)
+        #expect(ReelCandidateDrag.candidateID(from: "https://exempel.se") == nil)
+    }
 }

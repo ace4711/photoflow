@@ -50,3 +50,20 @@ nonisolated enum ReelCandidateFilter {
         Dictionary(uniqueKeysWithValues: Scope.allCases.map { ($0, filter(rows, scope: $0, room: room).count) })
     }
 }
+
+/// Innehållet när en bild dras från rutnätet till tidslinjen: bildens sha256 med ett eget prefix,
+/// så att tidslinjen bara tar emot bilder från rutnätet (och inte vilken text som helst). Flytt av
+/// klipp inom tidslinjen är en vanlig dragning i vyn och går aldrig via dra-och-släpp, så de två
+/// kan inte förväxlas.
+nonisolated enum ReelCandidateDrag {
+    static let prefix = "photoflow-reel-candidate:"
+
+    static func payload(_ candidateID: String) -> String { prefix + candidateID }
+
+    /// Bildens id ur en släppt text, eller nil om texten inte kommer från rutnätet.
+    static func candidateID(from text: String) -> String? {
+        guard text.hasPrefix(prefix) else { return nil }
+        let id = String(text.dropFirst(prefix.count))
+        return id.isEmpty ? nil : id
+    }
+}

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 /// Bildspelsfönstret ("Objektfilm"): välj mapp med färdiga bilder, få ett automatiskt
 /// förslag, justera (ordning, bilder, längd, rörelse, format) och rendera till mp4.
@@ -14,6 +15,9 @@ struct ReelEditorView: View {
     @State private var showShareSheet = false
     @State private var shareLoadedFor: URL?
     @State private var confirmStartOver = false
+    /// Rutnätets filter (bara visning, sparas inte).
+    @State private var scope: ReelCandidateFilter.Scope = .all
+    @State private var roomFilter: String?
     @Environment(\.openWindow) private var openWindow
     @Environment(\.undoManager) private var undoManager
 
@@ -375,15 +379,87 @@ struct ReelEditorView: View {
 
     // MARK: Kandidatrutnät
 
+    /// Rutnätet med filter (läge och rum) överst. Klick: markera/byt/lägg till (`selectCandidate`);
+    /// knapparna och kontextmenyn låser eller utesluter; bilden kan dras till tidslinjen.
     private var candidateGrid: some View {
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 130, maximum: 170), spacing: 10)], spacing: 10) {
-                ForEach(model.candidateRows) { row in
-                    CandidateCell(row: row, isReplaceTarget: model.selectedAssetID != nil)
-                        .onTapGesture { model.selectCandidate(row.id) }
+        let all = model.candidateRows
+        let rooms = ReelCandidateFilter.rooms(all)
+        // Ett rum som inte finns längre (t.ex. efter byte av mapp) filtrerar inte bort allt.
+        let room = roomFilter.flatMap { rooms.contains($0) ? $0 : nil }
+        let counts = ReelCandidateFilter.counts(all, room: room)
+        let shown = ReelCandidateFilter.filter(all, scope: scope, room: room)
+        return VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Picker("Visa", selection: $scope) {
+                    ForEach(ReelCandidateFilter.Scope.allCases, id: \.self) { s in
+                        Text("\(s.label) (\(counts[s] ?? 0))").tag(s)
+                    }
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                Menu {
+                    Button("Alla rum") { roomFilter = nil }
+                    Divider()
+                    ForEach(rooms, id: \.self) { r in
+                        Button { roomFilter = r } label: {
+                            if r == room { Label(r, systemImage: "checkmark") } else { Text(r) }
+                        }
+                    }
+                } label: {
+                    Label(room ?? "Alla rum", systemImage: "line.3.horizontal.decrease.circle")
+                }
+                .fixedSize()
+                .help("Visa bara bilder från ett rum")
+                Spacer()
+                Text("Dra en bild till tidslinjen: mellan två klipp infogas den, på ett klipp byter den bild.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
-            .padding(10)
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+
+            ScrollView {
+                if shown.isEmpty {
+                    Text("Inga bilder i det här urvalet.")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity).padding(24)
+                }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 130, maximum: 170), spacing: 10)], spacing: 10) {
+                    ForEach(shown) { row in
+                        CandidateCell(row: row, isReplaceTarget: model.selectedAssetID != nil, canAdd: model.canAddClip,
+                                      onPin: { model.togglePinned(row.id) },
+                                      onExclude: { model.toggleExcluded(row.id) })
+                            .onTapGesture { model.selectCandidate(row.id) }
+                            .onDrag { NSItemProvider(object: ReelCandidateDrag.payload(row.id) as NSString) }
+                            .contextMenu { candidateMenu(row) }
+                    }
+                }
+                .padding(10)
+            }
+        }
+    }
+
+    /// Samma val som knapparna i cellen, plus lägg till/byt/markera.
+    @ViewBuilder
+    private func candidateMenu(_ row: ReelEditorModel.CandidateRow) -> some View {
+        Button(row.isPinned ? "Släpp låset" : "Lås i filmen", systemImage: row.isPinned ? "pin.slash" : "pin") {
+            model.togglePinned(row.id)
+        }
+        Button(row.isUserExcluded ? "Ta tillbaka" : "Uteslut", systemImage: row.isUserExcluded ? "arrow.uturn.backward" : "nosign") {
+            model.toggleExcluded(row.id)
+        }
+        Divider()
+        if let i = row.clipIndex {
+            Button("Markera klipp \(i + 1)") { model.selectCandidate(row.id) }
+        } else {
+            Button("Lägg till sist") { model.addCandidate(row.id) }
+                .disabled(!model.canAddClip)
+            if let selected = model.selectedAssetID, let index = model.clipRows.firstIndex(where: { $0.id == selected }) {
+                Button("Byt bild i klipp \(index + 1)") { model.replaceClip(selected, withCandidate: row.id) }
+            }
         }
     }
 }
@@ -393,6 +469,15 @@ struct ReelEditorView: View {
 private struct CandidateCell: View {
     let row: ReelEditorModel.CandidateRow
     let isReplaceTarget: Bool
+    let canAdd: Bool
+    let onPin: () -> Void
+    let onExclude: () -> Void
+
+    private var borderColor: Color {
+        if row.isUserExcluded { return .red.opacity(0.7) }
+        if row.isPinned { return .orange }
+        return row.clipIndex != nil ? .accentColor : .clear
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -400,6 +485,7 @@ private struct CandidateCell: View {
                 .frame(height: 90)
                 .frame(maxWidth: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
+                .saturation(row.isUserExcluded ? 0 : 1)
                 .overlay(alignment: .topLeading) {
                     if let i = row.clipIndex {
                         Text("\(i + 1)")
@@ -410,26 +496,73 @@ private struct CandidateCell: View {
                             .padding(4)
                     }
                 }
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(row.clipIndex != nil ? Color.accentColor : .clear, lineWidth: 2))
+                .overlay(alignment: .topTrailing) {
+                    HStack(spacing: 3) {
+                        iconButton(row.isPinned ? "pin.fill" : "pin", tint: row.isPinned ? .orange : nil,
+                                   help: row.isPinned ? "Släpp låset (bilden blir kvar i filmen)" : pinHelp, action: onPin)
+                        iconButton("nosign", tint: row.isUserExcluded ? .red : nil,
+                                   help: row.isUserExcluded ? "Ta tillbaka bilden" : "Uteslut: föreslås aldrig och tas bort ur filmen",
+                                   action: onExclude)
+                    }
+                    .padding(4)
+                }
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(borderColor, lineWidth: 2))
             HStack {
-                Text(row.room ?? row.category ?? "Okänt rum")
+                Text(row.roomLabel)
                     .font(.caption)
                     .lineLimit(1)
                 Spacer()
                 Text(ReelSelector.fmt(row.score))
                     .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                    .help("Poäng i urvalet (0–1)")
             }
             if let reason = row.excludedReason {
                 Text(reason)
                     .font(.caption2)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(row.isUserExcluded ? .red : .orange)
+                    .lineLimit(2)
+            } else if let reason = row.selectionReason {
+                Text(reason)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
         }
         .opacity(row.excludedReason == nil ? 1 : 0.65)
         .contentShape(Rectangle())
-        .help("\(row.filename)\(row.excludedReason.map { " — \($0)" } ?? "")\n" +
-              (row.clipIndex != nil ? "Klicka för att markera klippet" :
-                (isReplaceTarget ? "Klicka för att byta det markerade klippets bild" : "Klicka för att lägga till sist")))
+        .help(help)
+    }
+
+    private var pinHelp: String {
+        if row.clipIndex != nil { return "Lås i filmen: bilden är kvar vid Föreslå igen" }
+        return canAdd ? "Lås i filmen: läggs till sist och är kvar vid Föreslå igen"
+                      : "Lås i filmen: filmen är full, bilden kommer med vid nästa Föreslå igen"
+    }
+
+    private var help: String {
+        var lines = [row.filename]
+        if let reason = row.excludedReason { lines.append(reason) } else if let reason = row.selectionReason { lines.append(reason) }
+        if row.isPinned { lines.append("Låst i filmen") }
+        if row.clipIndex != nil {
+            lines.append("Klicka för att markera klippet")
+        } else if isReplaceTarget {
+            lines.append("Klicka för att byta det markerade klippets bild")
+        } else {
+            lines.append(canAdd ? "Klicka för att lägga till sist" : "Filmen är full (högst \(ReelEditorModel.countRange.upperBound) bilder)")
+        }
+        lines.append("Dra till tidslinjen för att infoga eller byta. Högerklicka för fler val.")
+        return lines.joined(separator: "\n")
+    }
+
+    private func iconButton(_ symbol: String, tint: Color?, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .semibold))
+                .frame(width: 20, height: 20)
+                .background(tint ?? Color.black.opacity(0.45), in: Circle())
+                .foregroundStyle(.white)
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 }
