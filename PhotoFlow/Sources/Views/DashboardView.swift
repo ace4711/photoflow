@@ -37,6 +37,7 @@ struct DashboardView: View {
                 dashboardToolbarContent
             }
         }
+        .navigationSubtitle(showReview ? "" : dashboardSubtitle)
         .sheet(isPresented: $showSettings) {
             SettingsView(initialTab: settingsInitialTab)
                 .frame(width: 700, height: 620)
@@ -169,35 +170,31 @@ struct DashboardView: View {
 
     @ToolbarContentBuilder
     private var dashboardToolbarContent: some ToolbarContent {
-        ToolbarItemGroup(placement: .navigation) {
-            folderButton(
-                icon: "folder",
-                label: "Input",
-                path: settings.inputDirectory?.lastPathComponent,
-                color: .blue,
-                detail: nefCount > 0 ? "\(nefCount) NEF" : nil,
-                alert: hasBlocker(prefix: "input.")
-            ) {
+        // Mapparna och startkontrollen som egna objekt med luft emellan (en gemensam grupp blev en
+        // enda trång glaskapsel). Antal NEF och "bearbetat" står i fönstrets undertitel.
+        ToolbarItem(placement: .navigation) {
+            folderButton(icon: "folder", label: "Input", url: settings.inputDirectory, color: .blue,
+                         alert: hasBlocker(prefix: "input.")) {
                 pickInputFolder()
             }
-
-            folderButton(
-                icon: "folder.fill",
-                label: "Output",
-                path: settings.outputDirectory?.lastPathComponent ?? pipeline.outputDirectory?.lastPathComponent,
-                color: .green,
-                detail: hasProcessedOutput ? "Bearbetat" : nil,
-                alert: hasBlocker(prefix: "output.")
-            ) {
+        }
+        ToolbarSpacer(.fixed, placement: .navigation)
+        ToolbarItem(placement: .navigation) {
+            folderButton(icon: "folder.fill", label: "Output", url: settings.outputDirectory ?? pipeline.outputDirectory,
+                         color: .green, alert: hasBlocker(prefix: "output.")) {
                 pickOutputFolder()
             }
+        }
+        ToolbarSpacer(.fixed, placement: .navigation)
 
+        ToolbarItem(placement: .navigation) {
             Button(action: { preflight.isPresented = true }) {
                 HStack(spacing: 5) {
                     Image(systemName: PreflightView.icon(for: preflight.report.worst))
                         .foregroundStyle(PreflightView.color(for: preflight.report.worst))
                     Text(preflight.report.checks.isEmpty ? "Startkontroll" : preflight.report.summary)
-                        .font(.caption)
+                        .lineLimit(1)
+                        .fixedSize()
                 }
             }
             .help("Startkontroll — mappar, kalender, verktyg och Lightroom")
@@ -368,30 +365,40 @@ struct DashboardView: View {
 
     // MARK: - Folder button (toolbar)
 
-    private func folderButton(icon: String, label: String, path: String?, color: Color, detail: String?, alert: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
+    /// En mapp i verktygsfältet: ikon och mappens namn (kapas aldrig). Klick väljer mapp; högerklick
+    /// ger "Visa i Finder". En vanlig knapp, inte `Menu`: verktygsfältet ritar en meny med fast bredd
+    /// och kapar etiketten.
+    private func folderButton(icon: String, label: String, url: URL?, color: Color, alert: Bool = false,
+                              action: @escaping () -> Void) -> some View {
+        let name = url?.lastPathComponent
+        return Button(action: action) {
+            Label {
+                Text(name ?? "Välj \(label.lowercased())mapp…")
+                    .lineLimit(1)
+                    .fixedSize()
+            } icon: {
                 Image(systemName: alert ? "exclamationmark.triangle.fill" : icon)
                     .foregroundStyle(alert ? .red : color)
-                VStack(alignment: .leading, spacing: 1) {
-                    if let path {
-                        Text(path)
-                            .font(.system(.caption, design: .monospaced))
-                            .lineLimit(1)
-                    } else {
-                        Text("Välj \(label.lowercased())mapp...")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    if let detail {
-                        Text(detail)
-                            .font(.system(size: 9))
-                            .foregroundStyle(color.opacity(0.8))
-                    }
+            }
+            .labelStyle(.titleAndIcon)
+        }
+        .contextMenu {
+            Button("Välj \(label.lowercased())mapp…", systemImage: "folder.badge.gearshape", action: action)
+            if let url {
+                Button("Visa i Finder", systemImage: "magnifyingglass") {
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
                 }
             }
         }
-        .help(path == nil ? "Välj \(label.lowercased())mapp" : path!)
+        .help(url.map { "\(label): \($0.path)" } ?? "Välj \(label.lowercased())mapp")
+    }
+
+    /// Undertiteln under "PhotoFlow": det som tidigare trängdes i mappknapparna.
+    private var dashboardSubtitle: String {
+        var parts: [String] = []
+        if nefCount > 0 { parts.append("\(nefCount) NEF i input") }
+        if hasProcessedOutput { parts.append("output bearbetat") }
+        return parts.joined(separator: " · ")
     }
 
     // MARK: - Log panel
