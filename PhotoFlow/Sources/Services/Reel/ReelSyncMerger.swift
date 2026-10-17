@@ -21,7 +21,7 @@ nonisolated enum ReelSyncMerger {
                       analyses: [String: ReelImageAnalysis] = [:]) -> Result {
         // Relativa sökvägar ska lösas mot mappen, inte mot en "fil" med mappens namn.
         let specDirectory = URL(fileURLWithPath: specDirectory.path, isDirectory: true)
-        let used = Set(remote.timeline.map(\.asset))
+        let used = remote.usedAssetIDs   // klippens bilder och rutornas
         let localByHash = Dictionary((local?.assets ?? []).map { ($0.sha256, $0) }, uniquingKeysWith: { a, _ in a })
         var spec = remote
         var missing: [String] = []

@@ -59,6 +59,17 @@ nonisolated enum ReelChoiceSummary {
 
     /// Rörelsen som den faktiskt blev (läses ur nycklarna, inte ur förvalet).
     static func motionLabel(_ clip: ReelSpec.Clip) -> String {
+        if clip.fit == .panels {
+            let n = clip.panels?.count ?? 0
+            let layout: String
+            switch clip.layout {
+            case .stack: layout = "Rutor: stapel"
+            case .side: layout = "Rutor: sida vid sida"
+            case .sequence: layout = "Rutor: efter varandra"
+            case nil: layout = "Rutor"
+            }
+            return "\(layout), \(n) st"
+        }
         if clip.motionPreset == ReelMotionPlanner.Preset.custom.rawValue { return "Egen rörelse" }
         if clip.fit == .containBlur { return "Hela bilden" }
         let dz = clip.motion.to.zoom - clip.motion.from.zoom

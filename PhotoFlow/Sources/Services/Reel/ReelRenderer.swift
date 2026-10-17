@@ -98,13 +98,31 @@ nonisolated final class ReelRenderer: @unchecked Sendable {
     }
 
     /// Längsta sidan (pixlar) som behövs för att utsnittet ska vara skarpt vid
-    /// högsta zoom i någon av asset:ens klipp, i `maxOutputSize`. Aldrig mer än originalet.
+    /// högsta zoom i någon av asset:ens klipp (och rutor), i `maxOutputSize`. Aldrig mer än originalet.
     func requiredLongEdge(for asset: ReelSpec.Asset) -> Int {
         let imageSize = CGSize(width: asset.width, height: asset.height)
         let frame = maxOutputSize
         let aspect = Double(frame.width / frame.height)
         var scale = 0.0   // bildpixlar per källpixel som behövs
-        for clip in spec.timeline where clip.asset == asset.id {
+        for clip in spec.timeline {
+            if clip.fit == .panels {
+                // Rutor: varje ruta fyller sin `dest`; utsnittet vid högsta zoom ska vara skarpt där.
+                let dests = ReelTimeline.panelDests(layout: clip.layout ?? .sequence, frameAspect: aspect,
+                                                    gutter: clip.gutter ?? ReelSpec.Clip.defaultGutter)
+                for (k, panel) in (clip.panels ?? []).enumerated() where panel.asset == asset.id {
+                    let dest = dests.count == 2 ? dests[min(k, 1)] : dests[0]
+                    let z = max(panel.motion.from.zoom, panel.motion.to.zoom, 1)
+                    let s = panel.source
+                    let center = CGPoint(x: (s?.x ?? 0) + (s?.w ?? 1) / 2, y: (s?.y ?? 0) + (s?.h ?? 1) / 2)
+                    let crop = ReelTimeline.panelCrop(imageSize: imageSize, source: s,
+                                                      destAspect: Double(dest.width) * aspect / Double(dest.height),
+                                                      center: center, zoom: z)
+                    scale = max(scale, Double(dest.width * frame.width) / (crop.width * Double(asset.width)),
+                                Double(dest.height * frame.height) / (crop.height * Double(asset.height)))
+                }
+                continue
+            }
+            guard clip.asset == asset.id else { continue }
             let z = max(clip.motion.from.zoom, clip.motion.to.zoom, 1)
             let center = CGPoint(x: 0.5, y: 0.5)
             // Cover: utsnittet (z) ska fylla ramen. Gäller även contain-blurs bakgrund (z = 1).
@@ -145,7 +163,7 @@ nonisolated final class ReelRenderer: @unchecked Sendable {
     /// Laddar alla asset som används, och kastar om någon saknas (så att en export
     /// misslyckas direkt och inte efter halva filmen).
     func preload() throws {
-        let used = Set(spec.timeline.map(\.asset))
+        let used = spec.usedAssetIDs
         for asset in spec.assets where used.contains(asset.id) {
             guard image(for: asset) != nil else { throw ReelRenderError.assetNotFound(id: asset.id) }
         }
@@ -158,10 +176,23 @@ nonisolated final class ReelRenderer: @unchecked Sendable {
     func renderFrame(at t: Double, size: CGSize) -> CIImage {
         let frame = CGRect(origin: .zero, size: size)
         var canvas = CIImage(color: .black).cropped(to: frame)
-        for layer in ReelTimeline.state(at: t, spec: spec, outputSize: size) {
-            guard let asset = spec.assets.first(where: { $0.id == layer.asset }),
-                  let source = image(for: asset) else { continue }
-            var group = draw(layer, source: source, frame: frame)
+        let layers = ReelTimeline.state(at: t, spec: spec, outputSize: size)
+        var i = 0
+        while i < layers.count {
+            let layer = layers[i]
+            var group: CIImage
+            if layer.panel != nil {
+                // Rutlager med samma z är en grupp (spec v2, 4.2): svart botten, rutorna ritas på den.
+                var j = i
+                while j < layers.count, layers[j].panel != nil, layers[j].z == layer.z { j += 1 }
+                group = drawPanelGroup(Array(layers[i..<j]), frame: frame)
+                i = j
+            } else {
+                i += 1
+                guard let asset = spec.assets.first(where: { $0.id == layer.asset }),
+                      let source = image(for: asset) else { continue }
+                group = draw(layer, source: source, frame: frame)
+            }
             if layer.opacity < 1 {
                 // Alfa på en helt täckande grupp; vanlig "over" blir (1−a)·under + a·grupp i sRGB.
                 group = group.applyingFilter("CIColorMatrix", parameters: [
@@ -178,11 +209,37 @@ nonisolated final class ReelRenderer: @unchecked Sendable {
         return canvas
     }
 
+    /// Ritar ett klipps rutor (spec v2, 4.2) utan gruppens opacitet och förskjutning: en svart ram, och
+    /// varje ruta i sin `dest` (avrundad till heltalspixlar) förskjuten med rutans egen `offset`, blandad
+    /// med rutans egen opacitet och klippt till ramen. En ruta vars bild saknas hoppas över.
+    private func drawPanelGroup(_ layers: [ReelTimeline.LayerState], frame: CGRect) -> CIImage {
+        var group = CIImage(color: .black).cropped(to: frame)
+        for layer in layers {
+            guard let info = layer.panel,
+                  let asset = spec.assets.first(where: { $0.id == layer.asset }),
+                  let source = image(for: asset) else { continue }
+            var panel = place(source, crop: layer.crop, into: destinationRect(layer.dest, in: frame))
+            if info.opacity < 1 {
+                panel = panel.applyingFilter("CIColorMatrix", parameters: [
+                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(info.opacity))
+                ])
+            }
+            if info.offset != .zero {
+                panel = panel.transformed(by: CGAffineTransform(
+                    translationX: info.offset.x * frame.width, y: -info.offset.y * frame.height))
+            }
+            group = panel.composited(over: group).cropped(to: frame)
+        }
+        return group
+    }
+
     /// Ritar ett lager (inklusive bakgrund) utan opacitet och förskjutning.
     private func draw(_ layer: ReelTimeline.LayerState, source: CIImage, frame: CGRect) -> CIImage {
         switch layer.fit {
         case .cover:
             return place(source, crop: layer.crop, into: frame)
+        case .panels:
+            return CIImage(color: .black).cropped(to: frame)   // rutlager ritas av `drawPanelGroup`
         case .containBlur:
             var backdrop = CIImage(color: .black).cropped(to: frame)
             if let b = layer.backdrop {

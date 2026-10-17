@@ -170,15 +170,54 @@ nonisolated enum ReelComposer {
             auto.append(.init(asset: id, slot: pick.slotKey, reason: pick.reason))
             if let o = lockedBySha[pick.candidateID] { overridesByAsset[id] = o }
         }
+        let clipAssetCount = assets.count
+        // Rutklipp: rutornas bilder bär de gamla asset-id:na; numrera om dem mot de nya (på sha256) och
+        // lägg till partnerbilder som inte är något klipps egen bild som extra assets efter klippens.
+        if let previous {
+            let shaByOldID = Dictionary(previous.assets.map { ($0.id, $0.sha256) }, uniquingKeysWith: { a, _ in a })
+            var idBySha = Dictionary(assets.map { ($0.sha256, $0.id) }, uniquingKeysWith: { a, _ in a })
+            var next = assets.count
+            func newID(forOld old: String) -> String? {
+                guard let sha = shaByOldID[old] else { return nil }
+                if let id = idBySha[sha] { return id }
+                let id = "a\(next + 1)"
+                if let item = byID[sha] {
+                    assets.append(asset(id: id, item: item, specDirectory: specDirectory))
+                } else if var kept = previous.assets.first(where: { $0.id == old }) {
+                    kept.id = id
+                    assets.append(kept)
+                } else { return nil }
+                next += 1
+                idBySha[sha] = id
+                return id
+            }
+            for (anchor, o) in overridesByAsset {
+                guard var lock = o.panels else { continue }
+                var remapped: [ReelSpec.Panel] = []
+                for var panel in lock.panels {
+                    guard let id = newID(forOld: panel.asset) else { continue }
+                    panel.asset = id
+                    remapped.append(panel)
+                }
+                guard remapped.count == lock.panels.count else {
+                    overridesByAsset[anchor]?.panels = nil   // en ruta saknar bild: klippet blir ett vanligt klipp
+                    continue
+                }
+                lock.panels = remapped
+                overridesByAsset[anchor]?.panels = lock
+            }
+        }
 
         let output = options.format.output
         let style = previous?.style ?? defaultStyle
-        let clips = ReelMotionPlanner.plan(plannerImages(assets), frameAspect: ReelMotionPlanner.frameAspect(output),
+        // Planeraren ser bara klippens egna bilder (picks); extra rutbilder ligger sist i `assets`.
+        let clipAssets = Array(assets.prefix(clipAssetCount))
+        let clips = ReelMotionPlanner.plan(plannerImages(clipAssets), frameAspect: ReelMotionPlanner.frameAspect(output),
                                            overrides: overridesByAsset,
                                            tempo: .init(editorValue: editor?.tempo),
                                            defaultTransition: style.defaultTransition)
         var spec = ReelSpec(
-            schema: ReelSpec.schemaName, version: ReelSpec.currentVersion, minReaderVersion: 1,
+            schema: ReelSpec.schemaName, version: 1, minReaderVersion: 1,
             id: options.specID, revision: 1, status: "draft",
             createdAt: wholeSeconds(options.now), updatedAt: wholeSeconds(options.now), updatedBy: options.updatedBy,
             property: .init(address: options.address, sessionID: options.sessionID,
@@ -187,6 +226,7 @@ nonisolated enum ReelComposer {
             outputs: [output],
             provenance: .init(generator: generator, autoSelection: auto, edits: nil))
         spec.editor = editor
+        spec = spec.updatingVersions()
         return Result(spec: spec, selection: selection, candidates: candidates,
                       urls: Dictionary(unique.map { ($0.analysis.sha256, $0.url) }, uniquingKeysWith: { a, _ in a }))
     }
@@ -244,12 +284,21 @@ nonisolated enum ReelComposer {
         var out = spec
         if let format { out.outputs = [format.output] }
         let aspect = ReelMotionPlanner.frameAspect(out.outputs.first ?? ReelFormat.vertical.output)
-        out.assets = assets
         // Fotografens val (rörelse, längd) följer med bilden; utan `overrides` läses de ur nuvarande klipp.
         let kept = overrides ?? Self.overrides(in: spec)
         out.timeline = ReelMotionPlanner.plan(plannerImages(assets), frameAspect: aspect, overrides: kept,
                                               tempo: .init(editorValue: spec.editor?.tempo),
                                               defaultTransition: spec.style.defaultTransition)
+        // Bilder som rutklippens rutor pekar på men som inte är något klipps egen bild ligger kvar i `assets`.
+        var extras: [ReelSpec.Asset] = []
+        let have = Set(assets.map(\.id))
+        for clip in out.timeline {
+            for id in clip.referencedAssetIDs where !have.contains(id) && !extras.contains(where: { $0.id == id }) {
+                if let a = known[id] { extras.append(a) }
+            }
+        }
+        out.assets = assets + extras
+        out = out.updatingVersions()
         out.revision += 1
         out.updatedAt = wholeSeconds(now)
         out.updatedBy = by
@@ -288,6 +337,14 @@ nonisolated enum ReelComposer {
         for clip in spec.timeline {
             let preset = clip.motionPreset.flatMap(ReelMotionPlanner.Preset.init(rawValue:)) ?? .auto
             let locked = clip.transitionLocked == true
+            if clip.fit == .panels, let layout = clip.layout, let panels = clip.panels, !panels.isEmpty {
+                // Rutklipp (spec v2): utformningen är fotografens låsta val; längd och övergång som för andra klipp.
+                result[clip.asset] = .init(
+                    preset: .auto, duration: clip.durationLocked == true ? clip.duration : nil,
+                    transitionLocked: locked, transition: locked ? clip.transitionIn : nil, custom: nil,
+                    panels: .init(layout: layout, panels: panels, gutter: clip.gutter, entrance: clip.entrance))
+                continue
+            }
             var custom: ReelMotionPlanner.CustomMotion?
             if preset == .custom {
                 custom = .init(fit: clip.fit, motion: clip.motion)

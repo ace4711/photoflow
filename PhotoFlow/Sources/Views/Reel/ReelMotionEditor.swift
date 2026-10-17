@@ -37,17 +37,25 @@ struct ReelMotionEditor: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
 
-            Picker("Rörelse", selection: Binding(get: { row.preset }, set: { p in act { model.setPreset(row.id, p) } })) {
-                ForEach(ReelMotionPlanner.Preset.selectableCases, id: \.self) { preset in
-                    Text(preset.label).tag(preset)
+            if let clip, clip.fit == .panels {
+                // Rutklipp (spec v2) har ingen rörelseeditor än: layout, rutor och ingång redigeras i R6d.
+                Label("\(Self.panelsDescription(clip)). Rutklipp redigeras i R6d; här går det bara att ändra längden.",
+                      systemImage: "rectangle.split.2x1")
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Picker("Rörelse", selection: Binding(get: { row.preset }, set: { p in act { model.setPreset(row.id, p) } })) {
+                    ForEach(ReelMotionPlanner.Preset.selectableCases, id: \.self) { preset in
+                        Text(preset.label).tag(preset)
+                    }
+                    // Egen rörelse väljs inte i menyn, men visas när klippet har en.
+                    if row.preset == .custom { Text(ReelMotionPlanner.Preset.custom.label).tag(ReelMotionPlanner.Preset.custom) }
                 }
-                // Egen rörelse väljs inte i menyn, men visas när klippet har en.
-                if row.preset == .custom { Text(ReelMotionPlanner.Preset.custom.label).tag(ReelMotionPlanner.Preset.custom) }
-            }
-            .pickerStyle(.menu)
+                .pickerStyle(.menu)
 
-            if let clip, let g = geometry, let motion = shownMotion {
-                canvasSection(clip: clip, g: g, motion: motion)
+                if let clip, let g = geometry, let motion = shownMotion {
+                    canvasSection(clip: clip, g: g, motion: motion)
+                }
             }
 
             HStack {
@@ -75,6 +83,11 @@ struct ReelMotionEditor: View {
         }
         .task(id: asset?.sha256) { await loadImage() }
         .onDisappear { nudgeTask?.cancel(); endNudge() }
+    }
+
+    /// "Stapel, 2 rutor" och liknande, för rutklipp.
+    static func panelsDescription(_ clip: ReelSpec.Clip) -> String {
+        ReelChoiceSummary.motionLabel(clip)
     }
 
     // MARK: Bild och ramar

@@ -357,9 +357,14 @@ final class ReelEditorModel {
         let scores = selection?.scores ?? [:]
         let excluded = Dictionary((selection?.excluded ?? []).map { ($0.candidateID, $0.reason) },
                                   uniquingKeysWith: { a, _ in a })
-        let placed = Dictionary(uniqueKeysWithValues: (spec?.timeline ?? []).enumerated().compactMap { i, clip in
-            spec?.assets.first { $0.id == clip.asset }.map { ($0.sha256, i) }
-        })
+        // Bild (sha256) → första klippet som visar den, även som ruta i ett rutklipp. Samma bild kan
+        // förekomma flera gånger (montage i sequence har samma bild i båda rutorna): första klippet gäller.
+        var placed: [String: Int] = [:]
+        for (i, clip) in (spec?.timeline ?? []).enumerated() {
+            for id in clip.referencedAssetIDs {
+                if let sha = spec?.assets.first(where: { $0.id == id })?.sha256, placed[sha] == nil { placed[sha] = i }
+            }
+        }
         let userExcluded = Set(spec?.editor?.excludedAssets ?? [])
         let pinned = Set(spec?.editor?.pinnedAssets ?? [])
         let reasons = Dictionary((spec?.provenance.autoSelection ?? []).map { ($0.asset, $0.reason) },
@@ -485,7 +490,8 @@ final class ReelEditorModel {
             guard let item = bySha[restored.assets[i].sha256] else { return nil }
             restored.assets[i].sources = [.init(kind: .local, path: ReelComposer.relativePath(from: specDirectory, to: item.url))]
         }
-        guard restored.timeline.allSatisfy({ clip in restored.assets.contains { $0.id == clip.asset } }) else { return nil }
+        let known = Set(restored.assets.map(\.id))
+        guard restored.timeline.allSatisfy({ clip in clip.referencedAssetIDs.allSatisfy(known.contains) }) else { return nil }
         return restored
     }
 
@@ -597,7 +603,11 @@ final class ReelEditorModel {
     func assetID(forCandidate id: String) -> String? {
         guard let spec else { return nil }
         let inFilm = Set(order)
-        return spec.assets.first { $0.sha256 == id && inFilm.contains($0.id) }?.id
+        // Först klippens egna bilder; en bild som bara är ruta i ett rutklipp räknas som med via klippets bild.
+        if let own = spec.assets.first(where: { $0.sha256 == id && inFilm.contains($0.id) }) { return own.id }
+        let panelIDs = Set(spec.timeline.flatMap(\.referencedAssetIDs))
+        guard let partner = spec.assets.first(where: { $0.sha256 == id && panelIDs.contains($0.id) }) else { return nil }
+        return spec.timeline.first { $0.referencedAssetIDs.contains(partner.id) }?.asset
     }
 
     /// En bild som fotografen själv lägger in i filmen är inte längre utesluten.
@@ -684,6 +694,7 @@ final class ReelEditorModel {
     /// Förval av rörelse. `.custom` utan egen rörelse sedan tidigare utgår från klippets nuvarande
     /// fit och rörelse; vilket annat förval som helst släpper en egen rörelse.
     func setPreset(_ assetID: String, _ preset: ReelMotionPlanner.Preset) {
+        guard !isPanelsClip(assetID) else { return }
         var o = currentOverrides()
         var entry = o[assetID] ?? .init()
         entry.preset = preset
@@ -700,12 +711,18 @@ final class ReelEditorModel {
 
     /// Egen rörelse (dragna start/slut): låser klippets rörelse som `custom`.
     func setCustomMotion(_ assetID: String, fit: ReelSpec.Fit, motion: ReelSpec.Motion) {
+        guard !isPanelsClip(assetID) else { return }
         var o = currentOverrides()
         var entry = o[assetID] ?? .init()
         entry.preset = .custom
         entry.custom = .init(fit: fit, motion: motion)
         o[assetID] = entry
         apply(order: order, overrides: o, op: "motion", target: assetID)
+    }
+
+    /// Är klippet ett rutklipp (spec v2)? Det har ingen rörelseredigering förrän R6d: rörelseändringar ignoreras.
+    func isPanelsClip(_ assetID: String) -> Bool {
+        spec?.timeline.first(where: { $0.asset == assetID })?.fit == .panels
     }
 
     /// Klippets analys (matchad mot assetens sha256), för motivlager och "Centrera på motivet".

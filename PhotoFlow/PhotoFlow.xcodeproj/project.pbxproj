@@ -165,6 +165,7 @@
 		6831F9C524D84D26C0A67446 /* AppSettingsCalendarNamesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ED048B0E21E2830A6817B4E /* AppSettingsCalendarNamesTests.swift */; };
 		685AB35EE45FCADC4344DC26 /* PipelineRunnerParallelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF1EAE0DC70CDE2AA4C98C1 /* PipelineRunnerParallelTests.swift */; };
 		68699E34360BE0D07D58EB95 /* PipelineRunnerLightroomTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 106C92FF5EFA871572809B65 /* PipelineRunnerLightroomTests.swift */; };
+		687B350B5B7AD6C1031CD0B8 /* ReelPanelsRenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74A8A947FD72A21046E37954 /* ReelPanelsRenderTests.swift */; };
 		6929F60C15C14E43E138F4AA /* PhotoFlowFieldApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9194C289AA128559AB08EC6 /* PhotoFlowFieldApp.swift */; };
 		6967F046992B53DA22259633 /* ResourceGovernor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09B47BC27882B3758FAD132 /* ResourceGovernor.swift */; };
 		697AD790BAFB2EC4F9081715 /* AddressFolderLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5679D93E6E18C8F178CFC636 /* AddressFolderLayoutTests.swift */; };
@@ -276,6 +277,7 @@
 		A8CEE63E40E4EEF38C5FB978 /* ReelImageAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0831F4831D87ACC606120BAD /* ReelImageAnalyzer.swift */; };
 		AA1852DBA57FA0051A3FF9EC /* WatchServiceFileIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC9242645046144625EF653B /* WatchServiceFileIdentityTests.swift */; };
 		AC5C4F059CC362A741A1008A /* ReelServerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFB3593ABA79CEDA6F6A39B2 /* ReelServerClient.swift */; };
+		ACBD8462E628F04045F6AB56 /* ReelPanelsDataModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13E1CB5F9684ABF8A638701D /* ReelPanelsDataModelTests.swift */; };
 		AD0E079FAE83F917A761DDB1 /* AIDescriptionSampleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C81E99A70729258CCF23DE6 /* AIDescriptionSampleTests.swift */; };
 		AE10B180DFE0FFCA6375B99E /* SessionManifestStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4A38FD1EFF2B96F70EF36FA /* SessionManifestStore.swift */; };
 		AE65C64257C249AEB62356CE /* EnhancementEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8F82627636F316BCD55736A /* EnhancementEngine.swift */; };
@@ -438,6 +440,7 @@
 		1232E269C2AE3EC7F7B9017B /* RAWRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RAWRendererTests.swift; sourceTree = "<group>"; };
 		1279DBB0DF4234F6A70860A6 /* EnhancementProfileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnhancementProfileTests.swift; sourceTree = "<group>"; };
 		130D67322F34D53E2FC1D475 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		13E1CB5F9684ABF8A638701D /* ReelPanelsDataModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelPanelsDataModelTests.swift; sourceTree = "<group>"; };
 		14649506837FBA250AD7AFCC /* ObjektfilmTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObjektfilmTestSupport.swift; sourceTree = "<group>"; };
 		15013823524139A334945DBD /* SessionVerifyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionVerifyView.swift; sourceTree = "<group>"; };
 		153B93145B4921E4F181418C /* HDRWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRWriter.swift; sourceTree = "<group>"; };
@@ -533,6 +536,7 @@
 		73C793E2AC4E7D98F92CE96D /* ReviewImageSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewImageSelectionTests.swift; sourceTree = "<group>"; };
 		745EDB6E043AF8E62D13A969 /* PipelineMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineMetrics.swift; sourceTree = "<group>"; };
 		748369AB88EBB1EB7B1443AD /* EditSuggestion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditSuggestion.swift; sourceTree = "<group>"; };
+		74A8A947FD72A21046E37954 /* ReelPanelsRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelPanelsRenderTests.swift; sourceTree = "<group>"; };
 		753AD375D184F1492B4E6A5E /* PipelineRunnerFieldNotesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineRunnerFieldNotesTests.swift; sourceTree = "<group>"; };
 		7662825784D834CB3C56A0B0 /* BracketOrganizeFoldersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BracketOrganizeFoldersTests.swift; sourceTree = "<group>"; };
 		786C7DA81AF1DAB9E76EF216 /* ProcessRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessRunner.swift; sourceTree = "<group>"; };
@@ -963,6 +967,8 @@
 				883214A8122A5B84630E27F3 /* ReelMotionEditTests.swift */,
 				526F4216432906DE4F00584E /* ReelMotionGeometryTests.swift */,
 				63A20F964CE38E3D0B211D80 /* ReelMotionPlannerTests.swift */,
+				13E1CB5F9684ABF8A638701D /* ReelPanelsDataModelTests.swift */,
+				74A8A947FD72A21046E37954 /* ReelPanelsRenderTests.swift */,
 				650927EBEBA2BD089349A6AE /* ReelProposalTests.swift */,
 				41008028AD88FDF4444D506D /* ReelRemoteStateTests.swift */,
 				40A938842B95E890CC0281D1 /* ReelRendererTests.swift */,
@@ -1549,6 +1555,8 @@
 				D5DD29CF966F0AE8D9B52ACC /* ReelMotionEditTests.swift in Sources */,
 				CE951BBC7EEDEC14DA9DBE12 /* ReelMotionGeometryTests.swift in Sources */,
 				C0ACCDE773ACDDFF892FD9AF /* ReelMotionPlannerTests.swift in Sources */,
+				ACBD8462E628F04045F6AB56 /* ReelPanelsDataModelTests.swift in Sources */,
+				687B350B5B7AD6C1031CD0B8 /* ReelPanelsRenderTests.swift in Sources */,
 				2EA30C7656888D9498B11E02 /* ReelProposalTests.swift in Sources */,
 				8A5D31B79BD57C5E8BB6845F /* ReelRemoteStateTests.swift in Sources */,
 				9AA1BE8F5191A2308C941071 /* ReelRenderWorkerTests.swift in Sources */,
