@@ -108,6 +108,7 @@
 		3EAB359190AFEAE9E9AC4C02 /* SkyReplacement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E0BE15516725FAFEF16188D /* SkyReplacement.swift */; };
 		3F437BD6C250B4045AD8073E /* ReelTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8E31B3A6CF246A50408904B /* ReelTimelineTests.swift */; };
 		3F61FCC5962A450C64F153F5 /* HDRAlignmentSanityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D7FDF23FE9C36E5EC4B6515 /* HDRAlignmentSanityTests.swift */; };
+		41708C5B95635D02C78BCFD5 /* ReelUndoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F1987E2A76904677A75B8A5 /* ReelUndoTests.swift */; };
 		419A031E19016827B1708995 /* FieldNoteRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0CE5CC64D7F0C136AE4F9A /* FieldNoteRow.swift */; };
 		41CF600422745ECD811F472C /* ReelPreviewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B98781CC984CC24BFB845B28 /* ReelPreviewModel.swift */; };
 		4203E9C80E48FBD8782282C5 /* ReelRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5D07C406DDE7E0C61D9FCBE /* ReelRenderer.swift */; };
@@ -533,6 +534,7 @@
 		8A170910AAC2BAD6773C4FBB /* LocalImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalImageView.swift; sourceTree = "<group>"; };
 		8C306A8E7A0E0E6FE3F26EA3 /* DictationPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationPanelView.swift; sourceTree = "<group>"; };
 		8DA754FEF95ACBF4A0641788 /* ObjektfilmSettingsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObjektfilmSettingsTab.swift; sourceTree = "<group>"; };
+		8F1987E2A76904677A75B8A5 /* ReelUndoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelUndoTests.swift; sourceTree = "<group>"; };
 		8F2BAA518727FAFBB1066BC3 /* BaseFrameMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaseFrameMerge.swift; sourceTree = "<group>"; };
 		8F5619320F3617DDF430B6C8 /* ProcessCancellationBoxTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessCancellationBoxTests.swift; sourceTree = "<group>"; };
 		91A2592A33ACED0AD00B420E /* ReelEditorModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelEditorModel.swift; sourceTree = "<group>"; };
@@ -926,6 +928,7 @@
 				9F801464157328538D6ACCBB /* ReelSpecCodingTests.swift */,
 				619F544EAB6D20AB1A02E1CD /* ReelSyncMergerTests.swift */,
 				A8E31B3A6CF246A50408904B /* ReelTimelineTests.swift */,
+				8F1987E2A76904677A75B8A5 /* ReelUndoTests.swift */,
 				CD06F83CB1752838347B9F54 /* ReelUploadPlannerTests.swift */,
 				2A3FC2DB9406841FF32D7631 /* ReelWebVariantTests.swift */,
 				446A39077D50EA9167EF9C75 /* ResourceGovernorTests.swift */,
@@ -1494,6 +1497,7 @@
 				E0B428D6F7F34C4B25AE2CA5 /* ReelSpecCodingTests.swift in Sources */,
 				3D05C8D89538E5AAC7F88111 /* ReelSyncMergerTests.swift in Sources */,
 				3F437BD6C250B4045AD8073E /* ReelTimelineTests.swift in Sources */,
+				41708C5B95635D02C78BCFD5 /* ReelUndoTests.swift in Sources */,
 				49A35421E5489A3ECD3B767E /* ReelUploadPlannerTests.swift in Sources */,
 				0B982544AC07E2C9EB008100 /* ReelWebVariantTests.swift in Sources */,
 				4931BDF2F61C3440F62610D3 /* ResourceGovernorTests.swift in Sources */,

@@ -96,7 +96,15 @@ final class ReelEditorModel {
     /// Antal klipp med egen rörelse som den senaste ändringen klampade om (t.ex. vid formatbyte).
     /// UI:t kan visa "Egna rörelser har anpassats" när det är > 0.
     private(set) var adaptedCustomMotions = 0
-    var selectedAssetID: String?
+    /// Markerat klipp. Ett markerat klipp och en markerad övergång utesluter varandra.
+    var selectedAssetID: String? {
+        didSet { if selectedAssetID != nil { selectedTransitionAssetID = nil } }
+    }
+    /// Markerad övergång, angiven med det *inkommande* klippets asset-id (övergången ligger i
+    /// klippets `transitionIn`, så första klippet har ingen).
+    var selectedTransitionAssetID: String? {
+        didSet { if selectedTransitionAssetID != nil { selectedAssetID = nil } }
+    }
 
     static let specFileName = "reel.json"
     static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "tif", "tiff", "heic"]
@@ -105,8 +113,163 @@ final class ReelEditorModel {
 
     @ObservationIgnored private var analysisTask: Task<Void, Never>?
     @ObservationIgnored private var renderTask: Task<Void, Never>?
+    /// Fönstrets `UndoManager` (sätts av vyn). Modellen äger historiken; managern får ett anrop
+    /// per steg så att ⌘Z, ⇧⌘Z och menyn Redigera fungerar och visar stegets namn.
+    @ObservationIgnored weak var undoManager: UndoManager?
     /// Injicerbara för tester.
     @ObservationIgnored var now: @Sendable () -> Date = { Date() }
+
+    // MARK: Historik (ångra / gör om)
+
+    /// Ett steg i historiken: tillståndet som ska återställas, och namnet på ändringen (`op`).
+    /// Ångra-stacken håller tillståndet *före* ändringen, gör om-stacken tillståndet *efter*.
+    private struct HistoryEntry {
+        var spec: ReelSpec
+        var selection: ReelSelector.Selection?
+        var op: String
+    }
+
+    private var undoStack: [HistoryEntry] = []
+    private var redoStack: [HistoryEntry] = []
+    /// Högsta antal ångringssteg.
+    static let historyLimit = 100
+    @ObservationIgnored private var coalescing = false
+    @ObservationIgnored private var coalescedStepOpen = false
+
+    var canUndo: Bool { !undoStack.isEmpty }
+    var canRedo: Bool { !redoStack.isEmpty }
+    /// Namn på nästa ångringssteg ("Ändra ordning"), eller nil.
+    var undoActionName: String? { undoStack.last.map { Self.actionName(forOp: $0.op) } }
+    var redoActionName: String? { redoStack.last.map { Self.actionName(forOp: $0.op) } }
+
+    /// Svenskt namn på en ändring, härlett från `op` (samma värden som loggas i `provenance.edits`).
+    static func actionName(forOp op: String) -> String {
+        switch op {
+        case "reorder": return "Ändra ordning"
+        case "remove": return "Ta bort bild"
+        case "add": return "Lägg till bild"
+        case "replace": return "Byt bild"
+        case "duration": return "Ändra längd"
+        case "motion": return "Ändra rörelse"
+        case "transition": return "Ändra övergång"
+        case "tempo": return "Ändra tempo"
+        case "orderLock": return "Lås ordning"
+        case "pin": return "Lås bild"
+        case "exclude": return "Uteslut bild"
+        case "format": return "Byt format"
+        case "count": return "Ändra antal bilder"
+        case "suggestAgain": return "Föreslå igen"
+        case "startOver": return "Börja om helt"
+        case "pull": return "Hämta ändringar"
+        default: return "Ändra bildspelet"
+        }
+    }
+
+    /// Slår ihop alla ändringar mellan `beginCoalescing()` och `endCoalescing()` till ett enda
+    /// ångringssteg (och ett enda revisionssteg), t.ex. en dragning som uppdaterar specen löpande.
+    func beginCoalescing() {
+        coalescing = true
+        coalescedStepOpen = false
+    }
+
+    func endCoalescing() {
+        coalescing = false
+        coalescedStepOpen = false
+    }
+
+    /// Lägger nuvarande tillstånd på ångra-stacken inför en ändring. Returnerar false om ändringen
+    /// fortsätter ett sammanslaget steg som redan är öppet (inget nytt steg).
+    @discardableResult
+    private func recordStep(op: String) -> Bool {
+        guard let spec else { return false }
+        if coalescing {
+            if coalescedStepOpen { return false }
+            coalescedStepOpen = true
+        }
+        undoStack.append(.init(spec: spec, selection: selection, op: op))
+        if undoStack.count > Self.historyLimit { undoStack.removeFirst(undoStack.count - Self.historyLimit) }
+        redoStack.removeAll()
+        if let undoManager {
+            undoManager.levelsOfUndo = Self.historyLimit
+            undoManager.registerUndo(withTarget: self) { $0.undoFromManager() }
+            undoManager.setActionName(Self.actionName(forOp: op))
+        }
+        return true
+    }
+
+    private func clearHistory() {
+        undoStack.removeAll(); redoStack.removeAll()
+        coalescing = false; coalescedStepOpen = false
+        undoManager?.removeAllActions(withTarget: self)
+    }
+
+    /// Ångrar senaste steget. Går via `UndoManager` när den finns, så att dess stackar följer med.
+    func undo() {
+        if let undoManager, undoManager.canUndo { undoManager.undo() } else { performUndo() }
+    }
+
+    func redo() {
+        if let undoManager, undoManager.canRedo { undoManager.redo() } else { performRedo() }
+    }
+
+    /// Anropas av `UndoManager` under ångra: återställer och registrerar gör om-steget.
+    private func undoFromManager() {
+        guard let op = performUndo() else { return }
+        undoManager?.registerUndo(withTarget: self) { $0.redoFromManager() }
+        undoManager?.setActionName(Self.actionName(forOp: op))
+    }
+
+    private func redoFromManager() {
+        guard let op = performRedo() else { return }
+        undoManager?.registerUndo(withTarget: self) { $0.undoFromManager() }
+        undoManager?.setActionName(Self.actionName(forOp: op))
+    }
+
+    @discardableResult
+    private func performUndo() -> String? {
+        guard let entry = undoStack.popLast(), let current = spec else { return nil }
+        redoStack.append(.init(spec: current, selection: selection, op: entry.op))
+        restore(entry, replacing: current, op: "undo")
+        return entry.op
+    }
+
+    @discardableResult
+    private func performRedo() -> String? {
+        guard let entry = redoStack.popLast(), let current = spec else { return nil }
+        undoStack.append(.init(spec: current, selection: selection, op: entry.op))
+        restore(entry, replacing: current, op: "redo")
+        return entry.op
+    }
+
+    /// Återställer specen från ett historiksteg. Revisionen höjs till över både nuvarande och den
+    /// återställda: en äldre spec med lägre revision skulle annars se ut som "ingen ändring" (eller
+    /// som en äldre version) för synken mot mäklaren, som jämför revisionsnummer. Samma skäl gör
+    /// att status blir "draft" och en `edit` loggas, precis som för vilken annan ändring som helst.
+    private func restore(_ entry: HistoryEntry, replacing current: ReelSpec, op: String) {
+        coalescing = false; coalescedStepOpen = false
+        var restored = entry.spec
+        restored.revision = max(current.revision, restored.revision) + 1
+        let stamp = Date(timeIntervalSince1970: now().timeIntervalSince1970.rounded(.down))
+        restored.updatedAt = stamp
+        restored.status = "draft"
+        restored.provenance.edits = (restored.provenance.edits ?? []) + [.init(at: stamp, by: restored.updatedBy.role, op: op)]
+        spec = restored
+        selection = entry.selection
+        format = ReelFormat(rawValue: restored.outputs.first?.id ?? "") ?? format
+        count = min(max(restored.assets.count, Self.countRange.lowerBound), Self.countRange.upperBound)
+        adaptedCustomMotions = 0
+        dropStaleSelection()
+        revisionToken += 1
+        if case .rendered = phase { phase = .ready }
+        saveSpec()
+    }
+
+    /// Släpper markeringar som pekar på klipp som inte finns kvar.
+    private func dropStaleSelection() {
+        let ids = Set(order)
+        if let id = selectedAssetID, !ids.contains(id) { selectedAssetID = nil }
+        if let id = selectedTransitionAssetID, !ids.contains(id) || order.first == id { selectedTransitionAssetID = nil }
+    }
 
     // MARK: Härledda värden
 
@@ -239,6 +402,7 @@ final class ReelEditorModel {
             count = min(max(restored.assets.count, Self.countRange.lowerBound), Self.countRange.upperBound)
         }
         selectedAssetID = nil
+        clearHistory()
         revisionToken += 1
         phase = .ready
     }
@@ -272,6 +436,7 @@ final class ReelEditorModel {
     private func reset() {
         items = []; candidates = []; urls = [:]; selection = nil; spec = nil
         selectedAssetID = nil; saveError = nil
+        clearHistory()
         revisionToken += 1
     }
 
@@ -289,16 +454,23 @@ final class ReelEditorModel {
                        overrides: [String: ReelMotionPlanner.ClipOverride]? = nil,
                        editor: ((inout ReelSpec.EditorState) -> Void)? = nil, op: String) {
         guard var current = spec else { return }
+        let continuesStep = !recordStep(op: op)
         if let editor {
             var e = current.editor ?? .init()
             editor(&e)
             current.editor = e.normalized
         }
-        let rebuilt = ReelComposer.rebuild(current, order: order, newAssets: newAssets, format: format,
+        var rebuilt = ReelComposer.rebuild(current, order: order, newAssets: newAssets, format: format,
                                            overrides: overrides, op: op, now: now())
+        if continuesStep {
+            // Fortsättning på ett sammanslaget steg: samma revision och samma loggpost som första ändringen.
+            rebuilt.revision = current.revision
+            rebuilt.provenance.edits = current.provenance.edits
+        }
         adaptedCustomMotions = ReelComposer.adaptedCustomMotions(from: current, to: rebuilt)
         spec = rebuilt
         if let format { self.format = format }
+        dropStaleSelection()
         revisionToken += 1
         if case .rendered = phase { phase = .ready }
         saveSpec()
@@ -484,23 +656,24 @@ final class ReelEditorModel {
         let clamped = min(max(n, Self.countRange.lowerBound), Self.countRange.upperBound)
         guard clamped != count || spec == nil else { return }
         count = clamped
-        suggestAgain()
+        recompose(preserving: spec, op: "count")
     }
 
     /// Föreslår filmen på nytt (nuvarande antal och format) men behåller låsen: pinnade och
     /// uteslutna bilder, per-bild-lås (förval, längd, övergång, egen rörelse) för bilder som väljs
     /// igen, tempo och ordningslås (se `ReelComposer.compose(preserving:)`).
     func suggestAgain() {
-        recompose(preserving: spec)
+        recompose(preserving: spec, op: "suggestAgain")
     }
 
     /// Som `suggestAgain` men kastar alla lås, inklusive redigerarens val (`editor`).
     func startOver() {
-        recompose(preserving: nil)
+        recompose(preserving: nil, op: "startOver")
     }
 
-    private func recompose(preserving previous: ReelSpec?) {
+    private func recompose(preserving previous: ReelSpec?, op: String) {
         guard !items.isEmpty else { return }
+        recordStep(op: op)
         let specDir = reelDirectory ?? FileManager.default.temporaryDirectory
         let result = ReelComposer.compose(items: items, specDirectory: specDir, options: options(), preserving: previous)
         candidates = result.candidates
@@ -536,6 +709,7 @@ final class ReelEditorModel {
 
     /// Ersätter filmen med en spec från servern (redan översatt till lokala källor, se `ReelSyncMerger`).
     func adoptRemoteSpec(_ remote: ReelSpec) {
+        recordStep(op: "pull")
         spec = remote
         format = ReelFormat(rawValue: remote.outputs.first?.id ?? "") ?? format
         count = min(max(remote.assets.count, Self.countRange.lowerBound), Self.countRange.upperBound)
