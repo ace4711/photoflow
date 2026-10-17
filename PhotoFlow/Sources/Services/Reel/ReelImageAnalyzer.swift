@@ -109,6 +109,37 @@ nonisolated enum ReelImageAnalyzer {
         var hasData: Bool { room != nil || category != nil || qualityScore != nil }
     }
 
+    /// Estetikpoängen för en bild (`PhotoQualityService`-måttet) och om Vision tycker att den är en nyttobild.
+    nonisolated struct QualityMeasurement: Sendable, Equatable {
+        var score: Double
+        var isUtility: Bool
+    }
+
+    /// Räknar kvalitetspoängen för en bild. Injicerbar (tester, och bild utan Vision).
+    typealias QualityMeasurer = @Sendable (URL) async -> QualityMeasurement?
+
+    /// Längsta sidan på kopian som estetikpoängen räknas på. Pipelinen ger Vision hela previewn, men
+    /// Vision skalar ändå ner den; på Chronas väg 7 (21 färdiga bilder, 5315 px) gav 1280 px i snitt
+    /// 0,01 från fullstorleken (störst 0,02) på ~40 ms per bild.
+    static let qualityMaxPixels = 1280
+
+    /// Kvalitetspoängen för en färdig bild när pipelinens `photo_quality.json` saknas: samma mått som
+    /// pipelinen (`CalculateImageAestheticsScoresRequest`, normaliserad 0...1) på en nedskalad kopia.
+    /// Nil om bilden inte går att läsa eller Vision inte ger något svar.
+    @concurrent
+    static func measureQuality(url: URL) async -> QualityMeasurement? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: qualityMaxPixels,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, opts as CFDictionary),
+              let scores = try? await CalculateImageAestheticsScoresRequest().perform(on: image) else { return nil }
+        return QualityMeasurement(score: PhotoQualityService.normalizedQualityScore(overallScore: scores.overallScore),
+                                  isUtility: scores.isUtility)
+    }
+
     // MARK: - Cache
 
     static func loadCache(from directory: URL) -> [String: ReelImageAnalysis] {
@@ -142,12 +173,15 @@ nonisolated enum ReelImageAnalyzer {
     /// Foundation Models (t.ex. i tester). Respekterar Task-avbrytning: kastar
     /// `CancellationError`, men sparar först det som hunnit bli klart. `precomputed` ger värden ur
     /// pipelinens egna filer per bild (se `Precomputed`): då görs bara den lätta analysen.
+    /// Saknar en bild kvalitetspoäng (ingen pipelinedata, eller en äldre cachad analys utan den) räknas
+    /// den i efterhand med `qualityMeasurer` och cachas; övriga mätningar görs inte om.
     static func analyze(
         urls: [URL],
         cacheDirectory: URL?,
         aiTagsDirectory: URL? = nil,
         describe: Bool = true,
         precomputed: [URL: Precomputed] = [:],
+        qualityMeasurer: @escaping QualityMeasurer = { await measureQuality(url: $0) },
         maxConcurrent: Int = 4,
         progress: @Sendable @MainActor (Int, Int) -> Void = { _, _ in }
     ) async throws -> [Item] {
@@ -168,7 +202,7 @@ nonisolated enum ReelImageAnalyzer {
                     next += 1; inFlight += 1
                     group.addTask {
                         (idx, await analyzeOne(url: url, cache: cacheSnapshot, describe: describe, aiTags: aiTags,
-                                               precomputed: precomputed[url]))
+                                               precomputed: precomputed[url], qualityMeasurer: qualityMeasurer))
                     }
                 }
                 while inFlight < max(1, maxConcurrent) && next < urls.count {
@@ -203,7 +237,8 @@ nonisolated enum ReelImageAnalyzer {
         cache: [String: ReelImageAnalysis],
         describe: Bool,
         aiTags: [String: AITagsStore.Entry]?,
-        precomputed: Precomputed? = nil
+        precomputed: Precomputed? = nil,
+        qualityMeasurer: QualityMeasurer = { await measureQuality(url: $0) }
     ) async -> ReelImageAnalysis? {
         guard let sha = sha256Hex(of: url) else { return nil }
         if Task.isCancelled { return nil }
@@ -223,6 +258,13 @@ nonisolated enum ReelImageAnalyzer {
         }
         if Task.isCancelled { return nil }
         if let pipelineData { apply(pipelineData, to: &analysis) }
+
+        // Utan pipelinens poäng (färdiga bilder) bygger urvalet annars nästan bara på skärpa.
+        if analysis.qualityScore == nil, let m = await qualityMeasurer(url) {
+            analysis.qualityScore = m.score
+            if pipelineData == nil { analysis.isUtility = m.isUtility }
+        }
+        if Task.isCancelled { return nil }
 
         if wantsModel, analysis.describedBy != "foundationModels" {
             let tags = await PhotoDescriptionService.shared.describe(imageAt: url)

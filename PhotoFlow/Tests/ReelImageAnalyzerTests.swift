@@ -79,6 +79,71 @@ struct ReelImageAnalyzerTests {
         #expect(!FileManager.default.fileExists(atPath: cacheDir.appendingPathComponent("reel_analysis.json.tmp").path))
     }
 
+    /// Räknar hur många gånger kvalitetsmätaren anropas.
+    private final class CountingMeasurer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var calls = 0
+        var count: Int { lock.withLock { calls } }
+        func measure(_ url: URL) async -> ReelImageAnalyzer.QualityMeasurement? {
+            lock.withLock { calls += 1 }
+            return .init(score: 0.66, isUtility: false)
+        }
+    }
+
+    @Test("Kvalitetspoängen räknas när pipelinedata saknas, och cachas")
+    func qualityComputedWithoutPipelineData() async throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("motiv.jpg")
+        try writeTestImage(to: file)
+        let cacheDir = dir.appendingPathComponent("FILM")
+        // Pipelinen har rum men ingen kvalitet: lätt analys, kvaliteten räknas ändå.
+        var pre = ReelImageAnalyzer.Precomputed()
+        pre.room = "Kök"
+        let counter = CountingMeasurer()
+        let items = try await ReelImageAnalyzer.analyze(urls: [file], cacheDirectory: cacheDir, describe: false,
+                                                        precomputed: [file: pre], qualityMeasurer: counter.measure)
+        #expect(items.first?.analysis.qualityScore == 0.66 && items.first?.analysis.featurePrint == nil)
+        #expect(counter.count == 1)
+        // Cachad med kvalitet: ingen ny mätning.
+        _ = try await ReelImageAnalyzer.analyze(urls: [file], cacheDirectory: cacheDir, describe: false,
+                                                qualityMeasurer: counter.measure)
+        #expect(counter.count == 1)
+    }
+
+    @Test("Cachad analys utan kvalitet får den räknad i efterhand, utan att övriga mätningar görs om")
+    func qualityBackfilledInCache() async throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("motiv.jpg")
+        try writeTestImage(to: file)
+        let cacheDir = dir.appendingPathComponent("FILM")
+        let first = try await ReelImageAnalyzer.analyze(urls: [file], cacheDirectory: cacheDir, describe: false)
+        let sha = first[0].analysis.sha256
+        var cache = ReelImageAnalyzer.loadCache(from: cacheDir)
+        cache[sha]?.qualityScore = nil
+        cache[sha]?.sharpness = 12345      // markör: en ommätning skulle skriva över den
+        ReelImageAnalyzer.saveCache(cache, to: cacheDir)
+
+        let counter = CountingMeasurer()
+        let second = try await ReelImageAnalyzer.analyze(urls: [file], cacheDirectory: cacheDir, describe: false,
+                                                         qualityMeasurer: counter.measure)
+        #expect(counter.count == 1)
+        #expect(second[0].analysis.qualityScore == 0.66 && second[0].analysis.sharpness == 12345)
+        #expect(ReelImageAnalyzer.loadCache(from: cacheDir)[sha]?.qualityScore == 0.66)
+    }
+
+    @Test("measureQuality ger en poäng i 0...1 för en nedskalad bild")
+    func measureQualityScore() async throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("motiv.jpg")
+        try writeTestImage(to: file)
+        let m = try #require(await ReelImageAnalyzer.measureQuality(url: file))
+        #expect((0...1).contains(m.score))
+        #expect(await ReelImageAnalyzer.measureQuality(url: dir.appendingPathComponent("saknas.jpg")) == nil)
+    }
+
     @Test("Filer som inte är bilder utelämnas")
     func nonImagesSkipped() async throws {
         let dir = try tempDir()
