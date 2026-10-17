@@ -13,7 +13,9 @@ struct ReelEditorView: View {
     @State private var didStart = false
     @State private var showShareSheet = false
     @State private var shareLoadedFor: URL?
+    @State private var confirmStartOver = false
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.undoManager) private var undoManager
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,6 +26,13 @@ struct ReelEditorView: View {
         .frame(minWidth: 1000, minHeight: 720)
         .navigationTitle(model.address.isEmpty ? "Bildspel" : "Bildspel — \(model.address)")
         .task { startIfNeeded() }
+        .onAppear { model.undoManager = undoManager }
+        .confirmationDialog("Börja om helt?", isPresented: $confirmStartOver, titleVisibility: .visible) {
+            Button("Börja om helt", role: .destructive) { model.startOver() }
+            Button("Avbryt", role: .cancel) {}
+        } message: {
+            Text("Alla lås kastas: bilder du låst eller uteslutit, ordning, längder, rörelser och övergångar du ändrat. Du kan ångra med ⌘Z.")
+        }
         .onChange(of: model.revisionToken) { _, _ in
             preview.setSpec(model.spec, specDirectory: model.reelDirectory)
         }
@@ -113,8 +122,22 @@ struct ReelEditorView: View {
                         in: ReelEditorModel.countRange) {
                     Text("Bilder: \(model.count)")
                 }
-                .help("Antal bilder. Byter ut förslaget (manuella ändringar nollställs).")
+                .help("Antal bilder. Ger ett nytt förslag som behåller dina lås (låsta bilder, längder, rörelser och övergångar).")
                 .disabled(model.isBusy)
+
+                Menu {
+                    Button("Föreslå igen") { model.suggestAgain() }
+                    Button("Börja om helt…") { confirmStartOver = true }
+                } label: {
+                    Label("Föreslå igen", systemImage: "wand.and.stars")
+                } primaryAction: {
+                    model.suggestAgain()
+                }
+                .fixedSize()
+                .disabled(model.isBusy)
+                .help("Föreslå igen behåller allt du låst. Börja om helt kastar alla lås.")
+
+                undoControls
 
                 renderControls
                 shareControls
@@ -123,6 +146,19 @@ struct ReelEditorView: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.regularMaterial)
+    }
+
+    /// Ångra och gör om; ⌘Z och ⇧⌘Z kommer via Redigera-menyn (fönstrets `UndoManager`).
+    private var undoControls: some View {
+        ControlGroup {
+            Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward") }
+                .disabled(!model.canUndo || model.isBusy)
+                .help(model.undoActionName.map { "Ångra \($0.lowercased())" } ?? "Ångra")
+            Button { model.redo() } label: { Image(systemName: "arrow.uturn.forward") }
+                .disabled(!model.canRedo || model.isBusy)
+                .help(model.redoActionName.map { "Gör om \($0.lowercased())" } ?? "Gör om")
+        }
+        .fixedSize()
     }
 
     /// Statusmärke, "Hämta ändringar" och "Skicka till mäklare…".
@@ -261,7 +297,7 @@ struct ReelEditorView: View {
             .frame(height: 500)
 
             Divider()
-            filmstrip
+            ReelTimelineView(model: model, preview: preview)
             Divider()
             candidateGrid
         }
@@ -319,8 +355,13 @@ struct ReelEditorView: View {
                     onAutoDuration: { model.clearDuration(id) })
                     .padding(12)
                     .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+            } else if let id = model.selectedTransitionAssetID, let spec = model.spec,
+                      let index = spec.timeline.firstIndex(where: { $0.asset == id }), index > 0 {
+                TransitionSummary(model: model, spec: spec, index: index)
+                    .padding(12)
+                    .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
             } else {
-                Text("Markera ett klipp i filmremsan för att ändra rörelse och längd. Klicka på en bild i rutnätet nedan för att byta den markerade bilden, eller lägga till en ny sist.")
+                Text("Markera ett klipp i tidslinjen för att ändra rörelse och längd, eller en övergång (chipet mellan klippen) för att byta typ. Dra ett klipps högerkant för att ändra längden. Klicka på en bild i rutnätet nedan för att byta den markerade bilden, eller lägga till en ny sist.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -330,30 +371,6 @@ struct ReelEditorView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
-    }
-
-    // MARK: Filmremsa
-
-    private var filmstrip: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 10) {
-                ForEach(model.clipRows) { row in
-                    ClipCard(row: row, isSelected: model.selectedAssetID == row.id,
-                             canRemove: model.clipRows.count > 1,
-                             onSelect: { model.selectedAssetID = row.id },
-                             onRemove: { model.removeClip(row.id) },
-                             onDuration: { model.setDuration(row.id, seconds: $0) })
-                        .draggable(row.id)
-                        .dropDestination(for: String.self) { dropped, _ in
-                            guard let dragged = dropped.first else { return false }
-                            model.moveClip(dragged, before: row.id)
-                            return true
-                        }
-                }
-            }
-            .padding(10)
-        }
-        .frame(height: 190)
     }
 
     // MARK: Kandidatrutnät
@@ -373,57 +390,86 @@ struct ReelEditorView: View {
 
 // MARK: - Delvyer
 
-private struct ClipCard: View {
-    let row: ReelEditorModel.ClipRow
-    let isSelected: Bool
-    let canRemove: Bool
-    let onSelect: () -> Void
-    let onRemove: () -> Void
-    let onDuration: (Double) -> Void
+/// Sammanfattning av en markerad övergång (R1): typ, riktning, längd och om den är låst, med en
+/// meny för typ och "Automatisk". Den fulla övergångsinspektören (längd m.m.) kommer i R2.
+private struct TransitionSummary: View {
+    let model: ReelEditorModel
+    let spec: ReelSpec
+    /// Det inkommande klippets plats (> 0).
+    let index: Int
+
+    private enum Choice: Hashable {
+        case auto, crossfade, cut, fadeThroughBlack, push(ReelSpec.Direction)
+    }
+
+    private var clip: ReelSpec.Clip { spec.timeline[index] }
+    private var locked: Bool { clip.transitionLocked == true }
+    /// Det som gäller för klippet (egen övergång, annars filmens standard), före klampning.
+    private var configured: ReelSpec.Transition { clip.transitionIn ?? spec.style.defaultTransition }
+    private var effective: ReelSpec.Transition? { ReelTimeline.transition(spec, at: index) }
+
+    private var choice: Choice {
+        guard locked else { return .auto }
+        switch configured.type {
+        case .crossfade: return .crossfade
+        case .cut: return .cut
+        case .fadeThroughBlack: return .fadeThroughBlack
+        case .push: return .push(configured.direction ?? .left)
+        }
+    }
 
     var body: some View {
-        VStack(spacing: 4) {
-            ZStack(alignment: .topLeading) {
-                LocalThumbnailView(url: row.url)
-                    .frame(width: 130, height: 88)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                Text("\(row.index + 1)")
-                    .font(.caption.bold())
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(.black.opacity(0.6), in: Capsule())
-                    .foregroundStyle(.white)
-                    .padding(4)
-            }
-            .overlay(alignment: .topTrailing) {
-                if canRemove {
-                    Button(action: onRemove) {
-                        Image(systemName: "xmark.circle.fill")
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(.white, .black.opacity(0.6))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(4)
-                    .help("Ta bort ur filmen")
+        let type = effective == nil ? ReelSpec.TransitionType.cut : configured.type
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: ReelTimelineView.symbol(type, effective == nil ? nil : configured.direction))
+                    .frame(width: 24, height: 24)
+                    .background(.quaternary, in: Circle())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Övergång \(index) → \(index + 1)").font(.headline)
+                    Text(locked ? "Låst av dig" : "Automatisk")
+                        .font(.caption).foregroundStyle(locked ? .orange : .secondary)
                 }
             }
-            Text(row.room ?? row.filename)
-                .font(.caption)
-                .lineLimit(1)
-                .frame(width: 130)
-            Stepper(value: Binding(get: { row.duration }, set: { onDuration($0) }),
-                    in: ReelEditorModel.durationRange, step: 0.1) {
-                Text(ReelMotionEditor.seconds(row.duration))
-                    .font(.caption).monospacedDigit()
+
+            Picker("Typ", selection: Binding(get: { choice }, set: { apply($0) })) {
+                Text("Automatisk").tag(Choice.auto)
+                Divider()
+                Text("Mjuk tona").tag(Choice.crossfade)
+                Text("Hårt klipp").tag(Choice.cut)
+                Text("Via svart").tag(Choice.fadeThroughBlack)
+                ForEach([ReelSpec.Direction.left, .right, .up, .down], id: \.self) { d in
+                    Text("Skjut \(ReelTimelineView.directionLabel(d))").tag(Choice.push(d))
+                }
             }
-            .controlSize(.small)
-            .frame(width: 130)
+            .pickerStyle(.menu)
+
+            Text(summary(type))
+                .font(.caption).foregroundStyle(.secondary)
+            if locked {
+                Button("Tillbaka till automatisk") { model.clearTransition(clip.asset) }
+                    .buttonStyle(.link)
+            }
         }
-        .padding(6)
-        .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(isSelected ? Color.accentColor : .clear, lineWidth: 2))
-        .contentShape(RoundedRectangle(cornerRadius: 8))
-        .onTapGesture(perform: onSelect)
-        .help(row.reason)
+    }
+
+    private func summary(_ type: ReelSpec.TransitionType) -> String {
+        var text = ReelTimelineView.typeLabel(type)
+        if type == .push, let d = configured.direction { text += " \(ReelTimelineView.directionLabel(d))" }
+        if let effective { text += ", \(ReelMotionEditor.seconds(effective.duration))" }
+        return text
+    }
+
+    private func apply(_ choice: Choice) {
+        // Längden följer nuvarande övergång (eller filmens standard om den är ett hårt klipp).
+        let duration = configured.type == .cut ? max(spec.style.defaultTransition.duration, 0.5) : configured.duration
+        switch choice {
+        case .auto: model.clearTransition(clip.asset)
+        case .crossfade: model.setTransition(clip.asset, .init(type: .crossfade, direction: nil, duration: duration))
+        case .cut: model.setTransition(clip.asset, .init(type: .cut, direction: nil, duration: 0))
+        case .fadeThroughBlack: model.setTransition(clip.asset, .init(type: .fadeThroughBlack, direction: nil, duration: duration))
+        case .push(let d): model.setTransition(clip.asset, .init(type: .push, direction: d, duration: duration))
+        }
     }
 }
 
