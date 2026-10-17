@@ -20,6 +20,8 @@ final class ReelPreviewModel {
     @ObservationIgnored private var pendingTime: Double?
     @ObservationIgnored private var worker: Task<Void, Never>?
     @ObservationIgnored private var playTask: Task<Void, Never>?
+    /// Där pågående uppspelning stannar (filmens slut om hela filmen spelas).
+    @ObservationIgnored private var stopTime: Double?
 
     /// Längsta sidan i förhandsvisningen (pixlar).
     static let longEdge: CGFloat = 640
@@ -56,9 +58,31 @@ final class ReelPreviewModel {
 
     func togglePlay() { isPlaying ? pause() : play() }
 
+    /// Fönstret som "Förhandsvisa" spelar för en övergång: från `margin` före övergångens start till
+    /// `margin` efter dess slut, klampat till filmen.
+    static func transitionWindow(start: Double, duration: Double, total: Double, margin: Double = 1) -> (from: Double, to: Double) {
+        (max(start - margin, 0), min(start + duration + margin, total))
+    }
+
+    /// Spelar från `from` till `to` (sekunder) och stannar där.
+    func play(from: Double, to: Double) {
+        guard renderer != nil, duration > 0 else { return }
+        let end = min(max(to, 0), duration)
+        let begin = min(max(from, 0), end)
+        pause()
+        time = begin
+        request(begin)
+        startPlaying(stopAt: end)
+    }
+
     func play() {
         guard renderer != nil, duration > 0 else { return }
         if time >= duration - 0.01 { time = 0 }
+        startPlaying(stopAt: nil)
+    }
+
+    private func startPlaying(stopAt: Double?) {
+        stopTime = stopAt
         isPlaying = true
         let startTime = time
         let started = Date()
@@ -67,9 +91,10 @@ final class ReelPreviewModel {
             while !Task.isCancelled {
                 guard let self else { return }
                 let t = startTime + Date().timeIntervalSince(started)
-                if t >= self.duration {
-                    self.time = self.duration
-                    self.request(self.duration)
+                let end = min(self.stopTime ?? self.duration, self.duration)
+                if t >= end {
+                    self.time = end
+                    self.request(end)
                     self.isPlaying = false
                     return
                 }

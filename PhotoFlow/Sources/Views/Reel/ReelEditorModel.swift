@@ -153,6 +153,10 @@ final class ReelEditorModel {
         case "motion": return "Ändra rörelse"
         case "transition": return "Ändra övergång"
         case "tempo": return "Ändra tempo"
+        case "defaultTransition": return "Ändra standardövergång"
+        case "applyTransitionToAll": return "Använd övergång på alla"
+        case "easing": return "Ändra rörelsekurva"
+        case "background": return "Ändra bakgrund"
         case "orderLock": return "Lås ordning"
         case "pin": return "Lås bild"
         case "exclude": return "Uteslut bild"
@@ -452,9 +456,11 @@ final class ReelEditorModel {
     /// `editor` ändrar redigerarens val (`spec.editor`) i samma steg; tomma val tas bort.
     private func apply(order: [String], newAssets: [ReelSpec.Asset] = [], format: ReelFormat? = nil,
                        overrides: [String: ReelMotionPlanner.ClipOverride]? = nil,
-                       editor: ((inout ReelSpec.EditorState) -> Void)? = nil, op: String) {
+                       editor: ((inout ReelSpec.EditorState) -> Void)? = nil,
+                       style: ((inout ReelSpec.Style) -> Void)? = nil, op: String) {
         guard var current = spec else { return }
         let continuesStep = !recordStep(op: op)
+        if let style { style(&current.style) }
         if let editor {
             var e = current.editor ?? .init()
             editor(&e)
@@ -604,6 +610,32 @@ final class ReelEditorModel {
         entry.transition = nil
         o[assetID] = entry.isDefault ? nil : entry
         apply(order: order, overrides: o, op: "transition")
+    }
+
+    /// Ändrar filmens stil (standardövergång, rörelsekurva, bakgrund). Går via `apply`: ett
+    /// ångringssteg, ny revision, sparas, och automatiska övergångar planeras om efter den nya
+    /// standardövergången. Låsta övergångar påverkas inte. Ingen ändring = inget steg.
+    func setStyle(_ change: @escaping (inout ReelSpec.Style) -> Void, op: String) {
+        guard let current = spec else { return }
+        var changed = current.style
+        change(&changed)
+        guard changed != current.style else { return }
+        apply(order: order, style: change, op: op)
+    }
+
+    /// "Använd på alla": gör övergången in till klippet `assetID` till filmens standardövergång och
+    /// släpper låsen på alla övergångar, så att alla följer stilen. Ett ångringssteg.
+    func applyTransitionToAll(from assetID: String) {
+        guard let spec, let i = spec.timeline.firstIndex(where: { $0.asset == assetID }), i > 0 else { return }
+        var transition = spec.timeline[i].transitionIn ?? spec.style.defaultTransition
+        if transition.type != .push { transition.direction = nil }
+        var o = currentOverrides()
+        for (id, var entry) in o {
+            entry.transitionLocked = false
+            entry.transition = nil
+            o[id] = entry.isDefault ? nil : entry
+        }
+        apply(order: order, overrides: o, style: { $0.defaultTransition = transition }, op: "applyTransitionToAll")
     }
 
     func setTempo(_ tempo: ReelMotionPlanner.Tempo) {

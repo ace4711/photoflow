@@ -16,6 +16,10 @@ nonisolated enum ReelMotionPlanner {
     static let containDuration = 2.6
     static let transitionDuration = 0.5
     static let lastTransitionDuration = 0.6
+    /// Filmens standardövergång när ingen annan är vald (`ReelComposer.defaultStyle`).
+    static let standardTransition = ReelSpec.Transition(type: .crossfade, direction: nil, duration: transitionDuration)
+    /// Övergångens längd är alltid inom detta intervall i redigeraren (och för sista klippets förlängning).
+    static let transitionRange = 0.2...1.5
 
     /// Zoom in/ut för vanliga klipp och för contain-blur.
     static let zoomAmount = 1.12
@@ -186,9 +190,10 @@ nonisolated enum ReelMotionPlanner {
     /// rörelse räknas som det den faktiskt är i alterneringen (nästa automatiska zoom går åt andra
     /// hållet, nästa automatiska panorering åt andra hållet, och en push efter det följer dess
     /// sidledsriktning). De uttryckliga förvalen (zoomIn m.fl.) alternerar som förut inte.
-    /// `tempo` skalar bara automatiska längder.
+    /// `tempo` skalar bara automatiska längder. Automatiska övergångar utgår från filmens
+    /// standardövergång `defaultTransition` (se `automaticTransition`).
     static func plan(_ images: [Image], frameAspect: Double, overrides: [String: ClipOverride] = [:],
-                     tempo: Tempo = .normal) -> [ReelSpec.Clip] {
+                     tempo: Tempo = .normal, defaultTransition: ReelSpec.Transition = standardTransition) -> [ReelSpec.Clip] {
         var clips: [ReelSpec.Clip] = []
         var zoomIn = true            // alterneras mellan zoom-/contain-klipp
         var panRight = true          // alterneras mellan panoreringar
@@ -260,15 +265,8 @@ nonisolated enum ReelMotionPlanner {
                 // den följer med om klippet flyttas.
                 transition = override.transition
             } else if i > 0 {
-                if isLast {
-                    transition = .init(type: .crossfade, direction: nil, duration: lastTransitionDuration)
-                } else if previousPanSign != 0 {
-                    // Föregående klipp panorerade åt höger → innehållet rör sig åt vänster → push åt vänster.
-                    transition = .init(type: .push, direction: previousPanSign > 0 ? .left : .right,
-                                       duration: transitionDuration)
-                } else {
-                    transition = .init(type: .crossfade, direction: nil, duration: transitionDuration)
-                }
+                transition = automaticTransition(previousPanSign: previousPanSign, isLast: isLast,
+                                                 defaultTransition: defaultTransition).transition
             }
             previousPanSign = panSign
             clips.append(.init(asset: image.assetID, duration: duration, fit: fit, motion: motion, transitionIn: transition,
@@ -277,6 +275,86 @@ nonisolated enum ReelMotionPlanner {
                                transitionLocked: override.transitionLocked ? true : nil))
         }
         return clips
+    }
+
+    // MARK: - Automatiska övergångar
+
+    /// Varför en automatisk övergång blev som den blev (styr texten i inspektören).
+    nonisolated enum TransitionReason: Equatable, Sendable {
+        /// Standardövergången är något annat än mjuk tona: alla automatiska övergångar följer den.
+        case styleDefault
+        /// Längre tona in i sista klippet.
+        case closing
+        /// Skjut åt `direction` eftersom föregående klipp panorerade åt motsatt håll.
+        case followsPan(ReelSpec.Direction)
+        /// Mjuk tona (standard).
+        case standard
+    }
+
+    /// Regeln för en automatisk övergång in till ett klipp (inte det första):
+    /// - Är standardövergången något annat än `crossfade` (cut, via svart, skjut) används den som
+    ///   den är för alla automatiska övergångar. Då gäller varken push efter panorering eller
+    ///   längre tona in, eftersom de är varianter av just mjuk tona.
+    /// - Annars (crossfade): sista klippet får en längre tona in (standardlängden × 1,2, högst
+    ///   1,5 s; 0,5 s ger de gamla 0,6 s), efter ett klipp som panorerade åt höger/vänster blir det
+    ///   en push åt motsatt håll med standardlängden, och annars mjuk tona med standardlängden.
+    /// Med `standardTransition` (crossfade 0,5 s) ger detta exakt det planeraren alltid gjort.
+    static func automaticTransition(previousPanSign: Double, isLast: Bool, defaultTransition d: ReelSpec.Transition)
+        -> (transition: ReelSpec.Transition, reason: TransitionReason) {
+        guard d.type == .crossfade else { return (d, .styleDefault) }
+        if isLast {
+            let longer = min(d.duration * (lastTransitionDuration / transitionDuration), transitionRange.upperBound)
+            return (.init(type: .crossfade, direction: nil, duration: max(longer, d.duration)), .closing)
+        }
+        if previousPanSign != 0 {
+            // Föregående klipp panorerade åt höger → innehållet rör sig åt vänster → push åt vänster.
+            let direction: ReelSpec.Direction = previousPanSign > 0 ? .left : .right
+            return (.init(type: .push, direction: direction, duration: d.duration), .followsPan(direction))
+        }
+        return (.init(type: .crossfade, direction: nil, duration: d.duration), .standard)
+    }
+
+    /// Åt vilket håll ett färdigplanerat klipp panorerar (+1 höger, −1 vänster, 0 inget): samma
+    /// mått som `plan` använder för nästa övergång. Egen rörelse räknas som panorering vid mer
+    /// än 0,02 i sidled; annars bara rörelse utan zoom.
+    static func panSign(of clip: ReelSpec.Clip) -> Double {
+        let dx = clip.motion.to.cx - clip.motion.from.cx
+        if clip.motionPreset == Preset.custom.rawValue { return abs(dx) > 0.02 ? (dx > 0 ? 1 : -1) : 0 }
+        guard abs(clip.motion.to.zoom - clip.motion.from.zoom) < 1e-9, clip.fit == .cover, dx != 0 else { return 0 }
+        return dx > 0 ? 1 : -1
+    }
+
+    /// Kort förklaring på svenska av varför den automatiska övergången in till `clip` (som kommer
+    /// efter `previous`) blev som den blev, beräknad med samma regel som planeraren
+    /// (`automaticTransition`). Gäller bara automatiska övergångar; för låsta finns inget skäl.
+    static func transitionReason(previous: ReelSpec.Clip, isLast: Bool, defaultTransition d: ReelSpec.Transition) -> String {
+        let result = automaticTransition(previousPanSign: panSign(of: previous), isLast: isLast, defaultTransition: d)
+        switch result.reason {
+        case .styleDefault: return "\(label(d)) (filmens standardövergång)"
+        case .closing: return "Längre tona in i sista bilden"
+        case .followsPan(let direction):
+            let moved = previous.motion.to.cx > previous.motion.from.cx ? "åt höger" : "åt vänster"
+            return "Skjut \(directionLabel(direction)) eftersom förra klippet panorerade \(moved)"
+        case .standard: return "Mjuk tona (standard)"
+        }
+    }
+
+    private static func directionLabel(_ d: ReelSpec.Direction) -> String {
+        switch d {
+        case .left: return "åt vänster"
+        case .right: return "åt höger"
+        case .up: return "uppåt"
+        case .down: return "nedåt"
+        }
+    }
+
+    private static func label(_ t: ReelSpec.Transition) -> String {
+        switch t.type {
+        case .crossfade: return "Mjuk tona"
+        case .cut: return "Hårt klipp"
+        case .fadeThroughBlack: return "Via svart"
+        case .push: return "Skjut \(directionLabel(t.direction ?? .left))"
+        }
     }
 
     // MARK: - Hjälpfunktioner

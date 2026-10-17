@@ -128,4 +128,45 @@ struct ReelTimelineLayoutTests {
         #expect(ReelTimelineLayout.dropIndex(l, dragging: 0, dx: step + 1) == 1)
         #expect(ReelTimelineLayout.dropIndex(l, dragging: 0, dx: step - 1) == 0)
     }
+
+    @Test("Övergångens längd och tak ligger i layouten")
+    func joinLimits() {
+        let l = ReelTimelineLayout.layout(spec(durations: [3, 0.6, 4]), pixelsPerSecond: 50)
+        #expect(l.joins[0].configuredDuration == 1.0 && l.joins[0].limit == 0.6)
+        #expect(l.joins[1].configuredDuration == 0.5 && l.joins[1].limit == 0.6)
+    }
+
+    @Test("Chipdragning: åt vänster längre (chipet följer pekaren), snäpp 0,05 s")
+    func draggedTransition() {
+        // 50 px/s: chipet rör sig halva längdändringen, så −10 px ger +0,4 s.
+        #expect(abs(ReelTimelineLayout.draggedTransition(from: 0.5, dx: -10, pixelsPerSecond: 50, limit: 3) - 0.9) < 1e-9)
+        #expect(abs(ReelTimelineLayout.draggedTransition(from: 0.5, dx: 10, pixelsPerSecond: 50, limit: 3) - 0.2) < 1e-9)
+        // 0,5 − 2·(−1)/50 = 0,54 → snäpper till 0,55.
+        #expect(abs(ReelTimelineLayout.draggedTransition(from: 0.5, dx: -1, pixelsPerSecond: 50, limit: 3) - 0.55) < 1e-9)
+        #expect(abs(ReelTimelineLayout.draggedTransition(from: 0.5, dx: 0, pixelsPerSecond: 50, limit: 3) - 0.5) < 1e-9)
+    }
+
+    @Test("Chipdragning klampas till 0,2–1,5 s och till klippens längd")
+    func draggedTransitionClamps() {
+        #expect(ReelTimelineLayout.draggedTransition(from: 0.5, dx: 10_000, pixelsPerSecond: 50, limit: 3) == 0.2)
+        #expect(ReelTimelineLayout.draggedTransition(from: 0.5, dx: -10_000, pixelsPerSecond: 50, limit: 3) == 1.5)
+        // Taket från kort klipp (0,8 s) hindrar längre än så.
+        #expect(ReelTimelineLayout.draggedTransition(from: 0.5, dx: -10_000, pixelsPerSecond: 50, limit: 0.8) == 0.8)
+        // Taket under 0,2 s ger 0,2 s (specen kortar den sedan).
+        #expect(ReelTimelineLayout.draggedTransition(from: 0.5, dx: -10_000, pixelsPerSecond: 50, limit: 0.1) == 0.2)
+    }
+
+    @Test("Chipets träffzon är kvar på den nya dragytan, och efter dragning flyttas skarven")
+    func chipZoneFollowsDraggedLength() {
+        var s = spec()
+        let before = ReelTimelineLayout.layout(s, pixelsPerSecond: 50)
+        #expect(ReelTimelineLayout.hit(before, x: before.joins[0].centerX + 3, overChip: true) == .transition(1))
+        s.timeline[1].transitionIn?.duration = ReelTimelineLayout.draggedTransition(from: 1.0, dx: -10, pixelsPerSecond: 50, limit: 2)
+        let after = ReelTimelineLayout.layout(s, pixelsPerSecond: 50)
+        #expect(abs(after.joins[0].duration - 1.4) < 1e-9)
+        // Högerkanten av överlappet ligger kvar (föregående klipps slut); mitten har flyttats halva ändringen åt vänster.
+        #expect(abs(after.joins[0].x + after.joins[0].width - before.blocks[0].end) < 1e-9)
+        #expect(abs(after.joins[0].centerX - (before.joins[0].centerX - 10)) < 1e-9)
+        #expect(ReelTimelineLayout.hit(after, x: after.joins[0].centerX, overChip: true) == .transition(1))
+    }
 }

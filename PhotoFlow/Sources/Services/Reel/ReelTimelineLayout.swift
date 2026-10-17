@@ -32,6 +32,10 @@ nonisolated enum ReelTimelineLayout {
         var direction: ReelSpec.Direction?
         /// Övergången är satt för hand (`transitionLocked`).
         var locked: Bool
+        /// Den inställda längden före klampning (0 om den saknas), och taket specen klampar den mot:
+        /// `min(D[i−1], D[i])` (spec avsnitt 3). Dragningen i `draggedTransition` använder dem.
+        var configuredDuration: Double
+        var limit: Double
         /// Chipets mittpunkt: mitt i överlappet (vid ett hårt klipp i skarven).
         var centerX: Double { x + width / 2 }
     }
@@ -94,7 +98,9 @@ nonisolated enum ReelTimelineLayout {
                                x: starts[i] * pps, width: (effective?.duration ?? 0) * pps,
                                type: effective == nil ? .cut : configured.type,
                                direction: effective == nil ? nil : configured.direction,
-                               locked: clip.transitionLocked == true))
+                               locked: clip.transitionLocked == true,
+                               configuredDuration: configured.duration,
+                               limit: min(spec.timeline[i - 1].duration, clip.duration)))
         }
         return .init(blocks: blocks, joins: joins, pixelsPerSecond: pps,
                      totalDuration: ReelTimeline.totalDuration(spec))
@@ -130,6 +136,23 @@ nonisolated enum ReelTimelineLayout {
         let raw = original + dx / max(pixelsPerSecond, 0.0001)
         let snapped = (raw / durationStep).rounded() * durationStep
         return min(max(snapped, range.lowerBound), range.upperBound)
+    }
+
+    /// Längsta/kortaste övergång i redigeraren, och steget vid dragning (sekunder).
+    static let transitionStep = 0.05
+
+    /// Övergångens längd när chipet dragits `dx` pixlar i sidled. Chipet sitter mitt i överlappet
+    /// vars högerkant (föregående klipps slut) ligger still medan vänsterkanten följer längden, så
+    /// att chipet ska följa pekaren 1:1 betyder dragning åt vänster längre övergång och
+    /// `Δlängd = −2·dx / skala`. Snäpper till 0,05 s, håller sig inom 0,2–1,5 s och klampas mot
+    /// `limit` (de två klippens kortaste längd) så att man inte kan dra in i det som specen ändå
+    /// kortar bort; är taket under 0,2 s blir det 0,2 s (inspektören visar då att den kortas).
+    static func draggedTransition(from original: Double, dx: Double, pixelsPerSecond: Double, limit: Double) -> Double {
+        let range = ReelMotionPlanner.transitionRange
+        let raw = original - 2 * dx / max(pixelsPerSecond, 0.0001)
+        let snapped = (raw / transitionStep).rounded() * transitionStep
+        let ceiling = max(range.lowerBound, min(range.upperBound, limit))
+        return min(max(snapped, range.lowerBound), ceiling)
     }
 
     /// Platsen (som `ReelEditorModel.moveClip(_:to:)` förstår den, alltså i listan efter att

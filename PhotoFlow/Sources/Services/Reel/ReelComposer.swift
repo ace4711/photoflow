@@ -156,16 +156,18 @@ nonisolated enum ReelComposer {
         }
 
         let output = options.format.output
+        let style = previous?.style ?? defaultStyle
         let clips = ReelMotionPlanner.plan(plannerImages(assets), frameAspect: ReelMotionPlanner.frameAspect(output),
                                            overrides: overridesByAsset,
-                                           tempo: .init(editorValue: editor?.tempo))
+                                           tempo: .init(editorValue: editor?.tempo),
+                                           defaultTransition: style.defaultTransition)
         var spec = ReelSpec(
             schema: ReelSpec.schemaName, version: ReelSpec.currentVersion, minReaderVersion: 1,
             id: options.specID, revision: 1, status: "draft",
             createdAt: wholeSeconds(options.now), updatedAt: wholeSeconds(options.now), updatedBy: options.updatedBy,
             property: .init(address: options.address, sessionID: options.sessionID,
                             kind: selection.template == .house ? "house" : "apartment"),
-            assets: assets, style: previous?.style ?? defaultStyle, timeline: clips, audio: nil, overlays: [], brand: nil,
+            assets: assets, style: style, timeline: clips, audio: nil, overlays: [], brand: nil,
             outputs: [output],
             provenance: .init(generator: generator, autoSelection: auto, edits: nil))
         spec.editor = editor
@@ -174,7 +176,7 @@ nonisolated enum ReelComposer {
     }
 
     static let defaultStyle = ReelSpec.Style(
-        defaultTransition: .init(type: .crossfade, direction: nil, duration: ReelMotionPlanner.transitionDuration),
+        defaultTransition: ReelMotionPlanner.standardTransition,
         easing: .easeInOut,
         background: .init(type: "blur", amount: 0.6))
 
@@ -208,7 +210,8 @@ nonisolated enum ReelComposer {
         // Fotografens val (rörelse, längd) följer med bilden; utan `overrides` läses de ur nuvarande klipp.
         let kept = overrides ?? Self.overrides(in: spec)
         out.timeline = ReelMotionPlanner.plan(plannerImages(assets), frameAspect: aspect, overrides: kept,
-                                              tempo: .init(editorValue: spec.editor?.tempo))
+                                              tempo: .init(editorValue: spec.editor?.tempo),
+                                              defaultTransition: spec.style.defaultTransition)
         out.revision += 1
         out.updatedAt = wholeSeconds(now)
         out.updatedBy = by
