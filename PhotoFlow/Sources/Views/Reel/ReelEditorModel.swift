@@ -932,6 +932,7 @@ final class ReelEditorModel {
               !isBusy else { return }
         guard saveSpec() else { phase = .failed(saveError ?? "Kunde inte spara reel.json."); return }
         phase = .rendering(0)
+        let token = revisionToken
         renderTask = Task { [weak self] in
             let last = ProgressGate()
             do {
@@ -940,7 +941,7 @@ final class ReelEditorModel {
                     guard last.advance(to: pct) else { return }
                     Task { @MainActor in self?.renderProgress(p) }
                 }
-                self?.phase = .rendered(url)
+                if let self { self.phase = Self.phaseAfterRender(url, renderedToken: token, currentToken: self.revisionToken) }
             } catch is CancellationError {
                 self?.phase = .ready
             } catch {
@@ -948,6 +949,12 @@ final class ReelEditorModel {
             }
             self?.renderTask = nil
         }
+    }
+
+    /// Läget när en export är klar: "klar" bara om filmen inte ändrats under tiden (redigering och
+    /// ⌘Z fungerar medan exporten pågår); annars är filen en äldre version och det går att rendera igen.
+    nonisolated static func phaseAfterRender(_ url: URL, renderedToken: Int, currentToken: Int) -> Phase {
+        renderedToken == currentToken ? .rendered(url) : .ready
     }
 
     private func renderProgress(_ p: Double) {

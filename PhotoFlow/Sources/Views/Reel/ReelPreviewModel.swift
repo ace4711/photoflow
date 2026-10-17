@@ -26,6 +26,8 @@ final class ReelPreviewModel {
     @ObservationIgnored private var playTask: Task<Void, Never>?
     /// Där pågående uppspelning stannar (filmens slut om hela filmen spelas).
     @ObservationIgnored private var stopTime: Double?
+    /// Tiden i filmen när en tillfällig visning (`showTransient`) började; `setSpec` går tillbaka dit.
+    @ObservationIgnored private var timeBeforeTransient: Double?
 
     init(cache: ReelImageCache = .shared) {
         self.cache = cache
@@ -41,8 +43,15 @@ final class ReelPreviewModel {
         return CGSize(width: (w * k).rounded(), height: (h * k).rounded())
     }
 
-    /// Byter spec (efter varje redigering). Tiden behålls (klampad) och bilden ritas om.
+    /// Byter spec (efter varje redigering). Tiden behålls (klampad) och bilden ritas om. Efter en
+    /// tillfällig visning (`showTransient`) blir tiden den som gällde i filmen innan, så att
+    /// förhandsvisningen inte stannar på det isolerade klippets tid (som i hela filmen är ett annat klipp).
     func setSpec(_ spec: ReelSpec?, specDirectory: URL?) {
+        if let t = timeBeforeTransient { time = t; timeBeforeTransient = nil }
+        load(spec, specDirectory: specDirectory)
+    }
+
+    private func load(_ spec: ReelSpec?, specDirectory: URL?) {
         playTask?.cancel(); playTask = nil; isPlaying = false
         guard let spec, let specDirectory, let output = spec.outputs.first, !spec.timeline.isEmpty else {
             renderer = nil; frame = nil; duration = 0; time = 0
@@ -77,7 +86,8 @@ final class ReelPreviewModel {
     /// dragningen är slut.
     func showTransient(_ spec: ReelSpec, assetID: String, motion: ReelSpec.Motion, atEnd: Bool, specDirectory: URL?) {
         guard let isolated = Self.isolatedClipSpec(spec, assetID: assetID, motion: motion) else { return }
-        setSpec(isolated, specDirectory: specDirectory)
+        if timeBeforeTransient == nil { timeBeforeTransient = time }
+        load(isolated, specDirectory: specDirectory)
         seek(to: atEnd ? ReelTimeline.totalDuration(isolated) : 0)
     }
 

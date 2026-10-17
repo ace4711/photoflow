@@ -157,4 +157,46 @@ struct ReelImageCacheTests {
         #expect(cache.loadCount == 1)
         preview.stop()
     }
+
+    @Test("Exportens cache laddar exakt den storlek som behövs (ingen marginal); förhandsvisningens har 50 %")
+    func exportHasNoMargin() {
+        let counter = Counter()
+        let exact = ReelImageCache(margin: 0) { [self] _, edge in counter.add(edge); return makeImage(edge, edge * 2 / 3) }
+        _ = exact.image(id: "a", url: url, minLongEdge: 2300, originalLongEdge: 6000)
+        _ = exact.image(id: "b", url: url, minLongEdge: 5000, originalLongEdge: 4000)
+        #expect(counter.edges == [2300, 4000])
+        #expect(ReelImageCache.shared.margin == 0.5)
+        // ReelRenderer utan delad cache (exporten) får en egen utan marginal.
+        let export = ReelRenderer(spec: makeSpec(), specDirectory: URL(fileURLWithPath: "/tmp"),
+                                  maxOutputSize: CGSize(width: 1080, height: 1920))
+        #expect(export.cache.margin == 0)
+        let shared = ReelImageCache()
+        let preview = ReelRenderer(spec: makeSpec(), specDirectory: URL(fileURLWithPath: "/tmp"),
+                                   maxOutputSize: CGSize(width: 360, height: 640), cache: shared)
+        #expect(preview.cache === shared && shared.margin == 0.5)
+    }
+
+    @Test("Efter dragning av en ram återgår förhandsvisningen till tiden i filmen före dragningen")
+    func previewTimeRestoredAfterTransient() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("reel-cache-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        for i in 1...5 { try writePNG("b\(i).png", width: 60, height: 40, shade: UInt8(40 * i), in: dir) }
+        let preview = ReelPreviewModel(cache: ReelImageCache())
+        let spec = makeSpec()
+        preview.setSpec(spec, specDirectory: dir)
+        preview.seek(to: 3.2)   // klipp 4
+        var motion = spec.timeline[3].motion
+        motion.to.zoom = 1.3
+        preview.showTransient(spec, assetID: "a4", motion: motion, atEnd: true, specDirectory: dir)
+        #expect(preview.time == 1)
+        preview.showTransient(spec, assetID: "a4", motion: motion, atEnd: false, specDirectory: dir)
+        #expect(preview.time == 0)
+        preview.setSpec(spec, specDirectory: dir)   // släppt
+        #expect(abs(preview.time - 3.2) < 1e-9)
+        preview.setSpec(spec, specDirectory: dir)   // revisionToken-ändringen efteråt
+        #expect(abs(preview.time - 3.2) < 1e-9)
+        preview.stop()
+    }
 }
+

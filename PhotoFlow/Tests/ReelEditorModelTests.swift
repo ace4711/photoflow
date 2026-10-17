@@ -244,4 +244,12 @@ struct ReelEditorModelTests {
         #expect(found.sourcePath == finished.path)
         #expect(ReelLaunchRequest.forSession(outputDirectory: root, address: nil).sourcePath == nil)
     }
+
+    @Test("En export som blir klar efter en ändring visas inte som klar för den nya versionen")
+    func staleRenderIsNotDone() {
+        let url = URL(fileURLWithPath: "/tmp/reel_9x16.mp4")
+        #expect(ReelEditorModel.phaseAfterRender(url, renderedToken: 4, currentToken: 4) == .rendered(url))
+        #expect(ReelEditorModel.phaseAfterRender(url, renderedToken: 4, currentToken: 5) == .ready)
+    }
 }
+
