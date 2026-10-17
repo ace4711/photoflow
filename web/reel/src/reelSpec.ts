@@ -74,6 +74,8 @@ export interface EditorState {
   orderLocked?: boolean;
   /** "calm" | "normal" | "fast"; okänt värde räknas som normal. */
   tempo?: string;
+  /** Fotografens exakta antal bilder (3–12); saknas = automatiskt. Bara metadata, webben ändrar det inte. */
+  fixedCount?: number;
 }
 
 export interface Output {
@@ -88,6 +90,7 @@ export interface Output {
 export interface Edit { at: string; by: string; op: string }
 export interface Provenance {
   generator: string;
+  /** `slot`: "opening", "closing" eller rumstypen ("vardagsrum", "kök", ...). */
   autoSelection?: { asset: string; slot: string; reason: string }[];
   edits?: Edit[];
 }

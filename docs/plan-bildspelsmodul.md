@@ -129,30 +129,24 @@ bas = 0.55 · quality
 
 Vikterna är startvärden **[Antagande]**. De kalibreras mot 5–10 riktiga objekt där fotografen själv väljer "sina" 5 (se Fas 1d).
 
-**Steg 3 – Berättelsemall med platser ("slots").** Malltypen väljs automatiskt:
+**Steg 3 – "En av varje" i prioriterad rumsordning (ReelSelector v2).** Ersätter de fasta platserna (öppning, vardagsrum, kök, särdrag, avslut), som fyllde en plats med "bästa tillgängliga" även när rummet saknades. Malltypen väljs fortfarande automatiskt (villa: minst en exteriör med rum Fasad, Hus, Tomt eller Trädgård; annars lägenhet).
 
-- **Villa/hus:** minst en exteriör med `mlRoom ∈ {Fasad, Hus, Tomt, Trädgård}`.
-- **Lägenhet:** inga fasadbilder eller bara entré/trapphus.
+- **Öppningen.** Hjälterum: fasad, utsikt, vardagsrum, kök, uteplats/balkong/terrass. Villa: fasaden öppnar om dess grundpoäng är högst `facadeOpeningMargin` (0,08) under den bästa hjältebildens, annars öppnar den bästa hjältebilden. Lägenhet: den bästa hjältebilden. Aldrig badrum, nyttorum (hall, tvättstuga, kontor, förråd) eller okänt rum om något annat finns.
+- **Avslutet.** Den bästa utomhus-, utsikts- eller skymningsbilden (skymning ger +0,08) som skiljer sig från öppningen (`maxClosingSimilarity`), helst av en annan rumstyp än öppningen. Finns ingen utomhusbild: en annan stark hjältebild, aldrig ett badrum.
+- **En av varje.** Den bästa bilden per rumstyp (grundpoäng och MMR mot redan valda) i prioritetsordningen fasad, vardagsrum, kök, matplats, sovrum, uteplats, utsikt, trädgård, utomhus, övriga rum (bastu, pool), badrum. Badrum tas bara med om grundpoängen är minst `bathroomMinScore`. Nyttorum tas bara med när inget annat finns. Rumstyper utan bilder hoppas över. En andra bild av en typ väljs först när alla tillgängliga typer har fått en (rundor), med MMR och rumsavdraget som förut.
+- **Antal.** Automatiskt: en bild per viktig rumstyp som finns, minst 5 och högst 8. Fotografen kan välja ett exakt antal (3–12) i redigeraren (`editor.fixedCount`).
+- **Visningsordning.** Öppning, inomhus (vardagsrum, kök, matplats, sovrum, badrum, övriga), ute (uteplats, utsikt, trädgård, utomhus, övriga fasadbilder), avslut.
+- **Kategori mot rum.** Ett tydligt interiört rumsnamn (vardagsrum, kök, sovrum, badrum, matplats, tvättstuga, kontor) vinner över kategorin "Exteriör" (AI-taggar som "Vardagsrum"/"Exteriör" förekommer), både för rumstypen och för `isExterior`. Övrigt går kategorin före rumsnamnet som förut.
 
-| Plats | Villa | Lägenhet | Regel |
-|---|---|---|---|
-| 1. Öppning ("hook") | Bästa fasaden/exteriören | Starkaste rummet eller utsikten | Måste vara stark: högst bas bland kandidaterna |
-| 2 | Vardagsrum/allrum | Vardagsrum | – |
-| 3 | Kök | Kök | – |
-| 4 | Särdrag: sovrum, badrum, matplats, altan | Balkong, sovrum eller badrum | Rumstyp som inte redan är med |
-| 5. Avslut | Exteriör nr 2: trädgård, uteplats, skymning, sjö/utsikt | Balkong/utsikt eller bästa kvarvarande | Får inte likna bild 1 (feature print-avstånd) |
-
-**Steg 4 – Fyll platserna med MMR (maximal marginal relevans).** För varje plats väljs kandidaten som maximerar
+**Steg 4 – MMR.** Inom varje rumstyp väljs kandidaten som maximerar
 
 `λ · bas − (1−λ) · max(likhet med redan valda)`, med λ ≈ 0,7.
 
 Likhet = 1 − normaliserat feature print-avstånd. Det ger variation även när rumstaggarna saknas eller är fel.
 
-**Steg 5 – Reservlogik.** Saknas en rumstyp fylls platsen med bästa MMR-kandidat oavsett rum. Saknas Foundation Models helt används Visions grova kategori (`category` = Interiör/Exteriör) plus ren MMR.
+**Steg 5 – Utan rumstaggar.** Saknas Foundation Models helt används Visions grova kategori (`category` = Interiör/Exteriör). Bilder utan rum är "okänt rum" och fyller bara upp när inget annat finns, i MMR-ordning.
 
-**Steg 6 – Förklaring.** Varje val får en kort motivering, t.ex. *"Öppning: Fasad, kvalitet 0,82"*. Den visas i UI:t och sparas i `provenance` i JSON-filen, så att fotografen förstår förslaget och vikterna kan kalibreras.
-
-Antalet bilder (3–8, standard 5) är en inställning. Mallen förlänger då plats 4 till flera särdragsplatser.
+**Steg 6 – Förklaring.** Varje val får en kort motivering, t.ex. *"Öppning: Fasad, poäng 0,82 (bästa hjältebild 0,85)"*, *"Vardagsrum, bästa av 4, poäng 0,88"* eller *"Avslut: Balkong, skiljer sig från öppningen, poäng 0,80"*. Den visas i UI:t och sparas i `provenance` i JSON-filen (`slot` är `opening`, `closing` eller rumstypen), så att fotografen förstår förslaget och vikterna kan kalibreras.
 
 ---
 

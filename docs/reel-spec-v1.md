@@ -35,8 +35,8 @@ Läsare **ska** ignorera okända fält på alla nivåer. Skrivare **bör** skriv
 | `overlays[]` | lista | Reserverad (text). v1-renderare ignorerar den. Varje element har minst `type`. |
 | `brand` | objekt eller `null` | Reserverad. |
 | `outputs[]` | lista | Exportprofiler: `{id, aspect, width, height, fps, encoding?{codec, bitrateMbps?, audio?}}`. `width`/`height`/`fps` styr renderingen; `encoding` får ignoreras av en webbförhandsvisning. |
-| `provenance` | objekt | `{generator, autoSelection?[{asset, slot, reason}], edits?[{at, by, op}]}`. Påverkar inte rendering. |
-| `editor?` | objekt | Redigerarens val: `{pinnedAssets?[sha256], excludedAssets?[sha256], orderLocked?, tempo?}`. `pinnedAssets` ska alltid vara med och `excludedAssets` aldrig vid ett nytt förslag, `orderLocked` hindrar förslaget från att flytta låsta klipp, `tempo` är `calm`/`normal`/`fast` (längdfaktor 1,2 / 1,0 / 0,85 på automatiska längder). Utelämnas när inget är satt. Bara metadata; renderare ignorerar det. Tillägg inom v1. |
+| `provenance` | objekt | `{generator, autoSelection?[{asset, slot, reason}], edits?[{at, by, op}]}`. `slot` är `opening`, `closing` eller rumstypen (`vardagsrum`, `kök`, `sovrum`, `uteplats`, ...). Påverkar inte rendering. |
+| `editor?` | objekt | Redigerarens val: `{pinnedAssets?[sha256], excludedAssets?[sha256], orderLocked?, tempo?, fixedCount?}`. `pinnedAssets` ska alltid vara med och `excludedAssets` aldrig vid ett nytt förslag, `orderLocked` hindrar förslaget från att flytta låsta klipp, `tempo` är `calm`/`normal`/`fast` (längdfaktor 1,2 / 1,0 / 0,85 på automatiska längder), `fixedCount` är fotografens exakta antal bilder (3–12, Bilder-steppern) som "Föreslå igen" behåller; saknas det är antalet automatiskt (en bild per viktig rumstyp, 5–8). Utelämnas när inget är satt. Bara metadata; renderare ignorerar det. Tillägg inom v1. |
 
 ### 2.1 `assets[]`
 

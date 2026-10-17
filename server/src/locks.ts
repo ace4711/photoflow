@@ -146,6 +146,7 @@ export function lockFieldErrors(spec: unknown): string[] {
       }
       if (!absent(ed.orderLocked) && typeof ed.orderLocked !== "boolean") out.push("editor.orderLocked måste vara true eller false.");
       if (!absent(ed.tempo) && typeof ed.tempo !== "string") out.push("editor.tempo måste vara en sträng.");
+      if (!absent(ed.fixedCount) && !(typeof ed.fixedCount === "number" && Number.isInteger(ed.fixedCount))) out.push("editor.fixedCount måste vara ett heltal.");
     }
   }
   const tl = Array.isArray(spec.timeline) ? spec.timeline : [];

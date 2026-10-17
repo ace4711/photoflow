@@ -399,3 +399,10 @@ test("fynd: redigerarens fält typkontrolleras för båda rollerna", async () =>
   assert.equal((await put(id, ok, 2)).status, 200);
   assert.deepEqual(lockFieldErrors({ editor: null, timeline: [{}] }), []);
 });
+
+test("editor.fixedCount (fotografens exakta antal) är ett heltal; saknas det är antalet automatiskt", () => {
+  assert.deepEqual(lockFieldErrors({ editor: { fixedCount: 7 }, timeline: [] }), []);
+  assert.deepEqual(lockFieldErrors({ editor: { fixedCount: null }, timeline: [] }), []);
+  assert.match(lockFieldErrors({ editor: { fixedCount: "7" }, timeline: [] }).join(), /fixedCount/);
+  assert.match(lockFieldErrors({ editor: { fixedCount: 6.5 }, timeline: [] }).join(), /fixedCount/);
+});
