@@ -54,6 +54,7 @@
 		1DCBC2CE6B96D60DA5417507 /* AddressSessionEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3E9E6F534CFBD26583F5CDB /* AddressSessionEntity.swift */; };
 		1DF87B08B00A9C7DFF0262D4 /* ReelProposal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 538ADBB9C884C5D4533AC39B /* ReelProposal.swift */; };
 		1E93AFB7726AF98B211ECFF2 /* StepStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 522CA5C3C17A8E64E615BF3F /* StepStatusTests.swift */; };
+		1F2CED0CFF7BAF80102AC47D /* ReelKeyframeCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = 212C2D18912F8D06D56D3F62 /* ReelKeyframeCanvas.swift */; };
 		21E827738CD6D915967960CB /* ReelFilmListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AA78C5668CD04C90B856025 /* ReelFilmListView.swift */; };
 		220473BEF62812870BB7435C /* ShowReviewIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A0A7827D86EA12C4E5D679B /* ShowReviewIntent.swift */; };
 		224FC95A88E35A47D4DF444E /* example-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = 0FD18A61B9724ADC78082242 /* example-v1.json */; };
@@ -443,6 +444,7 @@
 		1B7A1DE94D250B862843F4ED /* StepTimingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StepTimingTests.swift; sourceTree = "<group>"; };
 		203C82116391FCDAA8CCD90A /* ReelTransitionEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelTransitionEditor.swift; sourceTree = "<group>"; };
 		20B17646F977816244874F05 /* ReelTimelineLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelTimelineLayoutTests.swift; sourceTree = "<group>"; };
+		212C2D18912F8D06D56D3F62 /* ReelKeyframeCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelKeyframeCanvas.swift; sourceTree = "<group>"; };
 		21D52163F8BA31D8D89D4DA4 /* OrderedParallelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrderedParallelTests.swift; sourceTree = "<group>"; };
 		230AF67C14F78CC9A5F63D1F /* CalendarServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarServiceTests.swift; sourceTree = "<group>"; };
 		2556040AD182883742EE0D19 /* bracket5_dark.csv */ = {isa = PBXFileReference; path = bracket5_dark.csv; sourceTree = "<group>"; };
@@ -856,6 +858,7 @@
 				BF76551DB89F2DEB9DAB95F2 /* ReelEditorView.swift */,
 				6931E87A2B8E4D8559422DA5 /* ReelFilmListModel.swift */,
 				9AA78C5668CD04C90B856025 /* ReelFilmListView.swift */,
+				212C2D18912F8D06D56D3F62 /* ReelKeyframeCanvas.swift */,
 				CC631062CE2777F4AB6250A5 /* ReelMotionEditor.swift */,
 				4A06835453C8AF2B1D27AD7D /* ReelPlayerModel.swift */,
 				3CA9EA4AF603AA55B99241EB /* ReelPlayerView.swift */,
@@ -1661,6 +1664,7 @@
 				09F44EABBFA46B0B9C044AE2 /* ReelFilmStatus.swift in Sources */,
 				CF2C8863EC8526BE496DC274 /* ReelImageAnalyzer.swift in Sources */,
 				A3485E7A1A41F0FAA5457DCE /* ReelImageCache.swift in Sources */,
+				1F2CED0CFF7BAF80102AC47D /* ReelKeyframeCanvas.swift in Sources */,
 				7F1E8166C04D63EBA4469A82 /* ReelLibrary.swift in Sources */,
 				858050BFEFDD9F632CE822B5 /* ReelMotionEditor.swift in Sources */,
 				C4A21FB9682B790E60FAF7D4 /* ReelMotionGeometry.swift in Sources */,

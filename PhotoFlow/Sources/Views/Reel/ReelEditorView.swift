@@ -349,11 +349,9 @@ struct ReelEditorView: View {
             ScrollView {
             if let id = model.selectedAssetID, let row = rows.first(where: { $0.id == id }) {
                 ReelMotionEditor(
-                    row: row,
-                    clip: model.spec?.timeline.first { $0.asset == id },
-                    onPreset: { model.setPreset(id, $0) },
-                    onDuration: { model.setDuration(id, seconds: $0) },
-                    onAutoDuration: { model.clearDuration(id) })
+                    model: model, preview: preview, row: row,
+                    clip: model.spec?.timeline.first { $0.asset == id })
+                    .id(id)
                     .padding(12)
                     .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
             } else if let id = model.selectedTransitionAssetID, let spec = model.spec,

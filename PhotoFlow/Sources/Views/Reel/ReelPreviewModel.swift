@@ -48,9 +48,10 @@ final class ReelPreviewModel {
             renderer = nil; frame = nil; duration = 0; time = 0
             return
         }
-        // Samma maxOutputSize som exporten (bilderna laddas för slutrenderingens skärpa).
-        renderer = ReelRenderer(spec: spec, specDirectory: specDirectory,
-                                maxOutputSize: CGSize(width: output.width, height: output.height),
+        // Förhandsvisningens egen storlek räcker som maxOutputSize: bilderna laddas inte i
+        // exportens upplösning (som vid dragning av zoom skulle ge stora omladdningar).
+        let size = Self.previewSize(for: output)
+        renderer = ReelRenderer(spec: spec, specDirectory: specDirectory, maxOutputSize: size,
                                 cache: cache, context: context)
         previewSize = Self.previewSize(for: output)
         aspect = Double(output.width) / Double(max(output.height, 1))

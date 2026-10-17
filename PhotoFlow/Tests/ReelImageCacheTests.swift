@@ -43,7 +43,7 @@ struct ReelImageCacheTests {
         _ = cache.image(id: "a", url: url, minLongEdge: 1000, originalLongEdge: 6000)
         _ = cache.image(id: "a", url: url, minLongEdge: 640, originalLongEdge: 6000)
         #expect(cache.loadCount == 1)
-        #expect(counter.edges == [1024])   // avrundat uppåt till 256
+        #expect(counter.edges == [1536])   // 1000 + 50 % marginal, avrundat uppåt till 256
         // Större behov laddar om en gång och ersätter den mindre.
         _ = cache.image(id: "a", url: url, minLongEdge: 2000, originalLongEdge: 6000)
         #expect(cache.loadCount == 2 && cache.stats.count == 1)
@@ -56,16 +56,16 @@ struct ReelImageCacheTests {
 
     @Test("Taket i byte kastar minst använda bilden först")
     func lruEviction() {
-        let one = 1024 * (1024 * 2 / 3) * 4
+        let one = 1536 * (1536 * 2 / 3) * 4
         let (cache, _) = countingCache(maxBytes: one * 2 + one / 2)   // rymmer två
-        for id in ["a", "b"] { _ = cache.image(id: id, url: url, minLongEdge: 1024, originalLongEdge: 6000) }
-        _ = cache.image(id: "a", url: url, minLongEdge: 1024, originalLongEdge: 6000)   // a är nyast
-        _ = cache.image(id: "c", url: url, minLongEdge: 1024, originalLongEdge: 6000)   // kastar b
+        for id in ["a", "b"] { _ = cache.image(id: id, url: url, minLongEdge: 1000, originalLongEdge: 6000) }
+        _ = cache.image(id: "a", url: url, minLongEdge: 1000, originalLongEdge: 6000)   // a är nyast
+        _ = cache.image(id: "c", url: url, minLongEdge: 1000, originalLongEdge: 6000)   // kastar b
         #expect(cache.stats.count == 2 && cache.stats.bytes <= cache.maxBytes)
         let before = cache.loadCount
-        _ = cache.image(id: "a", url: url, minLongEdge: 1024, originalLongEdge: 6000)
+        _ = cache.image(id: "a", url: url, minLongEdge: 1000, originalLongEdge: 6000)
         #expect(cache.loadCount == before)
-        _ = cache.image(id: "b", url: url, minLongEdge: 1024, originalLongEdge: 6000)
+        _ = cache.image(id: "b", url: url, minLongEdge: 1000, originalLongEdge: 6000)
         #expect(cache.loadCount == before + 1)
     }
 

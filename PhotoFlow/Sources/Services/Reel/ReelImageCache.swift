@@ -8,7 +8,7 @@ import ImageIO
 ///
 /// Nyckel: bildens identitet (sha256) och längsta sidan i pixlar. Ett uppslag godtar den minsta
 /// cachade bild med samma identitet vars längsta sida räcker (`>=` önskad), annars laddas en ny
-/// (avrundad uppåt till 256 pixlar, aldrig över originalet) och ersätter mindre bilder av samma
+/// (med 50 % marginal, avrundad uppåt till 256 pixlar, aldrig över originalet; marginalen gör att en zoomdragning inte laddar om bilden vid varje steg) och ersätter mindre bilder av samma
 /// identitet. Taket är i byte (dekodad storlek, bredd × höjd × 4); minst använda bilder kastas först.
 /// Trådsäker (lås). Laddaren är injicerbar så att tester kan räkna laddningar utan bildfiler.
 nonisolated final class ReelImageCache: @unchecked Sendable {
@@ -67,7 +67,7 @@ nonisolated final class ReelImageCache: @unchecked Sendable {
         _loadCount += 1
         lock.unlock()
 
-        let edge = min(originalLongEdge, (wanted + 255) / 256 * 256)
+        let edge = min(originalLongEdge, (wanted * 3 / 2 + 255) / 256 * 256)
         guard let loaded = loader(url, edge) else { return nil }
         let cost = loaded.width * loaded.height * 4
 
