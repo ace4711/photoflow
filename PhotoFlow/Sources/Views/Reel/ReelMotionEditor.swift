@@ -90,8 +90,22 @@ struct ReelMotionEditor: View {
             .frame(maxWidth: .infinity, maxHeight: 360)
             .frame(maxWidth: .infinity)
 
-        if clip.fit == .containBlur {
-            Text("Hela bilden syns i bildspelet med suddig bakgrund. Ramarna visar den del som zoomas in på.")
+        if clip.fit == .containBlur, let style = model.spec?.style {
+            let isBlur = style.background.type == "blur"
+            HStack {
+                Text("Bakgrund")
+                Picker("Bakgrund", selection: Binding(get: { isBlur }, set: { blur in
+                    act {
+                        model.setStyle({ $0.background = blur ? .init(type: "blur", amount: $0.background.amount ?? 0.6)
+                                                               : .init(type: "black", amount: nil) }, op: "background")
+                    }
+                })) {
+                    Text("Suddig").tag(true)
+                    Text("Svart").tag(false)
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+            }
+            Text("Hela bilden syns i bildspelet med \(isBlur ? "suddig" : "svart") bakgrund (gäller alla sådana klipp i filmen). Ramarna visar den del som zoomas in på.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

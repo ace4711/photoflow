@@ -133,6 +133,7 @@ struct ReelTimelineView: View {
         .focused($focused)
         .focusEffectDisabled()
         .onChange(of: model.revisionToken) { _, _ in externalDrop = nil }
+        .onKeyPress(.escape) { model.clearSelection(); return .handled }
         .onKeyPress(.delete) { deleteSelected() }
         .onKeyPress(.deleteForward) { deleteSelected() }
         .onDisappear { if cursorPushed { NSCursor.pop(); cursorPushed = false } }
@@ -148,9 +149,44 @@ struct ReelTimelineView: View {
         let locked = clip.durationLocked == true || row.preset != .auto || clip.transitionLocked == true
         return ClipBlock(row: row, duration: block.duration, width: block.width, height: Self.blockHeight,
                          isSelected: isSelected, isLocked: locked, lockHelp: Self.lockHelp(clip, row: row))
+            .contextMenu { clipMenu(row: row, clip: clip, block: block) }
             .offset(x: Self.inset + block.x + dx, y: Self.blockTop)
             .opacity(moving ? 0.8 : 1)
             .zIndex(moving ? 10 : Double(block.index))
+    }
+
+    /// Högerklick på ett klipp: ta bort, lås/uteslut bilden och släpp klippets egna val.
+    @ViewBuilder
+    private func clipMenu(row: ReelEditorModel.ClipRow, clip: ReelSpec.Clip, block: ReelTimelineLayout.Block) -> some View {
+        let id = row.id
+        Button("Ta bort ur filmen", systemImage: "trash") { model.removeClip(id) }
+            .disabled(model.clipRows.count <= 1)
+        if let sha = model.candidateID(forAsset: id) {
+            Button(model.isPinned(asset: id) ? "Släpp låsningen av bilden" : "Lås bilden i filmen", systemImage: "pin") {
+                model.togglePinned(sha)
+            }
+            Button("Uteslut bilden", systemImage: "nosign") { model.toggleExcluded(sha) }
+                .disabled(model.clipRows.count <= 1)
+        }
+        Divider()
+        Button("Visa klippet", systemImage: "slider.horizontal.3") { selectClip(block) }
+        if block.index > 0 {
+            Button("Ändra övergången in…", systemImage: "rectangle.righthalf.inset.filled") {
+                model.selectedTransitionAssetID = id
+            }
+        }
+        if clip.durationLocked == true || row.preset != .auto || clip.transitionLocked == true {
+            Divider()
+            if clip.durationLocked == true {
+                Button("Automatisk längd") { model.clearDuration(id) }
+            }
+            if row.preset != .auto {
+                Button("Automatisk rörelse") { model.setPreset(id, .auto) }
+            }
+            if clip.transitionLocked == true, block.index > 0 {
+                Button("Automatisk övergång in") { model.clearTransition(id) }
+            }
+        }
     }
 
     /// Greppet på högerkanten; syns tydligare på det markerade klippet.

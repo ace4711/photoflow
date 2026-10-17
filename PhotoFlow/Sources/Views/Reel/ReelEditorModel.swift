@@ -302,7 +302,8 @@ final class ReelEditorModel {
     /// efter dem skulle peka på en annan bild eller skarv.
     private static let renumberingOps: Set<String> = ["suggestAgain", "startOver", "count", "pull"]
 
-    private func clearSelection() {
+    /// Avmarkerar klipp och övergång, så att sidopanelen visar filmens stil.
+    func clearSelection() {
         selectedAssetID = nil
         selectedTransitionAssetID = nil
     }
@@ -844,6 +845,16 @@ final class ReelEditorModel {
             }
             e.excludedAssets = excluded
         }, op: "exclude")
+    }
+
+    /// Bildens innehållshash (kandidat-id i rutnätet) för ett klipp i filmen.
+    func candidateID(forAsset assetID: String) -> String? {
+        spec?.assets.first { $0.id == assetID }?.sha256
+    }
+
+    /// Om bilden är låst i filmen ("ska vara med" vid nästa förslag).
+    func isPinned(asset assetID: String) -> Bool {
+        candidateID(forAsset: assetID).map { (spec?.editor?.pinnedAssets ?? []).contains($0) } ?? false
     }
 
     func setFormat(_ newFormat: ReelFormat) {

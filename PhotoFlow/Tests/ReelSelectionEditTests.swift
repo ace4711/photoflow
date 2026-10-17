@@ -301,4 +301,19 @@ struct ReelSelectionEditTests {
         model.removeClip(model.clipRows[0].id)
         #expect(model.count == before)
     }
+
+    @Test("Högerklicksmenyns underlag: bildens hash, låsstatus och avmarkering")
+    func contextMenuSupport() throws {
+        let (model, root) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = model.clipRows[0].id
+        let sha = try #require(model.candidateID(forAsset: id))
+        #expect(model.spec?.assets.first { $0.id == id }?.sha256 == sha)
+        #expect(!model.isPinned(asset: id))
+        model.togglePinned(sha)
+        #expect(model.isPinned(asset: id))
+        model.selectedAssetID = id
+        model.clearSelection()
+        #expect(model.selectedAssetID == nil && model.selectedTransitionAssetID == nil)
+    }
 }

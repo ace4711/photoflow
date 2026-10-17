@@ -360,11 +360,13 @@ struct ReelEditorView: View {
                     .id(id)
                     .padding(12)
                     .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(alignment: .topTrailing) { closeInspectorButton }
             } else if let id = model.selectedTransitionAssetID, let spec = model.spec,
                       let index = spec.timeline.firstIndex(where: { $0.asset == id }), index > 0 {
                 ReelTransitionEditor(model: model, preview: preview, spec: spec, index: index)
                     .padding(12)
                     .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(alignment: .topTrailing) { closeInspectorButton }
             } else {
                 if let spec = model.spec {
                     ReelStylePanel(model: model, spec: spec)
@@ -377,6 +379,16 @@ struct ReelEditorView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// Stänger inspektören (avmarkerar), så att filmens stil visas. Esc i tidslinjen gör samma sak.
+    private var closeInspectorButton: some View {
+        Button { model.clearSelection() } label: {
+            Image(systemName: "xmark.circle.fill").font(.title3).foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .padding(8)
+        .help("Stäng och visa filmens stil (Esc)")
     }
 
     // MARK: Kandidatrutnät
