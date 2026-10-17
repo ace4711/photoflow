@@ -108,9 +108,13 @@ nonisolated enum ReelSelector {
         var collagePoolSize = 6
         /// Rumstyper som passar ihop i ett kollage, utöver samma typ med samma typ (hall och entré är redan
         /// samma typ).
-        var collageRoomPairs: [[String]] = [["kök", "matplats"], ["vardagsrum", "matplats"], ["uteplats", "trädgård"]]
-        /// Rumstyper som aldrig är med i kollage: breda fasader och utsikter behåller cover/contain-blur.
-        var collageExcludedRooms: [String] = ["fasad", "utsikt"]
+        var collageRoomPairs: [[String]] = [["kök", "matplats"], ["vardagsrum", "matplats"], ["uteplats", "trädgård"],
+                                            ["fasad", "trädgård"], ["uteplats", "utsikt"]]
+        /// Rumstyper som aldrig är med i kollage. Tom sedan "panorering + kollage": breda utomhusbilder
+        /// (fasad, trädgård, uteplats/balkong, utsikt) får stå i kollage med en annan utomhusbild (fasad med
+        /// fasad = olika vinklar, inte dubbletter); de som inte får partner panoreras. Öppning och avslut
+        /// är aldrig kollage (se `ReelCollage`).
+        var collageExcludedRooms: [String] = []
     }
 
     nonisolated enum Template: String, Sendable, Equatable {
@@ -545,6 +549,11 @@ nonisolated enum ReelSelector {
             guard maxDist > 0, let d = dist[a]?[b] else { return 0 }
             return min(max(1 - d / maxDist, 0), 1)
         }
+        /// Likheten om båda bilderna har feature print, annars nil (okänd). `similarity` räknar okänd som 0.
+        func knownSimilarity(_ a: String, _ b: String) -> Double? {
+            guard maxDist > 0, dist[a]?[b] != nil else { return nil }
+            return similarity(a, b)
+        }
         func maxSimilarity(_ c: ReelCandidate, to others: [String]) -> Double {
             others.filter { $0 != c.id }.map { similarity(c.id, $0) }.max() ?? 0
         }
@@ -599,8 +608,12 @@ nonisolated enum ReelSelector {
                 let fitting = cs.filter { pinned.contains($0.id) }
                 if !fitting.isEmpty { cs = fitting }
                 if let o = opening {
-                    let different = cs.filter { similarity($0.id, o.id) <= weights.maxClosingSimilarity }
-                    if !different.isEmpty { cs = different }
+                    // Bara en känd likhet är bevis: en bild utan feature print har okänd likhet och går efter
+                    // bilder som bevisligen skiljer sig (Lillvägen 24: avslutet saknade feature print och
+                    // var en annan vinkel av öppningens balkong, men räknades som olik).
+                    let proven = cs.filter { (knownSimilarity($0.id, o.id) ?? 2) <= weights.maxClosingSimilarity }
+                    let notSimilar = cs.filter { (knownSimilarity($0.id, o.id) ?? 0) <= weights.maxClosingSimilarity }
+                    if !proven.isEmpty { cs = proven } else if !notSimilar.isEmpty { cs = notSimilar }
                     // Helst en annan rumstyp än öppningen (inte balkong efter balkong).
                     let otherType = cs.filter { typeOf($0) != typeOf(o) }
                     if !otherType.isEmpty { cs = otherType }
@@ -737,7 +750,7 @@ nonisolated enum ReelSelector {
                 text = openingReason(o, score: score(c))
             } else if isClosing, let cl = closing {
                 text = closingReason(cl, c: c, score: score(c), opening: opening?.candidate,
-                                     similarity: opening.map { similarity(c.id, $0.candidate.id) })
+                                     similarity: opening.flatMap { knownSimilarity(c.id, $0.candidate.id) })
             } else {
                 text = roomReason(c, score: score(c), siblings: byType[typeKey(c)] ?? [])
             }
@@ -779,7 +792,8 @@ nonisolated enum ReelSelector {
         var parts = ["Avslut: \(label(c))"]
         switch cl.kind {
         case .outdoor:
-            parts.append(opening != nil ? "skiljer sig från öppningen" : "utomhusbild")
+            parts.append(opening == nil ? "utomhusbild"
+                         : (similarity == nil ? "likhet med öppningen okänd (saknar feature print)" : "skiljer sig från öppningen"))
             if isDusk(c) { parts.append("skymningsbild") }
         case .hero: parts.append("stark hjältebild, ingen utomhusbild kvar")
         case .other: parts.append("bästa tillgängliga")

@@ -78,7 +78,7 @@ nonisolated enum ReelCollage {
         // Ankare: de som mest behöver det först (contain-blur, sedan störst överskott av motivbredd).
         func badness(_ c: ReelCandidate) -> Double {
             let image = plannerImage(c)
-            let blur = ReelMotionPlanner.kind(of: image, frameAspect: frameAspect) == .containBlur ? 10.0 : 0
+            let blur = ReelMotionPlanner.isWideExteriorPan(image, frameAspect: frameAspect) ? 10.0 : 0
             let visible = ReelMotionPlanner.visibleWidth(imageAspect: image.aspect, frameAspect: frameAspect)
             return blur + (c.focusWidth ?? c.salientWidth ?? 0.5) - visible
         }

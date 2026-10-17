@@ -97,13 +97,14 @@ struct ReelCollageTests {
         // Orientering: en stående partner i en stapel (och en liggande i sida vid sida) går inte.
         #expect(!ok(cand("p", room: "Matplats", axis: 4, portrait: true)))
         #expect(!ok(cand("p", room: "Matplats", axis: 4), aspect: landscape))
-        // Aldrig fasad eller utsikt (inte ens av samma typ), aldrig montage, aldrig okända mått.
-        let facade = cand("f", room: "Fasad", axis: 7)
-        #expect(!ReelCollage.canPair(anchor: facade, partner: cand("f2", room: "Fasad", axis: 8), frameAspect: vertical,
-                                     distance: { _, _ in nil }, weights: weights))
-        let view = cand("u", room: "Utsikt", axis: 9)
-        #expect(!ReelCollage.canPair(anchor: view, partner: cand("u2", room: "Utsikt", axis: 10), frameAspect: vertical,
-                                     distance: { _, _ in nil }, weights: weights))
+        // Utomhus (panorering + kollage): fasad med fasad (olika vinklar), fasad med trädgård och balkong med
+        // utsikt går; fasad med kök går inte. Aldrig montage, aldrig okända mått.
+        func outdoor(_ a: String, _ b: String) -> Bool {
+            ReelCollage.canPair(anchor: cand("a", room: a, axis: 7), partner: cand("b", room: b, axis: 8), frameAspect: vertical,
+                                distance: { _, _ in nil }, weights: weights)
+        }
+        #expect(outdoor("Fasad", "Fasad") && outdoor("Fasad", "Trädgård") && outdoor("Balkong", "Utsikt") && outdoor("Uteplats", "Trädgård"))
+        #expect(!outdoor("Fasad", "Kök") && !outdoor("Utsikt", "Fasad"))
         #expect(!ok(cand("m", room: "Matplats", axis: 4, panelRooms: ["Matplats", "Kök"])))
         var noSize = cand("p", room: "Matplats", axis: 4)
         noSize.width = nil; noSize.height = nil
@@ -223,15 +224,54 @@ struct ReelCollageTests {
         #expect(!excluded.picks.contains { $0.candidateID == "matp" } && excluded.collages.allSatisfy { $0.partnerID != "matp" && $0.anchorID != "matp" })
     }
 
-    @Test("Breda fasader och utsikter är aldrig med i kollage")
-    func facadesNever() {
+    @Test("Breda utomhusbilder kan vara med i kollage, men aldrig öppning eller avslut")
+    func outdoorCollagesNotOpeningClosing() {
         var list = villa()
         list.append(cand("fasad2", room: "Fasad", q: 0.85, axis: 14, focus: 0.5))
         list.append(cand("utsikt", room: "Utsikt", q: 0.85, axis: 15, focus: 0.5))
         let sel = select(list, count: 9)
+        let edges = [sel.picks.first, sel.picks.last].compactMap { $0 }
+        #expect(edges.map(\.slot) == [.opening, .closing])
         for pair in sel.collages {
-            #expect(!["fasad", "fasad2", "utsikt"].contains(pair.anchorID) && !["fasad", "fasad2", "utsikt"].contains(pair.partnerID))
+            #expect(!edges.map(\.candidateID).contains(pair.anchorID) && !edges.map(\.candidateID).contains(pair.partnerID))
         }
+    }
+
+    @Test("Utomhuskollage i 9:16: uteplatsen mitt i filmen får en annan trädgårdsbild som partner, öppning och avslut aldrig")
+    func outdoorPairsInSelection() throws {
+        var list = villa().filter { $0.id != "matp" }
+        list.append(cand("ute", room: "Uteplats", q: 0.8, axis: 14, focus: 0.8))
+        list.append(cand("trad2", room: "Trädgård", q: 0.6, axis: 15, focus: 0.8))
+        let sel = select(list, aspect: vertical)
+        let pair = try #require(sel.collages.first { $0.anchorID == "ute" })
+        #expect(pair.partnerID == "trad2" && !pair.partnerPicked)
+        #expect(pair.reason.hasPrefix("Kollage: Uteplats och Trädgård, båda ryms i 9:8"), "\(pair.reason)")
+        #expect(sel.picks.first?.slot == .opening && sel.picks.last?.slot == .closing)
+        // Två fasadvinklar (olika bilder) kan också para ihop sig.
+        #expect(ReelCollage.canPair(anchor: cand("a", room: "Fasad", axis: 7, focus: 0.8), partner: cand("b", room: "Fasad", axis: 8, focus: 0.8),
+                                    frameAspect: vertical, distance: { _, _ in 0.3 }, weights: .init()))
+    }
+
+    @Test("Avslutet väljs bland bilder vars skillnad mot öppningen är känd: en bild utan feature print går efter")
+    func closingNeedsKnownDifference() throws {
+        // Lillvägen 24: avslutet saknade feature print och var en annan vinkel av öppningens balkong, men
+        // likheten räknades som 0 och bilden som "olik".
+        var balk = cand("balk", room: "Uteplats", q: 0.9, axis: 1, focus: 0.5)
+        balk.featureVector = nil
+        let trad = cand("trad", room: "Trädgård", q: 0.7, axis: 2, focus: 0.5)
+        let fasad = cand("fasad", room: "Fasad", q: 0.95, axis: 0, focus: 0.5)
+        let rest = [cand("vard", room: "Vardagsrum", q: 0.8, axis: 3, focus: 0.3), cand("kok", room: "Kök", q: 0.8, axis: 4, focus: 0.3),
+                    cand("sov", room: "Sovrum", q: 0.8, axis: 5, focus: 0.3)]
+        let sel = ReelSelector.select([fasad, balk, trad] + rest, frameAspect: nil)
+        let closing = try #require(sel.picks.last)
+        #expect(closing.candidateID == "trad" && closing.slot == .closing)
+        #expect(closing.reason.contains("skiljer sig från öppningen"), "\(closing.reason)")
+        // Utan någon känd likhet sägs det rakt ut i stället för att påstå att bilden skiljer sig.
+        var noVec = [fasad, balk, trad].map { c -> ReelCandidate in var n = c; n.featureVector = nil; return n }
+        noVec += rest
+        let sel2 = ReelSelector.select(noVec, frameAspect: nil)
+        let closing2 = try #require(sel2.picks.last)
+        #expect(closing2.reason.contains("likhet med öppningen okänd"), "\(closing2.reason)")
     }
 
     @Test("Stående bilder i 16:9: två stående rum blir ett kollage sida vid sida")
@@ -319,7 +359,8 @@ struct ReelCollageTests {
             }
         }
         // Liggande bred exteriör i 9:16 är fortfarande contain-blur (inget har ändrats där).
-        #expect(ReelMotionPlanner.kind(of: image("l", focus: 0.93, exterior: true), frameAspect: vertical) == .containBlur)
+        #expect(ReelMotionPlanner.kind(of: image("l", focus: 0.93, exterior: true), frameAspect: vertical) == .pan)
+        #expect(ReelMotionPlanner.isWideExteriorPan(image("l", focus: 0.93, exterior: true), frameAspect: vertical))
         // Ett uttryckligt förval (hela bilden) gäller som förut.
         var o = ReelMotionPlanner.ClipOverride(); o.preset = .contain
         #expect(ReelMotionPlanner.plan([image("p", w: 3545, h: 5315)], frameAspect: vertical, overrides: ["p": o])[0].fit == .containBlur)

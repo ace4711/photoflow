@@ -32,13 +32,51 @@ struct ReelMotionPlannerTests {
         #expect(clip.motion.from.zoom == 1 && clip.motion.to.zoom == 1)
     }
 
-    @Test("Bred exteriör: contain-blur med svag zoom. Bred interiör panoreras")
-    func containBlurForWideExterior() {
+    @Test("Bred exteriör: cover med panorering över bredden i 9:16 och 1:1 (inte contain-blur); förvalet Hela bilden ger contain-blur")
+    func widePanForWideExterior() {
         let ext = image("e", s: 0.95, exterior: true)
+        for aspect in [vertical, 1.0] {
+            let clip = ReelMotionPlanner.plan([ext], frameAspect: aspect)[0]
+            #expect(clip.fit == .cover, "\(aspect)")
+            #expect(clip.motion.from.zoom == 1 && clip.motion.to.zoom == 1)
+            #expect(ReelMotionPlanner.kind(of: ext, frameAspect: aspect) == .pan)
+        }
+        // 9:16: en 3:2-bild visar 0,375; panoreringen täcker 0,5 av bredden på 4,0 s (första klippet).
         let clip = ReelMotionPlanner.plan([ext], frameAspect: vertical)[0]
-        #expect(clip.fit == .containBlur)
-        #expect(max(clip.motion.from.zoom, clip.motion.to.zoom) <= ReelMotionPlanner.containZoomAmount + 1e-9)
+        #expect(abs(abs(clip.motion.to.cx - clip.motion.from.cx) - ReelMotionPlanner.widePanTravel) < 1e-9)
+        #expect(clip.duration == ReelMotionPlanner.widePanEdgeDuration)
+        // Medelhastighet 0,125 och toppfart med easeInOut (1,5 ×) 0,1875 bildbredder/s: under taket 0,13 × 1,5.
+        let avg = ReelMotionPlanner.widePanTravel / clip.duration
+        #expect(abs(avg - 0.125) < 1e-9 && avg * 1.5 <= ReelMotionPlanner.widePanMaxPerSecond * 1.5 + 1e-9)
+        var peak = 0.0
+        for k in 0..<400 {
+            let p0 = Double(k) / 400, p1 = Double(k + 1) / 400
+            let dx = (ReelTimeline.easing(.easeInOut, p1) - ReelTimeline.easing(.easeInOut, p0)) * 0.5
+            peak = max(peak, dx / ((p1 - p0) * clip.duration))
+        }
+        #expect(peak < 0.1876 && peak > 0.18, "toppfart \(peak) bildbredder/s")
+        // I liggande ram är allt som förut (en 3:1-panorama i 16:9 blir contain-blur).
+        let tall = ReelMotionPlanner.Image(assetID: "t", width: 9000, height: 3000, focus: .init(x: 0.5, y: 0.5),
+                                           salientWidth: 0.95, isExterior: true)
+        #expect(ReelMotionPlanner.kind(of: tall, frameAspect: 16.0 / 9) == .containBlur)
+        // Fotografens förval "Hela bilden" ger fortfarande contain-blur.
+        var o = ReelMotionPlanner.ClipOverride(); o.preset = .contain
+        let forced = ReelMotionPlanner.plan([ext], frameAspect: vertical, overrides: ["e": o])[0]
+        #expect(forced.fit == .containBlur)
+        #expect(max(forced.motion.from.zoom, forced.motion.to.zoom) <= ReelMotionPlanner.containZoomAmount + 1e-9)
         #expect(ReelMotionPlanner.kind(of: image("i", s: 0.95, exterior: false), frameAspect: vertical) == .pan)
+    }
+
+    @Test("Bred utomhuspanorering blandas inte bort till zoom, och ingen bild blir automatiskt contain-blur i 9:16 och 1:1")
+    func noAutomaticContainBlur() {
+        let images = (0..<6).map { image("e\($0)", s: 0.95, exterior: true) } + [image("z", s: 0.3), image("i", s: 0.9)]
+        for aspect in [vertical, 1.0] {
+            let clips = ReelMotionPlanner.plan(images, frameAspect: aspect)
+            #expect(clips.allSatisfy { $0.fit != .containBlur })
+            for clip in clips where clip.asset.hasPrefix("e") {
+                #expect(abs(clip.motion.to.zoom - clip.motion.from.zoom) < 1e-9, "\(clip.asset) ska panorera, inte zooma")
+            }
+        }
     }
 
     @Test("Bred ram (16:9): ingenting att panorera, så motivet zoomas")
@@ -68,7 +106,8 @@ struct ReelMotionPlannerTests {
         for aspect in [vertical, 1.0, 16.0 / 9] {
             for clip in ReelMotionPlanner.plan(images, frameAspect: aspect) {
                 let pan = abs(clip.motion.to.cx - clip.motion.from.cx) / clip.duration
-                #expect(pan <= ReelMotionPlanner.maxPanPerSecond + 1e-9)
+                let limit = clip.asset == "d" && aspect <= 1.1 ? ReelMotionPlanner.widePanMaxPerSecond : ReelMotionPlanner.maxPanPerSecond
+                #expect(pan <= limit + 1e-9)
                 let zoom = pow(max(clip.motion.to.zoom, clip.motion.from.zoom) /
                                min(clip.motion.to.zoom, clip.motion.from.zoom), 1 / clip.duration) - 1
                 #expect(zoom <= ReelMotionPlanner.maxZoomPerSecond + 1e-9)
@@ -110,7 +149,8 @@ struct ReelMotionPlannerTests {
         #expect(clips.count == 5)
         #expect(clips[0].duration == 3.0)
         #expect(clips[0].transitionIn == nil)
-        for c in clips[1..<4] { #expect((2.4...2.8).contains(c.duration)) }
+        for c in clips[1..<3] { #expect((2.4...2.8).contains(c.duration)) }
+        #expect(clips[3].duration == ReelMotionPlanner.widePanDuration)   // bred utomhuspanorering är längre
         #expect((3.2...3.5).contains(clips[4].duration))
         for c in clips.dropFirst() {
             let d = c.transitionIn?.duration ?? 0

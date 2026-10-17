@@ -42,6 +42,18 @@ nonisolated enum ReelMotionPlanner {
     /// halvor efter varandra, alltså 2 × 1,8 = 3,6 s (en vanlig zoom är 2,5 s): varje halva hinner läsas
     /// utan att klippet blir en dödtid, och den interna skjutningen (0,4 s) ligger mellan dem.
     static let montageSegmentDuration = 1.8
+    /// Bred utomhusbild i ett stående eller kvadratiskt format (R6c, "panorering + kollage"): cover med en
+    /// långsam panorering i stället för contain-blur (som gav suddiga band på ca 70 % av 9:16-rutan).
+    /// En 3:2-bild visar 0,375 av bredden i 9:16, så hela vägen över är 0,625. Avvägning (mätt i
+    /// `ReelCollageTests`/`ReelMotionPlannerTests`): täck högst `widePanTravel` = 0,5 av bildbredden
+    /// (hela motivet syns över tiden, med fokus på motivets mitt) på 4,0 s i öppning/avslut och 3,8 s
+    /// annars, vilket ger medelhastigheten 0,125 bildbredder/s och med easeInOut (toppfart 1,5 ×) högst
+    /// 0,19 bildbredder/s, alltså ca 0,5 rutbredder/s: lugnt men märkbart. Taket `widePanMaxPerSecond`
+    /// (medel 0,13 mot vanliga 0,10) är den hastighet längden inte får överskrida.
+    static let widePanTravel = 0.5
+    static let widePanMaxPerSecond = 0.13
+    static let widePanDuration = 3.8
+    static let widePanEdgeDuration = 4.0
     /// Sista klippet rör sig lugnare: så stor andel av vanlig amplitud.
     static let closingMotionScale = 0.6
     /// Kollage (R6c): ingen panorering, bara en svag gemensam zoom 1,00 → 1,04 mot respektive motivs mitt,
@@ -219,6 +231,16 @@ nonisolated enum ReelMotionPlanner {
         }
     }
 
+    /// Är bilden en bred utomhusbild som i ett stående/kvadratiskt format panoreras över hela bredden (R6c)?
+    /// Det som tidigare blev contain-blur.
+    static func isWideExteriorPan(_ image: Image, frameAspect: Double) -> Bool {
+        guard image.isExterior, frameAspect <= collageFrameAspectRange.upperBound,
+              !(image.aspect < 1 && frameAspect < 1) else { return false }
+        let w = visibleWidth(imageAspect: image.aspect, frameAspect: frameAspect)
+        let s = image.focusWidth ?? image.salientWidth ?? 0.5
+        return s > w && w < wideSubject && s > wideSubject
+    }
+
     // MARK: - Kollage (R6c)
 
     /// Layouten ett automatiskt kollage får i en ram: stapel i stående format (9:16), sida vid sida i
@@ -260,7 +282,7 @@ nonisolated enum ReelMotionPlanner {
               suitsCollage(image, layout: layout) else { return false }
         if layout == .side { return true }
         let subject = image.focusWidth ?? image.salientWidth ?? 0.5
-        return kind(of: image, frameAspect: frameAspect) == .containBlur
+        return isWideExteriorPan(image, frameAspect: frameAspect)
             || subject > visibleWidth(imageAspect: image.aspect, frameAspect: frameAspect)
     }
 
@@ -329,7 +351,9 @@ nonisolated enum ReelMotionPlanner {
         // (2:3 i 9:16 visar 84 % av bredden). Chronas väg 7, DSC_9451: w = 0,844 låg just under
         // `wideSubject` (0,85), och den breda fasaden (0,93) blev contain-blur med stora suddiga band.
         if image.aspect < 1, frameAspect < 1 { return .zoom }
-        return image.isExterior ? .containBlur : .pan
+        // Contain-blur väljs inte längre automatiskt i stående och kvadratiska format: bred utomhusbild =
+        // panorering (`isWideExteriorPan`). I liggande format är allt som förut.
+        return image.isExterior && frameAspect > collageFrameAspectRange.upperBound ? .containBlur : .pan
     }
 
     // MARK: - Planering
@@ -376,7 +400,8 @@ nonisolated enum ReelMotionPlanner {
         var mixed = Set<Int>()
         // Smalaste motivet först: det vinner mest på att zoomas.
         let candidates = images.indices
-            .filter { result[$0] == .pan && !forced.contains($0) && !montage.contains($0) && !collage.contains($0) }
+            .filter { result[$0] == .pan && !forced.contains($0) && !montage.contains($0) && !collage.contains($0)
+                && !isWideExteriorPan(images[$0], frameAspect: frameAspect) }
             .sorted { (images[$0].focusWidth ?? images[$0].salientWidth ?? 1) < (images[$1].focusWidth ?? images[$1].salientWidth ?? 1) }
         for i in candidates where have < wanted {
             result[i] = .zoom
@@ -402,6 +427,8 @@ nonisolated enum ReelMotionPlanner {
         case subjectWider(subject: Double?, frame: Double)
         /// Bred exteriör (motiv över `wideSubject`): hela bilden med suddig bakgrund.
         case wideExterior(subject: Double?)
+        /// Bred utomhusbild i ett stående/kvadratiskt format: panorering över bredden i stället för contain-blur.
+        case wideExteriorPan(subject: Double?, frame: Double)
         /// Montage (två stående bilder sida vid sida) i en ram som är smalare än halvorna tillsammans:
         /// halvorna visas efter varandra, var och en fyller ramen. `frame` är ramens bildförhållande
         /// (bredd/höjd) och `whole` halvornas sammanlagda.
@@ -423,6 +450,7 @@ nonisolated enum ReelMotionPlanner {
             case .subjectFits, .narrowImage, .variation: return .zoom
             case .subjectWider: return .pan
             case .wideExterior: return .containBlur
+            case .wideExteriorPan: return .pan
             }
         }
 
@@ -446,6 +474,8 @@ nonisolated enum ReelMotionPlanner {
                 return "Montage: de två stående bilderna visas efter varandra (zoom på var och en), eftersom ramen (\(ratio(f))) är smalare än hela montaget (\(ratio(w)))"
             case .montageWhole(let f, let w, _):
                 return "Montage: ramen (\(ratio(f))) är bred nog för hela montaget (\(ratio(w))), så det visas som en vanlig bild"
+            case .wideExteriorPan(let s, let f):
+                return "Panorering: bred utomhusbild, \(subjectText(s)), ramen visar \(pct(f)); hela bredden syns över tiden i stället för suddiga band"
             case .collage(let layout, let pane, let rooms):
                 let how = layout == .stack ? "staplade" : "sida vid sida"
                 return "Kollage: \(rooms), båda ryms i \(ratioText(pane)) (två bilder \(how), svag gemensam zoom, ingen panorering)"
@@ -474,6 +504,9 @@ nonisolated enum ReelMotionPlanner {
             if d.montage.contains(i) { return .montageSequence(frame: frameAspect, whole: montageAspect(image)) }
             if montageAspect(image) > 0 { return .montageWhole(frame: frameAspect, whole: montageAspect(image), kind: d.kinds[i]) }
             if d.mixed.contains(i) { return .variation(subject: subject, frame: frame) }
+            if isWideExteriorPan(image, frameAspect: frameAspect), d.kinds[i] == .pan {
+                return .wideExteriorPan(subject: subject, frame: frame)
+            }
             switch d.kinds[i] {
             case .containBlur: return .wideExterior(subject: subject)
             case .pan: return .subjectWider(subject: subject, frame: frame)
@@ -519,9 +552,11 @@ nonisolated enum ReelMotionPlanner {
             let kind = kinds[i]
             var override = overrides[image.assetID] ?? ClipOverride()
             override.preset = override.effectivePreset
-            let autoDuration = (isFirst ? firstDuration : (isLast ? lastDuration : baseDuration(kind))) * tempo.factor
+            let widePan = kind == .pan && isWideExteriorPan(image, frameAspect: frameAspect)
+            var autoDuration = (isFirst ? firstDuration : (isLast ? lastDuration : baseDuration(kind))) * tempo.factor
+            if widePan { autoDuration = max(autoDuration, (isFirst || isLast ? widePanEdgeDuration : widePanDuration) * tempo.factor) }
             let duration = override.duration ?? autoDuration
-            let scale = isLast ? closingMotionScale : 1.0
+            let scale = isLast && !widePan ? closingMotionScale : 1.0
             let focus = image.focus ?? .init(x: 0.5, y: 0.5)
 
             var fit = ReelSpec.Fit.cover
@@ -624,8 +659,8 @@ nonisolated enum ReelMotionPlanner {
                 case .pan:
                     let w = visibleWidth(imageAspect: image.aspect, frameAspect: frameAspect)
                     let s = image.salientWidth ?? 1
-                    let cap = maxPanPerSecond * duration * scale
-                    let travel = min(cap, max(s - w, minPanTravel * scale))
+                    let cap = (widePan ? widePanMaxPerSecond : maxPanPerSecond) * duration * scale
+                    let travel = widePan ? min(cap, widePanTravel) : min(cap, max(s - w, minPanTravel * scale))
                     let sign: Double
                     switch override.preset {
                     case .panRight: sign = 1

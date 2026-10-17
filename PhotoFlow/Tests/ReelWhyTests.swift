@@ -59,7 +59,7 @@ struct ReelWhyTests {
         // 3:2-bild i 9:16: ramen visar 0,5625 / 1,5 = 37,5 % av bredden.
         #expect(reasons[0].text == "Panorering: motivet (62 % av bredden) är bredare än ramen (38 %)")
         #expect(reasons[1].text == "Zoom: motivet (30 % av bredden) ryms i ramen (38 %)")
-        #expect(reasons[2].text == "Hela bilden: bred exteriör, motivet (95 % av bredden)")
+        #expect(reasons[2].text == "Panorering: bred utomhusbild, motivet (95 % av bredden), ramen visar 38 %; hela bredden syns över tiden i stället för suddiga band")
         let narrow = ReelMotionPlanner.motionReasons([image("p", s: 0.95, w: 3000, h: 5000)], frameAspect: vertical)
         #expect(narrow == [.narrowImage(frame: 0.9375)])
         #expect(narrow[0].text.hasPrefix("Zoom: ramen visar nästan hela bildens bredd (94 %)"))
@@ -129,7 +129,7 @@ struct ReelWhyTests {
         #expect(s.lockedChoices == 0)
         #expect(s.rows.map(\.room) == ["Fasad", "Vardagsrum", "Kök", "Sovrum"])
         #expect(s.rows[0].transition == nil)
-        #expect(s.rows[0].motion == "Hela bilden")
+        #expect(s.rows[0].motion.hasPrefix("Panorering"))
         #expect(s.rows.dropFirst().allSatisfy { $0.transition != nil })
         #expect(s.rows.allSatisfy { !$0.locked })
         // Rörelsen läses ur nycklarna: samma typ som planeraren valde.
