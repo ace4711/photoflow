@@ -14,7 +14,11 @@
 //    ett aktivt val; då släpps uteslutningen (op "unexclude"), som Swift `togglePinned`.
 //    Tar mäklaren bort en pinnad bild (`pinnedAssets`) släpps pinningen i samma ändring
 //    (op "unpin"), så att filmen och metadatan säger samma sak och fotografens nästa
-//    "Föreslå igen" inte tyst lägger tillbaka bilden. editor.ts frågar först.
+//    "Föreslå igen" inte tvingar tillbaka bilden (den kan ändå väljas automatiskt; den
+//    utesluts inte). editor.ts frågar först (`removalWarning`).
+//  - Borttagning: ett borttaget klipps lås (egen rörelse, låst övergång och längd,
+//    pinning) sparas under sessionen i `RemovedClips`, så att `addClip` av samma bild
+//    återställer dem i stället för att planera ett nytt klipp.
 //
 // Funktionerna ändrar `spec` på plats och returnerar de op-namn som ska loggas i
 // provenance.edits.
@@ -149,15 +153,51 @@ export function moveClip(spec: ReelSpec, from: number, to: number, frameAspect: 
 }
 
 /**
- * Tar bort klipp `i`. Var bilden pinnad av fotografen släpps pinningen (op "unpin"),
- * annars skulle nästa "Föreslå igen" i Mac-appen lägga tillbaka den utan att någon ser
- * varför. Anroparen ska ha frågat mäklaren först (`isPinned`).
+ * Borttagna klipp under sessionen (asset-id → klippet som det var, och om bilden var
+ * pinnad). Lever bara i webbläsaren; `addClip` återställer fotografens lås ur den.
  */
-export function removeClip(spec: ReelSpec, i: number, frameAspect: number): string[] {
+export type RemovedClips = Map<string, { clip: Clip; pinned: boolean }>;
+
+/** Om klippet bär något av fotografens lås som en borttagning skulle ta bort. */
+function hasPhotographerLock(spec: ReelSpec, c: Clip): boolean {
+  return isCustom(c) || c.transitionLocked === true || isPinned(spec, c);
+}
+
+/**
+ * Text för bekräftelsen innan klipp `i` tas bort, eller null om klippet inte bär något
+ * av fotografens lås (pinning, egen rörelse, låst övergång).
+ */
+export function removalWarning(spec: ReelSpec, i: number): string | null {
+  const c = spec.timeline[i];
+  if (!c || !hasPhotographerLock(spec, c)) return null;
+  const what: string[] = [];
+  const pinned = isPinned(spec, c);
+  if (pinned) what.push("låst bilden så att den alltid är med");
+  if (isCustom(c)) what.push("gjort en egen rörelse för bilden");
+  if (c.transitionLocked === true) what.push("valt övergången till bilden");
+  const list = what.length > 1 ? `${what.slice(0, -1).join(", ")} och ${what[what.length - 1]}` : what[0];
+  let text = `Fotografen har ${list}. Ta bort den ändå? Lägger du tillbaka bilden innan du lämnar sidan återställs fotografens val.`;
+  const lost: string[] = [];
+  if (isCustom(c)) lost.push("den egna rörelsen");
+  if (c.transitionLocked === true) lost.push("den valda övergången");
+  if (lost.length) text += ` Annars försvinner ${lost.join(" och ")} ur filmen när du sparar.`;
+  if (pinned) text += " Låsningen släpps, så bilden är inte längre garanterad en plats vid ett nytt förslag.";
+  return text;
+}
+
+/**
+ * Tar bort klipp `i`. Var bilden pinnad av fotografen släpps pinningen (op "unpin"),
+ * annars skulle nästa "Föreslå igen" i Mac-appen tvinga tillbaka den utan att någon ser
+ * varför. Klippet sparas i `removed` så att ett nytt tillägg av bilden återställer
+ * fotografens lås. Anroparen ska ha frågat mäklaren först (`removalWarning`).
+ */
+export function removeClip(spec: ReelSpec, i: number, frameAspect: number, removed?: RemovedClips): string[] {
   if (i < 0 || i >= spec.timeline.length) return [];
   if (spec.timeline.length <= 1) throw new RegiError("Filmen måste ha minst ett klipp.");
   const before = roles(spec);
+  const pinned = isPinned(spec, spec.timeline[i]);
   const [c] = spec.timeline.splice(i, 1);
+  removed?.set(c.asset, { clip: structuredClone(c), pinned });
   const ops = ["remove"];
   const a = assetOf(spec, c.asset);
   if (a && dropFromEditor(spec, "pinnedAssets", a.sha256)) ops.push("unpin");
@@ -173,8 +213,13 @@ export function canAddMore(spec: ReelSpec): boolean {
  * Lägger till bilden sist. Högst `MAX_CLIPS` klipp (en film med fler pinnade bilder
  * går att läsa in, men inte att växa). En utesluten bild kräver `allowExcluded`
  * (mäklarens aktiva val); uteslutningen släpps då (op "unexclude").
+ * Togs bilden bort tidigare under sessionen (`removed`) återställs fotografens lås:
+ * egen rörelse (fit, motion), låst övergång, låst längd och pinning (op "pin").
  */
-export function addClip(spec: ReelSpec, assetId: string, frameAspect: number, opts: { allowExcluded?: boolean } = {}): string[] {
+export function addClip(
+  spec: ReelSpec, assetId: string, frameAspect: number,
+  opts: { allowExcluded?: boolean; removed?: RemovedClips } = {},
+): string[] {
   const asset = assetOf(spec, assetId);
   if (!asset) throw new RegiError("Bilden finns inte i filmen.");
   if (spec.timeline.some((c) => c.asset === assetId)) throw new RegiError("Bilden är redan med i filmen.");
@@ -187,8 +232,28 @@ export function addClip(spec: ReelSpec, assetId: string, frameAspect: number, op
   }
   const before = roles(spec);
   const index = spec.timeline.length;
-  const p = planClip({ asset, frameAspect, preset: "auto", index, count: index + 1, tempo: tempoFactor(spec.editor?.tempo) });
+  const tempo = tempoFactor(spec.editor?.tempo);
+  const p = planClip({ asset, frameAspect, preset: "auto", index, count: index + 1, tempo });
   const clip: Clip = { asset: assetId, ...p };
+  const old = opts.removed?.get(assetId);
+  if (old) {
+    opts.removed!.delete(assetId);
+    const o = old.clip;
+    if (isCustom(o)) {
+      clip.fit = o.fit; clip.motion = structuredClone(o.motion); clip.motionPreset = CUSTOM;
+      clip.duration = automaticDuration(customKind(o), index, index + 1, tempo);
+    }
+    if (o.durationLocked === true) { clip.duration = o.duration; clip.durationLocked = true; }
+    if (o.transitionLocked === true) {
+      clip.transitionLocked = true;
+      if (o.transitionIn) clip.transitionIn = structuredClone(o.transitionIn);
+    }
+    if (old.pinned && !isPinned(spec, clip)) {
+      spec.editor ??= {};
+      spec.editor.pinnedAssets = [...strings(spec.editor.pinnedAssets), asset.sha256];
+      ops.push("pin");
+    }
+  }
   spec.timeline.push(clip);
   before.set(clip, roleOf(index, index + 1)); // redan planerat för sin plats
   retime(spec, frameAspect, before);
@@ -244,6 +309,11 @@ export interface ClipLocks {
   pinned: boolean;
   /** Övergången in till klippet ("Mjuk tona 0,5 s"), null för första klippet utan låst övergång. */
   transition: string | null;
+  /**
+   * Raden som visas för mäklaren: "In: Mjuk tona 0,5 s", eller för ett första klipp med
+   * låst övergång en text som säger att den inte spelas där (filmen börjar utan övergång).
+   */
+  transitionText: string | null;
 }
 
 const sv = (n: number): string => n.toFixed(1).replace(".", ",");
@@ -257,14 +327,24 @@ export function clipLocks(spec: ReelSpec, i: number): ClipLocks {
     transition = t.type === "cut" ? transitionLabel(t) : `${transitionLabel(t)} ${sv(t.duration)} s`;
     if (locked && !c.transitionIn) transition += " (filmens standard)";
   }
+  const transitionText = transition === null ? null
+    : i > 0 ? `In: ${transition}`
+    : `Låst övergång: ${transition}. Används inte på första klippet, bara om klippet flyttas.`;
   return {
     customMotion: isCustom(c),
     durationLocked: c.durationLocked === true,
     transitionLocked: locked,
     pinned: isPinned(spec, c),
     transition,
+    transitionText,
   };
 }
+
+/** Märket för låst längd: synlig text (läses av skärmläsare, syns på pekskärm) och förklaring. */
+export const DURATION_LOCK = {
+  text: "Låst längd",
+  explanation: "Längden är låst och räknas inte om automatiskt när filmen ändras.",
+} as const;
 
 /** Rader om filmen i stort som fotografen bestämt (tempo, låst ordning). */
 export function filmLocks(spec: ReelSpec): string[] {

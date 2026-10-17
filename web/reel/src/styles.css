@@ -71,7 +71,10 @@ input[type=url], input[type=text], select, input[type=number] {
 /* Fotografens lås: visas, men går inte att redigera här (övergångar, egna rörelser). */
 .lock { display: inline-flex; align-items: center; gap: 4px; font-size: .75rem; line-height: 1.2; color: var(--warn);
   background: var(--warn-bg); border-radius: 99px; padding: 2px 8px; white-space: nowrap; vertical-align: middle; }
-.lock.icon-only { padding: 4px; margin-left: 2px; }
+button.lock { border: 0; font: inherit; font-size: .75rem; cursor: help; }
+.dur .lock { margin-left: 4px; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .lock-icon { width: 12px; height: 12px; flex: none; }
 .info .lock { margin-top: 4px; }
 .info .trans { font-size: .8rem; color: var(--muted); margin-top: 2px; }

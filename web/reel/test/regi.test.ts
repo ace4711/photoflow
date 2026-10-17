@@ -1,6 +1,9 @@
 // R5: webben respekterar fotografens lås (custom, transitionLocked, durationLocked,
 // editor {pinnedAssets, excludedAssets, orderLocked, tempo}). Fixturen
-// test/fixtures/reel-locks-v1.json ska också kunna läsas av ett Swift-test.
+// test/fixtures/reel-locks-v1.json är handskriven efter Swift-kodningen i ReelSpec.swift.
+// Inget Swift-test läser den än: rundturen här är TS → JSON → TS, och testet
+// "fixturen följer Swift-kodningen" kontrollerar bara reglerna för hur Swift skriver
+// låsen. Ett rundturstest Swift ↔ TS (plan R5) återstår tills Swift-filerna är lediga.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -45,7 +48,7 @@ test("rundtur: alla nya fält bevaras genom parse → editedCopy → sortKeys �
   assert.deepEqual(approved.timeline, original.timeline);
 });
 
-test("rundtur: fixturen har alla låsfält (så att Swift-testet täcker dem)", () => {
+test("rundtur: fixturen har alla låsfält", () => {
   const s = load();
   assert.equal(byAsset(s, "a2").motionPreset, CUSTOM);
   assert.equal(byAsset(s, "a2").transitionLocked, true);
@@ -296,14 +299,106 @@ test("felaktigt editor-objekt kraschar inte", () => {
 
 test("lås beskrivs för mäklaren", () => {
   const s = load();
-  assert.deepEqual(regi.clipLocks(s, 0), { customMotion: false, durationLocked: false, transitionLocked: false, pinned: false, transition: null });
-  assert.deepEqual(regi.clipLocks(s, 1), { customMotion: true, durationLocked: false, transitionLocked: true, pinned: false, transition: "Hårt klipp" });
+  assert.deepEqual(regi.clipLocks(s, 0), {
+    customMotion: false, durationLocked: false, transitionLocked: false, pinned: false, transition: null, transitionText: null,
+  });
+  assert.deepEqual(regi.clipLocks(s, 1), {
+    customMotion: true, durationLocked: false, transitionLocked: true, pinned: false, transition: "Hårt klipp", transitionText: "In: Hårt klipp",
+  });
   assert.deepEqual(regi.clipLocks(s, 2), {
     customMotion: false, durationLocked: true, transitionLocked: true, pinned: true, transition: "Mjuk tona 0,5 s (filmens standard)",
+    transitionText: "In: Mjuk tona 0,5 s (filmens standard)",
   });
   assert.equal(regi.clipLocks(s, 4).transition, "Mjuk tona 0,6 s");
   assert.deepEqual(regi.filmLocks(s), ["Tempo: lugnt", "Ordningen är låst för nya förslag"]);
   delete s.editor;
   assert.deepEqual(regi.filmLocks(s), []);
   assert.equal(regi.LOCKED_BY_PHOTOGRAPHER, "Låst av fotografen");
+});
+
+// ------------------------------------------------------------ granskningsfynd R5
+
+test("fixturen följer Swift-kodningen av låsen (nil skrivs inte, editor normaliserad)", () => {
+  const j = JSON.parse(raw);
+  j.timeline.forEach((c: Record<string, unknown>, i: number) => {
+    for (const k of ["durationLocked", "transitionLocked"]) {
+      assert.ok(!(k in c) || c[k] === true || c[k] === false, `${k} på klipp ${i} är Bool eller saknas`);
+      assert.notEqual(c[k], null, `${k} skrivs inte som null`);
+    }
+    assert.notEqual(c.transitionIn, null, "transitionIn utelämnas i stället för null");
+    assert.notEqual(c.motionPreset, null);
+  });
+  const e = j.editor as Record<string, unknown>;
+  for (const k of ["pinnedAssets", "excludedAssets"]) {
+    assert.ok(!(k in e) || (Array.isArray(e[k]) && (e[k] as unknown[]).length > 0), `${k} tom lista skrivs inte`);
+  }
+  assert.ok(!("orderLocked" in e) || e.orderLocked === true, "orderLocked skrivs bara som true");
+  assert.ok(!("tempo" in e) || e.tempo !== "normal", "tempo normal skrivs inte");
+  // Testnamnen påstår inte en Swift-täckning som inte finns.
+  const src = readFileSync(fileURLToPath(import.meta.url), "utf8");
+  assert.equal(/så att Swift-testet täcker/.test(src.replace(/assert[^\n]*Swift-testet[^\n]*/g, "")), false);
+});
+
+test("första klippet med låst övergång visas inte som en övergång in", () => {
+  const s = load();
+  regi.moveClip(s, 1, 0, ASPECT); // a2 (låst cut) först
+  const l = regi.clipLocks(s, 0);
+  assert.equal(l.transitionLocked, true, "låset syns fortfarande");
+  assert.ok(l.transitionText && !l.transitionText.startsWith("In:"), `första klippet: ${l.transitionText}`);
+  assert.match(l.transitionText!, /används inte på första klippet/i);
+  assert.match(l.transitionText!, /Hårt klipp/);
+  const t = load();
+  regi.moveClip(t, 2, 0, ASPECT); // a3 (låst standardövergång) först
+  assert.match(regi.clipLocks(t, 0).transitionText!, /^Låst övergång: Mjuk tona 0,5 s \(filmens standard\)\. Används inte/);
+  assert.equal(regi.clipLocks(t, 1).transitionText?.startsWith("In: "), true);
+});
+
+test("borttagning av custom/låst övergång varnar, och tillägg av samma bild återställer låsen", () => {
+  const s = load();
+  const i = s.timeline.findIndex((c) => c.asset === "a2");
+  const a2 = structuredClone(s.timeline[i]);
+  const w = regi.removalWarning(s, i);
+  assert.ok(w, "varning för custom och låst övergång även utan pinning");
+  assert.match(w!, /egen rörelse/);
+  assert.match(w!, /övergång/);
+  assert.equal(regi.removalWarning(s, 0), null, "olåst klipp: ingen varning");
+  const removed: regi.RemovedClips = new Map();
+  assert.deepEqual(regi.removeClip(s, i, ASPECT, removed), ["remove"]);
+  assert.deepEqual(regi.addClip(s, "a2", ASPECT, { removed }), ["add"]);
+  const back = byAsset(s, "a2");
+  assert.equal(back.motionPreset, CUSTOM);
+  assert.equal(back.fit, a2.fit);
+  assert.deepEqual(back.motion, a2.motion);
+  assert.equal(back.transitionLocked, true);
+  assert.deepEqual(back.transitionIn, { type: "cut", duration: 0 });
+  assert.equal(removed.size, 0);
+});
+
+test("pinnad bild: varningen lovar inte att bilden aldrig kommer tillbaka, och tillägg pinnar igen", () => {
+  const s = load();
+  const i = s.timeline.findIndex((c) => c.asset === "a3");
+  const w = regi.removalWarning(s, i)!;
+  assert.doesNotMatch(w, /kommer inte tillbaka/);
+  assert.match(w, /inte längre garanterad/);
+  assert.match(w, /övergång/, "a3 har även låst övergång");
+  const removed: regi.RemovedClips = new Map();
+  assert.deepEqual(regi.removeClip(s, i, ASPECT, removed), ["remove", "unpin"]);
+  assert.equal(s.editor?.excludedAssets?.includes(s.assets.find((a) => a.id === "a3")!.sha256), false,
+    "bilden utesluts inte, så den kan väljas igen");
+  assert.deepEqual(regi.addClip(s, "a3", ASPECT, { removed }), ["add", "pin"]);
+  const back = byAsset(s, "a3");
+  assert.equal(regi.isPinned(s, back), true);
+  assert.equal(back.durationLocked, true);
+  assert.equal(back.duration, 4);
+  assert.equal(back.transitionLocked, true);
+  assert.equal(back.transitionIn, undefined);
+});
+
+test("låst längd har synlig text, inte bara en ikon", () => {
+  assert.equal(regi.DURATION_LOCK.text, "Låst längd");
+  assert.match(regi.DURATION_LOCK.explanation, /räknas inte om/);
+  const src = readFileSync(join(here, "../src/editor.ts"), "utf8");
+  assert.equal(/icon-only/.test(src), false, "inget märke med bara ikon");
+  assert.equal(/setAttribute\("aria-label", (title|l\.title)\)/.test(src), false, "ingen aria-label på span utan roll");
+  assert.match(src, /sr-only/);
 });

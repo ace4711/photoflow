@@ -33,6 +33,8 @@ let time = 0;
 let playing = false;
 let playStartedAt = 0;
 let pendingOps: string[] = [];
+/** Klipp som tagits bort under sessionen, så att ett nytt tillägg återställer fotografens lås. */
+const removed: regi.RemovedClips = new Map();
 let sizeW = 540, sizeH = 960;
 
 /** Mäklarläge (token i fragmentet). `null` i det lokala reservläget. */
@@ -105,7 +107,7 @@ function reset(): void {
   stop();
   for (const i of images.values()) (i as ImageBitmap).close?.();
   images.clear(); thumbs.clear(); fileNames.clear();
-  spec = null; selected = 0; time = 0; pendingOps = [];
+  spec = null; selected = 0; time = 0; pendingOps = []; removed.clear();
   if (share?.poll) clearInterval(share.poll);
 }
 
@@ -264,13 +266,12 @@ function moveClip(from: number, to: number): void {
 
 function removeClip(i: number): void {
   if (!spec) return;
-  const clip = spec.timeline[i];
-  if (clip && spec.timeline.length > 1 && regi.isPinned(spec, clip) &&
-      !confirm("Fotografen har låst bilden så att den alltid är med. Ta bort den ändå? Låsningen släpps då, så bilden kommer inte tillbaka vid ett nytt förslag.")) return;
-  const ops = attempt(() => regi.removeClip(spec!, i, frameAspect()));
+  const warning = spec.timeline.length > 1 ? regi.removalWarning(spec, i) : null;
+  if (warning && !confirm(warning)) return;
+  const ops = attempt(() => regi.removeClip(spec!, i, frameAspect(), removed));
   if (!ops) return;
   changed(ops);
-  if (ops.includes("unpin")) message("Bilden togs bort och fotografens låsning av den släpptes.");
+  if (warning) message("Bilden togs bort. Lägg tillbaka den under Fler bilder för att återställa fotografens val.");
 }
 
 function setDuration(i: number, d: number): void {
@@ -297,8 +298,10 @@ async function addClip(assetId: string): Promise<void> {
   if (excluded && regi.canAddMore(spec) &&
       !confirm("Fotografen har uteslutit bilden ur filmen. Lägga till den ändå? Uteslutningen släpps då.")) return;
   if (share) await ensureFull(assetId);
-  const ops = attempt(() => regi.addClip(spec!, assetId, frameAspect(), { allowExcluded: excluded }));
+  const restores = removed.has(assetId);
+  const ops = attempt(() => regi.addClip(spec!, assetId, frameAspect(), { allowExcluded: excluded, removed }));
   if (!ops) return;
+  if (restores) message("Bilden lades tillbaka med de val den hade.");
   const index = spec.timeline.length - 1;
   selected = index;
   changed(ops);
@@ -369,12 +372,17 @@ function lockIcon(): SVGSVGElement {
   return svg;
 }
 
-/** Låsmärke: ikon och text, med en förklaring i title och för skärmläsare. */
-function lockBadge(text: string, title: string): HTMLElement {
-  const b = el("span", "lock");
-  b.title = title;
-  b.setAttribute("aria-label", title);
-  b.append(lockIcon(), el("span", undefined, text));
+/**
+ * Låsmärke: ikon och synlig text. Förklaringen finns som dold text för skärmläsare och
+ * i title; märket är en knapp så att ett tryck (pekskärm, där title aldrig syns) visar
+ * förklaringen i meddelanderaden.
+ */
+function lockBadge(text: string, explanation: string): HTMLElement {
+  const b = el("button", "lock");
+  b.type = "button";
+  b.title = explanation;
+  b.append(lockIcon(), el("span", undefined, text), el("span", "sr-only", `. ${explanation}`));
+  b.addEventListener("click", () => message(explanation));
   return b;
 }
 
@@ -394,8 +402,8 @@ function renderStrip(): void {
     info.append(el("div", "name", `${i + 1}. ${asset.analysis?.room ?? asset.id}`),
       el("div", "sub", fileNames.get(clip.asset) ?? "bilden saknas"));
     // Övergången in visas men går inte att ändra här (fotografen styr övergångar i Mac-appen).
-    if (locks.transition) {
-      const t = el("div", "trans", `In: ${locks.transition}`);
+    if (locks.transitionText) {
+      const t = el("div", "trans", locks.transitionText);
       if (locks.transitionLocked) {
         t.append(" ", lockBadge(LOCKED_BY_PHOTOGRAPHER, "Övergången är vald av fotografen och följer med klippet."));
       }
@@ -436,11 +444,7 @@ function renderStrip(): void {
     input.addEventListener("change", () => setDuration(i, parseFloat(input.value.replace(",", "."))));
     dur.append(minus, input, el("span", "muted", "s"), plus);
     if (locks.durationLocked) {
-      const l = el("span", "lock icon-only");
-      l.title = "Längden är låst och räknas inte om automatiskt.";
-      l.setAttribute("aria-label", l.title);
-      l.append(lockIcon());
-      dur.append(l);
+      dur.append(lockBadge(regi.DURATION_LOCK.text, regi.DURATION_LOCK.explanation));
     }
 
     const up = el("button", "btn small", "↑"); up.setAttribute("aria-label", "Flytta upp"); up.disabled = i === 0;
