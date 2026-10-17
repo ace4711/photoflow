@@ -71,6 +71,11 @@ nonisolated enum ReelMotionPlanner {
     /// Fotografens förval av rörelse per bild.
     nonisolated enum Preset: String, Sendable, CaseIterable, Equatable {
         case auto, zoomIn, zoomOut, panRight, panLeft, contain
+        /// Start/slut dragna för hand (`ClipOverride.custom`). Inget menyval: se `selectableCases`.
+        case custom
+
+        /// Förvalen som visas i menyn (alla utom `custom`, som bara uppstår av direktmanipulation).
+        static var selectableCases: [Preset] { allCases.filter { $0 != .custom } }
 
         var label: String {
             switch self {
@@ -80,15 +85,49 @@ nonisolated enum ReelMotionPlanner {
             case .panRight: return "Panorera →"
             case .panLeft: return "Panorera ←"
             case .contain: return "Hela bilden (contain)"
+            case .custom: return "Egen rörelse"
             }
         }
     }
 
+    /// Filmens tempo: faktor på de *automatiska* längderna (låsta längder påverkas inte).
+    nonisolated enum Tempo: String, Sendable, CaseIterable, Equatable {
+        case calm, normal, fast
+
+        var factor: Double {
+            switch self {
+            case .calm: return 1.2
+            case .normal: return 1.0
+            case .fast: return 0.85
+            }
+        }
+
+        /// Ur `ReelSpec.EditorState.tempo`; okänt eller saknat värde = normal.
+        init(editorValue: String?) { self = editorValue.flatMap(Tempo.init(rawValue:)) ?? .normal }
+    }
+
+    /// Fotografens egna start/slut för ett klipp (`motionPreset == "custom"`).
+    nonisolated struct CustomMotion: Sendable, Equatable {
+        var fit: ReelSpec.Fit
+        var motion: ReelSpec.Motion
+    }
+
     /// Fotografens ändringar för ett klipp. `duration` nil = automatisk längd.
+    /// Övergången är låst när `transitionLocked`: `transition` används då som den är, och nil
+    /// betyder "filmens `style.defaultTransition`" (skrivs som `transitionIn == nil`).
+    /// `custom` används bara när `preset == .custom`; saknas det behandlas klippet som automatiskt.
     nonisolated struct ClipOverride: Sendable, Equatable {
         var preset: Preset = .auto
         var duration: Double?
-        var isDefault: Bool { preset == .auto && duration == nil }
+        var transitionLocked = false
+        var transition: ReelSpec.Transition?
+        var custom: CustomMotion?
+        var isDefault: Bool {
+            preset == .auto && duration == nil && !transitionLocked && custom == nil
+        }
+
+        /// `.custom` utan rörelse är ett förval som inte går att utföra: räkna som automatiskt.
+        var effectivePreset: Preset { preset == .custom && custom == nil ? .auto : preset }
     }
 
     // MARK: - Val av rörelsetyp
@@ -110,8 +149,11 @@ nonisolated enum ReelMotionPlanner {
         var result = images.map { kind(of: $0, frameAspect: frameAspect) }
         var forced = Set<Int>()
         for (i, image) in images.enumerated() {
-            switch overrides[image.assetID]?.preset ?? .auto {
+            switch overrides[image.assetID]?.effectivePreset ?? .auto {
             case .auto: break
+            case .custom:
+                if let c = overrides[image.assetID]?.custom { result[i] = customKind(c) }
+                forced.insert(i)
             case .zoomIn, .zoomOut: result[i] = .zoom; forced.insert(i)
             case .panRight, .panLeft: result[i] = .pan; forced.insert(i)
             case .contain: result[i] = .containBlur; forced.insert(i)
@@ -131,7 +173,22 @@ nonisolated enum ReelMotionPlanner {
         return result
     }
 
-    static func plan(_ images: [Image], frameAspect: Double, overrides: [String: ClipOverride] = [:]) -> [ReelSpec.Clip] {
+    /// Vilken sorts rörelse en egen rörelse är (styr grundlängd och zoomandelen): contain-blur,
+    /// sidledsrörelse utan zoom = panorering, annars zoom.
+    static func customKind(_ c: CustomMotion) -> Kind {
+        if c.fit == .containBlur { return .containBlur }
+        let dx = abs(c.motion.to.cx - c.motion.from.cx), dz = abs(c.motion.to.zoom - c.motion.from.zoom)
+        return dx > 0.05 && dz < 0.05 ? .pan : .zoom
+    }
+
+    /// Planerar alla klipp. Låsta val (`overrides`) respekteras: förval, längd, övergång och egen
+    /// rörelse. Automatiska klipp runt ett låst klipp får sin rytm som vanligt; ett klipp med egen
+    /// rörelse räknas som det den faktiskt är i alterneringen (nästa automatiska zoom går åt andra
+    /// hållet, nästa automatiska panorering åt andra hållet, och en push efter det följer dess
+    /// sidledsriktning). De uttryckliga förvalen (zoomIn m.fl.) alternerar som förut inte.
+    /// `tempo` skalar bara automatiska längder.
+    static func plan(_ images: [Image], frameAspect: Double, overrides: [String: ClipOverride] = [:],
+                     tempo: Tempo = .normal) -> [ReelSpec.Clip] {
         var clips: [ReelSpec.Clip] = []
         var zoomIn = true            // alterneras mellan zoom-/contain-klipp
         var panRight = true          // alterneras mellan panoreringar
@@ -141,8 +198,9 @@ nonisolated enum ReelMotionPlanner {
         for (i, image) in images.enumerated() {
             let isFirst = i == 0, isLast = i == images.count - 1 && images.count > 1
             let kind = kinds[i]
-            let override = overrides[image.assetID] ?? ClipOverride()
-            let autoDuration = isFirst ? firstDuration : (isLast ? lastDuration : baseDuration(kind))
+            var override = overrides[image.assetID] ?? ClipOverride()
+            override.preset = override.effectivePreset
+            let autoDuration = (isFirst ? firstDuration : (isLast ? lastDuration : baseDuration(kind))) * tempo.factor
             let duration = override.duration ?? autoDuration
             let scale = isLast ? closingMotionScale : 1.0
             let focus = image.focus ?? .init(x: 0.5, y: 0.5)
@@ -151,42 +209,57 @@ nonisolated enum ReelMotionPlanner {
             var motion: ReelSpec.Motion
             var panSign = 0.0
 
-            switch kind {
-            case .zoom, .containBlur:
-                fit = kind == .zoom ? .cover : .containBlur
-                let amount = kind == .zoom ? zoomAmount : containZoomAmount
-                let end = endZoom(amount: amount, scale: scale, duration: duration)
-                let goIn: Bool
-                switch override.preset {
-                case .zoomIn: goIn = true
-                case .zoomOut: goIn = false
-                default: goIn = zoomIn; zoomIn.toggle()
+            if override.preset == .custom, let custom = override.custom {
+                // Egen rörelse: behåll fit och nycklar, klampa mittpunkt (och zoom ≥ 1) mot formatet.
+                fit = custom.fit
+                motion = .init(from: customKey(image, frameAspect, fit, custom.motion.from),
+                               to: customKey(image, frameAspect, fit, custom.motion.to))
+                let dx = motion.to.cx - motion.from.cx
+                panSign = abs(dx) > 0.02 ? (dx > 0 ? 1 : -1) : 0
+                if customKind(custom) == .pan { panRight = dx < 0 }
+                else { zoomIn = motion.to.zoom < motion.from.zoom }
+            } else {
+                switch kind {
+                case .zoom, .containBlur:
+                    fit = kind == .zoom ? .cover : .containBlur
+                    let amount = kind == .zoom ? zoomAmount : containZoomAmount
+                    let end = endZoom(amount: amount, scale: scale, duration: duration)
+                    let goIn: Bool
+                    switch override.preset {
+                    case .zoomIn: goIn = true
+                    case .zoomOut: goIn = false
+                    default: goIn = zoomIn; zoomIn.toggle()
+                    }
+                    let (z0, z1) = goIn ? (1.0, end) : (end, 1.0)
+                    // Litet drift i sidled under zoomen (bara för cover; contain-blur står still).
+                    let drift = kind == .zoom ? 0.01 * (panRight ? 1 : -1) : 0
+                    let from = key(image, frameAspect, fit, cx: focus.x - drift, cy: focus.y, zoom: z0)
+                    let to = key(image, frameAspect, fit, cx: focus.x + drift, cy: focus.y, zoom: z1)
+                    motion = .init(from: from, to: to)
+                case .pan:
+                    let w = visibleWidth(imageAspect: image.aspect, frameAspect: frameAspect)
+                    let s = image.salientWidth ?? 1
+                    let cap = maxPanPerSecond * duration * scale
+                    let travel = min(cap, max(s - w, minPanTravel * scale))
+                    let sign: Double
+                    switch override.preset {
+                    case .panRight: sign = 1
+                    case .panLeft: sign = -1
+                    default: sign = panRight ? 1 : -1; panRight.toggle()
+                    }
+                    let (a, b) = panRange(image, frameAspect, centerX: focus.x, travel: travel, sign: sign)
+                    let y = clampedCenter(image, frameAspect, fit, cx: focus.x, cy: focus.y, zoom: 1).y
+                    motion = .init(from: .init(cx: a, cy: y, zoom: 1), to: .init(cx: b, cy: y, zoom: 1))
+                    panSign = b == a ? 0 : (b > a ? 1 : -1)
                 }
-                let (z0, z1) = goIn ? (1.0, end) : (end, 1.0)
-                // Litet drift i sidled under zoomen (bara för cover; contain-blur står still).
-                let drift = kind == .zoom ? 0.01 * (panRight ? 1 : -1) : 0
-                let from = key(image, frameAspect, fit, cx: focus.x - drift, cy: focus.y, zoom: z0)
-                let to = key(image, frameAspect, fit, cx: focus.x + drift, cy: focus.y, zoom: z1)
-                motion = .init(from: from, to: to)
-            case .pan:
-                let w = visibleWidth(imageAspect: image.aspect, frameAspect: frameAspect)
-                let s = image.salientWidth ?? 1
-                let cap = maxPanPerSecond * duration * scale
-                let travel = min(cap, max(s - w, minPanTravel * scale))
-                let sign: Double
-                switch override.preset {
-                case .panRight: sign = 1
-                case .panLeft: sign = -1
-                default: sign = panRight ? 1 : -1; panRight.toggle()
-                }
-                let (a, b) = panRange(image, frameAspect, centerX: focus.x, travel: travel, sign: sign)
-                let y = clampedCenter(image, frameAspect, fit, cx: focus.x, cy: focus.y, zoom: 1).y
-                motion = .init(from: .init(cx: a, cy: y, zoom: 1), to: .init(cx: b, cy: y, zoom: 1))
-                panSign = b == a ? 0 : (b > a ? 1 : -1)
             }
 
             var transition: ReelSpec.Transition?
-            if i > 0 {
+            if override.transitionLocked {
+                // Låst övergång behålls som den är (nil = filmens standard); även för klipp 0, så att
+                // den följer med om klippet flyttas.
+                transition = override.transition
+            } else if i > 0 {
                 if isLast {
                     transition = .init(type: .crossfade, direction: nil, duration: lastTransitionDuration)
                 } else if previousPanSign != 0 {
@@ -200,7 +273,8 @@ nonisolated enum ReelMotionPlanner {
             previousPanSign = panSign
             clips.append(.init(asset: image.assetID, duration: duration, fit: fit, motion: motion, transitionIn: transition,
                                motionPreset: override.preset == .auto ? nil : override.preset.rawValue,
-                               durationLocked: override.duration == nil ? nil : true))
+                               durationLocked: override.duration == nil ? nil : true,
+                               transitionLocked: override.transitionLocked ? true : nil))
         }
         return clips
     }
@@ -232,6 +306,16 @@ nonisolated enum ReelMotionPlanner {
             let r = ReelTimeline.containCrop(center: c, zoom: zoom)
             return CGPoint(x: r.midX, y: r.midY)
         }
+    }
+
+    /// Nyckel för egen rörelse: klampad som `key`, men oförändrad (bit för bit) om den redan ryms,
+    /// så att en ombyggnad inte ändrar värden i onödan. Zoom minst 1.
+    private static func customKey(_ image: Image, _ frameAspect: Double, _ fit: ReelSpec.Fit,
+                                  _ k: ReelSpec.MotionKey) -> ReelSpec.MotionKey {
+        let zoom = max(k.zoom, 1)
+        let clamped = key(image, frameAspect, fit, cx: k.cx, cy: k.cy, zoom: zoom)
+        if abs(clamped.cx - k.cx) < 1e-9, abs(clamped.cy - k.cy) < 1e-9 { return .init(cx: k.cx, cy: k.cy, zoom: zoom) }
+        return clamped
     }
 
     private static func key(_ image: Image, _ frameAspect: Double, _ fit: ReelSpec.Fit,
