@@ -45,6 +45,23 @@ struct ReelComposerTests {
         #expect(decoded == spec)
     }
 
+    @Test("Automatiskt antal är standard och sparas inte; ett exakt antal sparas i editor.fixedCount")
+    func autoAndFixedCount() {
+        let auto = ReelComposer.compose(items: items(), specDirectory: specDir)
+        #expect(auto.spec.editor == nil)
+        #expect((5...8).contains(auto.spec.assets.count))
+        var options = ReelComposer.Options()
+        options.count = 4
+        let fixed = ReelComposer.compose(items: items(), specDirectory: specDir, options: options)
+        #expect(fixed.spec.assets.count == 4)
+        #expect(fixed.spec.editor?.fixedCount == 4)
+        // "Föreslå igen" utan nytt antal: den sparade specens editor gäller, men antalet styrs av Options.
+        options.count = nil
+        let again = ReelComposer.compose(items: items(), specDirectory: specDir, options: options, preserving: fixed.spec)
+        #expect(again.spec.editor?.fixedCount == nil)
+        #expect(ReelSpec.EditorState(fixedCount: 6).normalized?.fixedCount == 6)
+    }
+
     @Test("Total längd för 5 bilder i 9:16 ligger inom 10–16 s")
     func totalDurationInRange() {
         for format in ReelFormat.allCases {

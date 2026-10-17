@@ -102,7 +102,11 @@ final class ReelEditorModel {
     /// Ökar för varje ändring av specen, så att förhandsvisningen laddar om.
     private(set) var revisionToken = 0
     private(set) var format: ReelFormat = .vertical
+    /// Antal bilder i filmen (följer filmen, 3...12).
     private(set) var count = 5
+    /// Fotografens exakta antal (Bilder-steppern), eller nil när antalet är automatiskt. Sparas i
+    /// `spec.editor.fixedCount`, så ångra, omstart och "Föreslå igen" följer med.
+    var fixedCount: Int? { spec?.editor?.fixedCount }
     private(set) var saveError: String?
     /// Antal klipp med egen rörelse som den senaste ändringen klampade om (t.ex. vid formatbyte).
     /// UI:t kan visa "Egna rörelser har anpassats" när det är > 0.
@@ -460,7 +464,7 @@ final class ReelEditorModel {
 
     private func options() -> ReelComposer.Options {
         var o = ReelComposer.Options()
-        o.count = count
+        o.count = fixedCount
         o.format = format
         o.address = address
         o.sessionID = sessionID
@@ -520,6 +524,11 @@ final class ReelEditorModel {
             // Fortsättning på ett sammanslaget steg: samma revision och samma loggpost som första ändringen.
             rebuilt.revision = current.revision
             rebuilt.provenance.edits = current.provenance.edits
+        }
+        // Ett fast antal följer filmen när klipp läggs till eller tas bort för hand.
+        if var e = rebuilt.editor, e.fixedCount != nil {
+            e.fixedCount = min(max(rebuilt.assets.count, Self.countRange.lowerBound), Self.countRange.upperBound)
+            rebuilt.editor = e
         }
         adaptedCustomMotions = ReelComposer.adaptedCustomMotions(from: current, to: rebuilt)
         spec = rebuilt
@@ -862,12 +871,18 @@ final class ReelEditorModel {
         apply(order: order, format: newFormat, op: "format")
     }
 
-    /// Nytt förslag med `n` bilder. Låsta val behålls (se `suggestAgain`).
+    /// Nytt förslag med exakt `n` bilder; antalet blir fast (`fixedCount`) tills fotografen väljer
+    /// automatiskt (`useAutoCount`). Låsta val behålls (se `suggestAgain`).
     func setCount(_ n: Int) {
         let clamped = min(max(n, Self.countRange.lowerBound), Self.countRange.upperBound)
         guard clamped != count || spec == nil else { return }
-        count = clamped
-        recompose(preserving: spec, op: "count")
+        recompose(preserving: spec, op: "count", changesCount: true, count: clamped)
+    }
+
+    /// Nytt förslag med automatiskt antal (en bild per viktig rumstyp, 5...8). Låsta val behålls.
+    func useAutoCount() {
+        guard fixedCount != nil else { return }
+        recompose(preserving: spec, op: "count", changesCount: true, count: nil)
     }
 
     /// Föreslår filmen på nytt (nuvarande antal och format) men behåller låsen: pinnade och
@@ -882,18 +897,23 @@ final class ReelEditorModel {
         recompose(preserving: nil, op: "startOver")
     }
 
-    private func recompose(preserving previous: ReelSpec?, op: String) {
+    /// `count` är antalet förslaget ska ha (nil = automatiskt); utan angivet värde behålls nuvarande
+    /// läge (fast antal eller automatiskt).
+    private func recompose(preserving previous: ReelSpec?, op: String, changesCount: Bool = false, count requested: Int? = nil) {
         guard !items.isEmpty else { return }
         recordStep(op: op)
         let specDir = reelDirectory ?? FileManager.default.temporaryDirectory
-        let result = ReelComposer.compose(items: items, specDirectory: specDir, options: options(), preserving: previous)
+        var opts = options()
+        if changesCount { opts.count = requested }
+        if previous == nil { opts.count = nil }
+        let result = ReelComposer.compose(items: items, specDirectory: specDir, options: opts, preserving: previous)
         candidates = result.candidates
         urls = result.urls
         selection = result.selection
         // Samma film i en ny version (id, revision, brand och logg följer med), även vid "Börja om helt".
         spec = spec.map { ReelComposer.continuing(result.spec, from: $0, op: op, now: now()) } ?? result.spec
-        // Låsta bilder kan göra filmen längre än begärt antal.
-        count = min(max(count, result.spec.assets.count), Self.countRange.upperBound)
+        // Låsta bilder kan göra filmen längre än begärt antal; automatiskt antal visas som det faktiska.
+        count = min(max(result.spec.assets.count, Self.countRange.lowerBound), Self.countRange.upperBound)
         adaptedCustomMotions = 0
         clearSelection()
         revisionToken += 1

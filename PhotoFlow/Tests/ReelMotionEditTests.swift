@@ -87,7 +87,8 @@ struct ReelMotionEditTests {
     func centerOnSubject() throws {
         let (model, root) = try makeModel()
         defer { try? FileManager.default.removeItem(at: root) }
-        let id = model.clipRows[1].id   // focus (0,2; 0,3)
+        // Köket (bild 1) har focus (0,2; 0,3); dess plats i filmen beror på urvalet.
+        let id = model.spec!.assets.first { $0.sha256 == String(format: "%064x", 1) }!.id
         model.setCustomMotion(id, fit: .cover, motion: .init(from: .init(cx: 0.6, cy: 0.5, zoom: 1.5), to: .init(cx: 0.8, cy: 0.5, zoom: 2)))
         model.centerMotionOnSubject(id)
         let m = clip(model, id)!.motion

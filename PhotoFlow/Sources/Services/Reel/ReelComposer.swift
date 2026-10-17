@@ -25,10 +25,12 @@ nonisolated enum ReelFormat: String, Sendable, CaseIterable, Equatable {
 /// (inget Vision, ingen disk): analyserna kommer in färdiga.
 nonisolated enum ReelComposer {
 
-    static let generator = "PhotoFlow ReelComposer v1 / ReelSelector v1"
+    static let generator = "PhotoFlow ReelComposer v1 / ReelSelector v2"
 
     nonisolated struct Options: Sendable {
-        var count = 5
+        /// Exakt antal bilder (3...12). nil = automatiskt: en bild per viktig rumstyp, 5...8
+        /// (`ReelSelector.select`). Ett exakt antal sparas i specens `editor.fixedCount`.
+        var count: Int?
         var format = ReelFormat.vertical
         var address = ""
         var sessionID: String?
@@ -109,7 +111,9 @@ nonisolated enum ReelComposer {
         let candidates = unique.map(candidate(from:))
         let byID = Dictionary(uniqueKeysWithValues: unique.map { ($0.analysis.sha256, $0) })
 
-        let editor = (previous?.editor ?? options.editor)?.normalized
+        var editorState = (previous?.editor ?? options.editor) ?? ReelSpec.EditorState()
+        editorState.fixedCount = options.count.map { min(max($0, ReelSelector.minCount), ReelSelector.maxCount) }
+        let editor = editorState.normalized
 
         // Per-bild-lås från förra specen, på sha256 (i filmens ordning).
         var lockedBySha: [String: ReelMotionPlanner.ClipOverride] = [:]
@@ -158,7 +162,7 @@ nonisolated enum ReelComposer {
             guard let item = byID[pick.candidateID] else { continue }
             let id = "a\(i + 1)"
             assets.append(asset(id: id, item: item, specDirectory: specDirectory))
-            auto.append(.init(asset: id, slot: pick.slot.rawValue, reason: pick.reason))
+            auto.append(.init(asset: id, slot: pick.slotKey, reason: pick.reason))
             if let o = lockedBySha[pick.candidateID] { overridesByAsset[id] = o }
         }
 

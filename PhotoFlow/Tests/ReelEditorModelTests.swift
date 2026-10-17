@@ -182,9 +182,34 @@ struct ReelEditorModelTests {
         model.setCount(7)
         #expect(model.clipRows.count == 7)
         model.setCount(20)
-        #expect(model.count == ReelEditorModel.countRange.upperBound)
+        // Antalet klampas till 12 och blir fast; "Bilder" visar det faktiska antalet (bara sju bilder finns).
+        #expect(model.fixedCount == ReelEditorModel.countRange.upperBound)
         #expect(ReelEditorModel.countRange.upperBound == 12)
-        #expect(model.clipRows.count == 7)   // bara sju bilder finns
+        #expect(model.clipRows.count == 7)
+        #expect(model.count == 7)
+    }
+
+    @Test("Automatiskt antal: redigeraren startar auto, steppern gör antalet fast, Föreslå igen behåller det, Auto och Börja om helt återställer")
+    func autoCountThenFixed() throws {
+        let (model, root, reel) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(model.fixedCount == nil)
+        #expect((5...8).contains(model.count) && model.count == model.clipRows.count)
+        model.setCount(4)
+        #expect(model.fixedCount == 4 && model.clipRows.count == 4)
+        model.suggestAgain()
+        #expect(model.fixedCount == 4 && model.clipRows.count == 4)
+        // Sparas i reel.json, så fönstret kan öppnas igen med samma läge.
+        let saved = try ReelSpec.decode(from: Data(contentsOf: reel.appendingPathComponent("reel.json")))
+        #expect(saved.editor?.fixedCount == 4)
+        // Ta bort ett klipp för hand: ett fast antal följer filmen.
+        model.removeClip(model.clipRows[1].id)
+        #expect(model.clipRows.count == 3 && model.fixedCount == 3)
+        model.useAutoCount()
+        #expect(model.fixedCount == nil && (5...8).contains(model.clipRows.count))
+        model.setCount(6)
+        model.startOver()
+        #expect(model.fixedCount == nil)
     }
 
     @Test("reel.json återställer läget när fönstret öppnas igen (ordning, längd, rörelse, format)")

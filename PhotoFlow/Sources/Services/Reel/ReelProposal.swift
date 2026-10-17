@@ -17,7 +17,8 @@ nonisolated enum ReelProposal {
     /// Fingerprint + källa för det senast byggda förslaget (skrivs först när renderingen lyckats).
     static let markerFileName = "reel_proposal.json"
     static let minimumImages = 3
-    static let defaultCount = 5
+    /// nil = automatiskt antal (en bild per viktig rumstyp, 5...8).
+    static let defaultCount: Int? = nil
     static let defaultFormat = ReelFormat.vertical
 
     static func videoFileName(for format: ReelFormat) -> String {
@@ -244,10 +245,10 @@ nonisolated enum ReelProposal {
     /// FÄRDIGA skrivs inte om av pipelinen (Lightroom-exporter), så de identifieras av namn och
     /// SHA-256 av innehållet.
     static func fingerprint(source: Source, existing: ExistingData, nefSizes: [String: Int64] = [:],
-                            count: Int, format: ReelFormat) -> String {
+                            count: Int?, format: ReelFormat) -> String {
         var lines = [
             "engine=\(engineVersion)", "generator=\(ReelComposer.generator)",
-            "format=\(format.rawValue)", "count=\(count)", "source=\(source.kind.rawValue)",
+            "format=\(format.rawValue)", "count=\(count.map(String.init) ?? "auto")", "source=\(source.kind.rawValue)",
         ]
         for file in source.files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             let name = file.lastPathComponent
@@ -404,7 +405,7 @@ nonisolated enum ReelProposal {
     /// Väljer källa, räknar fingerprint och avgör om förslaget ska byggas för en adress. Hashar
     /// FÄRDIGA-bilderna, så det körs utanför huvudtråden.
     @concurrent
-    static func plan(outputDir: URL, folderName: String, existing: ExistingData, count: Int = defaultCount,
+    static func plan(outputDir: URL, folderName: String, existing: ExistingData, count: Int? = defaultCount,
                      format: ReelFormat = defaultFormat, force: Bool = false) async -> Plan {
         let filmDir = AddressFolderLayout.reelDir(in: outputDir, folderName: folderName)
         let (source, counts) = selectSource(outputDir: outputDir, folderName: folderName, existing: existing)
@@ -493,7 +494,7 @@ nonisolated enum ReelProposal {
         folderName: String,
         existing: ExistingData,
         fingerprint: String,
-        count: Int = defaultCount,
+        count: Int? = defaultCount,
         format: ReelFormat = defaultFormat,
         outputOverride: ReelSpec.Output? = nil,
         describe: Bool = false,
@@ -549,7 +550,7 @@ nonisolated enum ReelProposal {
             ($0.id, $0.sources.first?.path.map { ($0 as NSString).lastPathComponent } ?? $0.id)
         })
         let picks = (spec.provenance.autoSelection ?? []).map {
-            Pick(slot: ReelSelector.Slot(rawValue: $0.slot)?.label ?? $0.slot, file: names[$0.asset] ?? $0.asset, reason: $0.reason)
+            Pick(slot: ReelSelector.slotLabel($0.slot), file: names[$0.asset] ?? $0.asset, reason: $0.reason)
         }
         let size = (try? FileManager.default.attributesOfItem(atPath: videoURL.path)[.size] as? Int) ?? 0
         return BuildResult(

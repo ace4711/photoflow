@@ -195,10 +195,13 @@ nonisolated struct ReelSpec: Codable, Sendable, Equatable {
         var orderLocked: Bool?
         /// "calm", "normal" eller "fast": faktor på planerarens längder.
         var tempo: String?
+        /// Fotografens exakta antal bilder (Bilder-steppern, 3...12). Saknas = automatiskt antal
+        /// (en bild per viktig rumstyp, 5...8): "Föreslå igen" behåller ett fast antal.
+        var fixedCount: Int?
 
         var isEmpty: Bool {
             (pinnedAssets ?? []).isEmpty && (excludedAssets ?? []).isEmpty
-                && orderLocked != true && (tempo ?? "normal") == "normal"
+                && orderLocked != true && (tempo ?? "normal") == "normal" && fixedCount == nil
         }
 
         /// Samma värde med tomma fält borttagna, eller nil om inget är satt.

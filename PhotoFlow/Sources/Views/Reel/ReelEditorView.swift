@@ -126,10 +126,15 @@ struct ReelEditorView: View {
 
                 Stepper(value: Binding(get: { model.count }, set: { model.setCount($0) }),
                         in: ReelEditorModel.countRange) {
-                    Text("Bilder: \(model.count)")
+                    Text(model.fixedCount == nil ? "Bilder: \(model.count) (auto)" : "Bilder: \(model.count)")
                 }
-                .help("Antal bilder. Ger ett nytt förslag som behåller dina lås (låsta bilder, längder, rörelser och övergångar).")
+                .help("Antal bilder. Automatiskt antal är en bild per viktig rumstyp (5–8). Ändrar du antalet blir det fast och ger ett nytt förslag som behåller dina lås (låsta bilder, längder, rörelser och övergångar).")
                 .disabled(model.isBusy)
+                if model.fixedCount != nil {
+                    Button("Auto") { model.useAutoCount() }
+                        .help("Låt PhotoFlow välja antalet efter rummen i objektet.")
+                        .disabled(model.isBusy)
+                }
 
                 Menu {
                     Button("Föreslå igen") { model.suggestAgain() }

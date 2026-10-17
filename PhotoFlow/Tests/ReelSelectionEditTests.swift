@@ -20,12 +20,13 @@ struct ReelSelectionEditTests {
         ("Bastu", "Interiör"), ("Garage", "Exteriör"), ("Förråd", "Interiör"), ("Uteplats", "Exteriör"),
     ]
 
+    /// Badrummet har svag kvalitet, så det inte räknas som viktig rumstyp och automatiskt antal blir 5.
     private func item(_ n: Int, in dir: URL) -> ReelImageAnalyzer.Item {
         var v = [Float](repeating: 0, count: 16)
         v[n % 16] = 1
         let (room, category) = Self.rooms[n % Self.rooms.count]
         let a = ReelImageAnalysis(
-            sha256: String(format: "%064x", n), width: 6000, height: 4000, qualityScore: 0.9 - Double(n) * 0.02,
+            sha256: String(format: "%064x", n), width: 6000, height: 4000, qualityScore: room == "Badrum" ? 0.5 : 0.9 - Double(n) * 0.02,
             isUtility: false, horizonAngleDegrees: nil, sharpness: nil, featurePrint: v.withUnsafeBytes { Data($0) },
             saliencyBoxes: [], focus: .init(x: 0.5, y: 0.5), salientWidth: n == 0 ? 0.9 : 0.4, meanLuminance: 0.45,
             exifDate: nil, room: room, category: category, features: nil, caption: nil)
