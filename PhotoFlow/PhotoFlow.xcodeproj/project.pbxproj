@@ -154,6 +154,7 @@
 		65BE622B7420DDFC84FFA6DC /* legacy-entries.json in Resources */ = {isa = PBXBuildFile; fileRef = ACC862B9A1BB26026DB365AE /* legacy-entries.json */; };
 		65BF33C26FC4038D88720266 /* PreviewCullView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ED1FEAB2805AD66CD0BCFEE /* PreviewCullView.swift */; };
 		6644CB7C5A4AAC4896B917B1 /* ReelWorkerController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC03B73D6B94B8A07CD453D8 /* ReelWorkerController.swift */; };
+		673896A3A4008A6B7819B918 /* ReelTimelineLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 035E46527E4A4040C9004FA8 /* ReelTimelineLayout.swift */; };
 		680D4580BB36F5FB199C2473 /* EditSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC1A3A81863588A1CC6D8A48 /* EditSelection.swift */; };
 		6831F9C524D84D26C0A67446 /* AppSettingsCalendarNamesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ED048B0E21E2830A6817B4E /* AppSettingsCalendarNamesTests.swift */; };
 		685AB35EE45FCADC4344DC26 /* PipelineRunnerParallelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF1EAE0DC70CDE2AA4C98C1 /* PipelineRunnerParallelTests.swift */; };
@@ -167,6 +168,7 @@
 		6E258328C959DEE31F1DEA7E /* VerticalCorrection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4813AE42A017B14A7983958F /* VerticalCorrection.swift */; };
 		6E72A8D41A6CB0B986CAAF42 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5741822D3A108DFE01C65016 /* ContentView.swift */; };
 		6F371AB884CD7E018EB5D88B /* WatchServiceDebounceStabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C3984CEA371ED2A051480D5 /* WatchServiceDebounceStabilityTests.swift */; };
+		703F42D3F1289A81C9CB6FB9 /* ReelTimelineLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 035E46527E4A4040C9004FA8 /* ReelTimelineLayout.swift */; };
 		70BDAEDAF1F167AF3DCDEB16 /* StepStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE736FC6AE961F0303A83433 /* StepStatus.swift */; };
 		70D6B6BC07D487CE12288CB2 /* PipelineState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78FB5F4124C051FBCF5BAA73 /* PipelineState.swift */; };
 		710CAFE052054BA4E77C6E87 /* RAWRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8873C4CE06787497464EE6E6 /* RAWRenderer.swift */; };
@@ -276,6 +278,7 @@
 		B3F4F3DA9483683D56861784 /* PipelineRunner+Lightroom.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04F7EB11531DBB10EA697354 /* PipelineRunner+Lightroom.swift */; };
 		B62AC0109159F7CBDB47B197 /* RadianceMerge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B32C2ABC8EA42D3E4D0B7F33 /* RadianceMerge.swift */; };
 		B78E6278C81A023892B3A96C /* PreflightTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 164AE90B2B50F1146FA18C10 /* PreflightTests.swift */; };
+		B810F8316298168D3881D502 /* ReelTimelineLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20B17646F977816244874F05 /* ReelTimelineLayoutTests.swift */; };
 		B8365DE6A7F0B1899562C9BC /* PipelineStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B5C78734D65FD86D57C916F /* PipelineStep.swift */; };
 		B84578962BD67E124F5E67C5 /* PipelineRunnerHDROrphanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 929500107C2E4E161853B304 /* PipelineRunnerHDROrphanTests.swift */; };
 		B89B3631208EA11261D3C34F /* ReelShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BF4AE0F3AE8CFB935462DEC /* ReelShareSheet.swift */; };
@@ -398,6 +401,7 @@
 		01BDA3B6B8DC8DFDA9E57193 /* OrderedParallel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrderedParallel.swift; sourceTree = "<group>"; };
 		021B848F61D8295ECE12EB76 /* timeline-vectors.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "timeline-vectors.json"; sourceTree = "<group>"; };
 		0264E2771F1F365950FADCDE /* AppIntents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppIntents.framework; path = System/Library/Frameworks/AppIntents.framework; sourceTree = SDKROOT; };
+		035E46527E4A4040C9004FA8 /* ReelTimelineLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelTimelineLayout.swift; sourceTree = "<group>"; };
 		04F7EB11531DBB10EA697354 /* PipelineRunner+Lightroom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+Lightroom.swift"; sourceTree = "<group>"; };
 		07F438E24E4E1E4884E9C260 /* PipelineRunner+HDR.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+HDR.swift"; sourceTree = "<group>"; };
 		0831F4831D87ACC606120BAD /* ReelImageAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelImageAnalyzer.swift; sourceTree = "<group>"; };
@@ -425,6 +429,7 @@
 		1A64849410C39F9B898C53F3 /* ReelMotionPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelMotionPlanner.swift; sourceTree = "<group>"; };
 		1AC7B76587B31A598A9D24BE /* TranslationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationServiceTests.swift; sourceTree = "<group>"; };
 		1B7A1DE94D250B862843F4ED /* StepTimingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StepTimingTests.swift; sourceTree = "<group>"; };
+		20B17646F977816244874F05 /* ReelTimelineLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelTimelineLayoutTests.swift; sourceTree = "<group>"; };
 		21D52163F8BA31D8D89D4DA4 /* OrderedParallelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrderedParallelTests.swift; sourceTree = "<group>"; };
 		230AF67C14F78CC9A5F63D1F /* CalendarServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarServiceTests.swift; sourceTree = "<group>"; };
 		2556040AD182883742EE0D19 /* bracket5_dark.csv */ = {isa = PBXFileReference; path = bracket5_dark.csv; sourceTree = "<group>"; };
@@ -927,6 +932,7 @@
 				3C82C2BDAB6D09BCF42D1B28 /* ReelShareModelTests.swift */,
 				9F801464157328538D6ACCBB /* ReelSpecCodingTests.swift */,
 				619F544EAB6D20AB1A02E1CD /* ReelSyncMergerTests.swift */,
+				20B17646F977816244874F05 /* ReelTimelineLayoutTests.swift */,
 				A8E31B3A6CF246A50408904B /* ReelTimelineTests.swift */,
 				8F1987E2A76904677A75B8A5 /* ReelUndoTests.swift */,
 				CD06F83CB1752838347B9F54 /* ReelUploadPlannerTests.swift */,
@@ -1015,6 +1021,7 @@
 				0E7D9F4970AD01D9CAF6653A /* ReelSelector.swift */,
 				BFB3593ABA79CEDA6F6A39B2 /* ReelServerClient.swift */,
 				5629B69F4D608E95CB5BE3A9 /* ReelSyncMerger.swift */,
+				035E46527E4A4040C9004FA8 /* ReelTimelineLayout.swift */,
 				3949C70C7BA7535942D7E805 /* ReelUploadPlanner.swift */,
 				395F9C90A632FE40FB1E4F83 /* ReelWebVariant.swift */,
 				FC03B73D6B94B8A07CD453D8 /* ReelWorkerController.swift */,
@@ -1392,6 +1399,7 @@
 				26894E775F46B9EDBD6E80EE /* ReelSpec.swift in Sources */,
 				27AF03ED3AA06A0A202B2458 /* ReelSyncMerger.swift in Sources */,
 				149BED252667E61DEF70E867 /* ReelTimeline.swift in Sources */,
+				703F42D3F1289A81C9CB6FB9 /* ReelTimelineLayout.swift in Sources */,
 				727650ECC301BAD8AAEEF284 /* ReelUploadPlanner.swift in Sources */,
 				0C9123D0C252617FCAA8388B /* ReelWebVariant.swift in Sources */,
 				6644CB7C5A4AAC4896B917B1 /* ReelWorkerController.swift in Sources */,
@@ -1496,6 +1504,7 @@
 				9A39D384C36C421A9AD03B63 /* ReelShareModelTests.swift in Sources */,
 				E0B428D6F7F34C4B25AE2CA5 /* ReelSpecCodingTests.swift in Sources */,
 				3D05C8D89538E5AAC7F88111 /* ReelSyncMergerTests.swift in Sources */,
+				B810F8316298168D3881D502 /* ReelTimelineLayoutTests.swift in Sources */,
 				3F437BD6C250B4045AD8073E /* ReelTimelineTests.swift in Sources */,
 				41708C5B95635D02C78BCFD5 /* ReelUndoTests.swift in Sources */,
 				49A35421E5489A3ECD3B767E /* ReelUploadPlannerTests.swift in Sources */,
@@ -1633,6 +1642,7 @@
 				9C805BD68E34BA05A04F4411 /* ReelSpec.swift in Sources */,
 				F1B3DC56633B6B475FAD43EC /* ReelSyncMerger.swift in Sources */,
 				5BEE5EBB40A6C3E00F036E3C /* ReelTimeline.swift in Sources */,
+				673896A3A4008A6B7819B918 /* ReelTimelineLayout.swift in Sources */,
 				6BC71D8156DE0503F2CABA9E /* ReelUploadPlanner.swift in Sources */,
 				F1F9FFB8315B1848A2075EFC /* ReelWebVariant.swift in Sources */,
 				F59EEB31AA3EF918E2598F9A /* ReelWorkerController.swift in Sources */,
