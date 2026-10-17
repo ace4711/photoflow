@@ -50,6 +50,15 @@ struct AddressFolderLayoutTests {
         #expect(AddressFolderLayout.addressName(fromFinishedDir: "Lindvägen 12") == nil)
     }
 
+    @Test("Kurerad källa: allt utom pipelinens FÖRBÄTTRADE och TITTBILDER")
+    func curatedSource() {
+        func curated(_ name: String) -> Bool {
+            AddressFolderLayout.isCuratedSource(URL(fileURLWithPath: "/x/\(name)", isDirectory: true))
+        }
+        #expect(curated("Chronas väg 7 FÄRDIGA") && curated("Chronas väg 7 red") && curated("Export"))
+        #expect(!curated("Chronas väg 7 FÖRBÄTTRADE") && !curated("Chronas väg 7 TITTBILDER"))
+    }
+
 }
 
 struct HDRLocatorTests {

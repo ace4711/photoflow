@@ -35,6 +35,10 @@ nonisolated enum ReelComposer {
         var address = ""
         var sessionID: String?
         var weights = ReelSelector.Weights()
+        /// Bilderna är fotografens egna, redigerade (se `ReelSelector.select`). Pipelinens filmförslag
+        /// (FÖRBÄTTRADE/TITTBILDER) är inte kurerat; redigeraren sätter det ur källmappen
+        /// (`AddressFolderLayout.isCuratedSource`).
+        var curated = false
         /// Injicerbara för tester.
         var now = Date()
         var specID = UUID().uuidString.lowercased()
@@ -130,6 +134,7 @@ nonisolated enum ReelComposer {
         }
         let pinnedIDs = editor?.pinnedAssets ?? []
         var selection = ReelSelector.select(candidates, count: options.count, weights: options.weights,
+                                            curated: options.curated,
                                             pinned: pinnedIDs + lockedOrder.filter { !pinnedIDs.contains($0) },
                                             excluded: editor?.excludedAssets ?? [])
 

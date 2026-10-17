@@ -46,6 +46,10 @@ nonisolated enum ReelSelector {
         var maxHorizonDegrees = 3.0
         /// Skärpa under den här percentilen inom objektet filtreras bort.
         var sharpnessCutPercentile = 0.25
+        /// Kurerat läge (fotografens egna, redigerade bilder): bara bilder med mindre än så här stor
+        /// andel av medianens skärpa filtreras bort. Chronas väg 7: lägsta riktiga bilden (badrum) har
+        /// 0,54 av medianen och ska vara kvar; 0,35 tar bara bort tydligt suddiga bilder.
+        var curatedSharpnessFloorRatio = 0.35
         /// Feature print-avstånd under detta räknas som dubblett.
         var duplicateThreshold = PhotoQualityService.duplicateDistanceThreshold
         /// Likhet över detta mellan avslutning och öppning undviks när det finns alternativ.
@@ -327,7 +331,13 @@ nonisolated enum ReelSelector {
     /// `excluded` tas bort först (`Exclusion.Kind.user`) och kommer aldrig tillbaka, inte heller via
     /// rimlighetsventilen. Både uteslutna och låsta id som inte finns bland kandidaterna ignoreras;
     /// en bild som är båda är utesluten.
+    ///
+    /// `curated` = bilderna är fotografens egna, redigerade (`<adress> FÄRDIGA`/`red`, vald mapp): då
+    /// tas en bild bara bort på skärpan om den är tydligt oskarp i absoluta tal
+    /// (`Weights.curatedSharpnessFloorRatio` av medianen), inte för att den ligger under 25:e
+    /// percentilen, som alltid träffar några bilder. Övriga filter och rimlighetsventilen är oförändrade.
     static func select(_ candidates: [ReelCandidate], count requested: Int? = nil, weights: Weights = Weights(),
+                       curated: Bool = false,
                        pinned pinnedIDs: [String] = [], excluded excludedIDs: [String] = []) -> Selection {
         let userExcluded = Set(excludedIDs)
         var pinnedList: [String] = []
@@ -353,13 +363,18 @@ nonisolated enum ReelSelector {
             removed.insert(c.id)
             excluded.append(.init(candidateID: c.id, kind: kind, reason: reason))
         }
-        // Skärpegräns: percentilen räknas över alla kandidater som har skärpa (minst 4).
+        // Skärpegräns över alla kandidater som har skärpa (minst 4): 25:e percentilen, eller i kurerat
+        // läge en andel av medianen.
         var sharpCut: Double?
         let sharpValues = candidates.filter { !userExcluded.contains($0.id) }.compactMap(\.sharpness).sorted()
-        if sharpValues.count >= 4 {
-            let pos = weights.sharpnessCutPercentile * Double(sharpValues.count - 1)
+        func quantile(_ q: Double) -> Double {
+            let pos = q * Double(sharpValues.count - 1)
             let lo = Int(pos.rounded(.down)), hi = Int(pos.rounded(.up))
-            sharpCut = sharpValues[lo] + (sharpValues[hi] - sharpValues[lo]) * (pos - Double(lo))
+            return sharpValues[lo] + (sharpValues[hi] - sharpValues[lo]) * (pos - Double(lo))
+        }
+        if sharpValues.count >= 4 {
+            sharpCut = curated ? quantile(0.5) * weights.curatedSharpnessFloorRatio
+                               : quantile(weights.sharpnessCutPercentile)
         }
         for c in candidates where !userExcluded.contains(c.id) {
             if c.isUtility, (c.quality ?? 0.5) < weights.utilityHardMaxQuality {
@@ -369,7 +384,8 @@ nonisolated enum ReelSelector {
                 exclude(c, .horizon, "Horisonten lutar \(String(format: "%.1f", abs(h)).replacingOccurrences(of: ".", with: ","))° (exteriör)"); continue
             }
             if let cut = sharpCut, let s = c.sharpness, s < cut {
-                exclude(c, .sharpness, "Oskarp jämfört med övriga i objektet"); continue
+                exclude(c, .sharpness, curated ? "Tydligt oskarp (under \(Int((weights.curatedSharpnessFloorRatio * 100).rounded())) % av medianens skärpa)"
+                                               : "Oskarp jämfört med övriga i objektet"); continue
             }
         }
 

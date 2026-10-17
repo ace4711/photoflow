@@ -525,6 +525,8 @@ nonisolated enum ReelProposal {
         options.count = count
         options.format = format
         options.address = folderName
+        // Pipelinens egna mappar (FÖRBÄTTRADE, TITTBILDER) är inte kurerade; FÄRDIGA är fotografens.
+        options.curated = source.kind == .finished
         let composed = ReelComposer.compose(items: items, specDirectory: filmDir, options: options)
         var spec = composed.spec
         spec.provenance.generator = generator

@@ -59,6 +59,15 @@ nonisolated enum AddressFolderLayout {
         return String(name.dropLast(finishedSuffix.count))
     }
 
+    /// Är bilderna i källmappen fotografens egna, redigerade (`<adress> FÄRDIGA`, `<adress> red`, en mapp
+    /// som användaren valt)? Allt utom pipelinens egna mappar `<adress> FÖRBÄTTRADE` (automatiskt
+    /// förbättrat) och `<adress> TITTBILDER` (råa previews), där skärpefiltret i `ReelSelector.select`
+    /// ska gå på percentil. Skiftlägesokänsligt.
+    static func isCuratedSource(_ source: URL) -> Bool {
+        let name = source.lastPathComponent.lowercased()
+        return !name.hasSuffix(enhancedSuffix.lowercased()) && !name.hasSuffix(" tittbilder")
+    }
+
     /// Filmens utmapp för en källmapp med färdiga bilder: `<adress> FILM` bredvid
     /// `<adress> FÄRDIGA`, annars `<källmappens namn> FILM` bredvid källmappen.
     static func reelDir(forSource source: URL) -> URL {

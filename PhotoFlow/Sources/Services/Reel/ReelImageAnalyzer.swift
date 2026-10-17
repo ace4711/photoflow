@@ -262,7 +262,9 @@ nonisolated enum ReelImageAnalyzer {
         // Utan pipelinens poäng (färdiga bilder) bygger urvalet annars nästan bara på skärpa.
         if analysis.qualityScore == nil, let m = await qualityMeasurer(url) {
             analysis.qualityScore = m.score
-            if pipelineData == nil { analysis.isUtility = m.isUtility }
+            // Nyttobild-flaggan kan bara läggas till: en fullmätt bild (flaggan på hela bilden) ska inte
+            // bli av med den för att kopian är nedskalad.
+            if pipelineData == nil { analysis.isUtility = analysis.isUtility || m.isUtility }
         }
         if Task.isCancelled { return nil }
 

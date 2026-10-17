@@ -467,6 +467,7 @@ final class ReelEditorModel {
         o.count = fixedCount
         o.format = format
         o.address = address
+        o.curated = sourceDirectory.map(AddressFolderLayout.isCuratedSource) ?? false
         o.sessionID = sessionID
         o.now = now()
         return o

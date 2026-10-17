@@ -230,6 +230,32 @@ struct ReelSelectorTests {
         #expect(!sel.picks.contains { $0.candidateID == "fasad" })
     }
 
+    @Test("Kurerat läge behåller lite oskarpare bilder och tar bara bort en tydligt oskarp")
+    func curatedKeepsSlightlySofter() {
+        var list = villa()
+        for i in list.indices { list[i].sharpness = Double(100 + i * 10) }   // fasad minst skarp, 100 mot median 130
+        let curated = ReelSelector.select(list, curated: true)
+        #expect(curated.excluded.isEmpty)
+        #expect(curated.picks.contains { $0.candidateID == "fasad" })
+        // Samma bilder utan kurerat läge: fasaden faller bort på percentilen (som förut).
+        let plain = ReelSelector.select(list)
+        #expect(plain.excluded.contains { $0.candidateID == "fasad" && $0.kind == .sharpness })
+        // En tydligt oskarp bild (under 35 % av medianen) tas bort även i kurerat läge.
+        list[1].sharpness = 20
+        let blurry = ReelSelector.select(list, curated: true)
+        #expect(blurry.excluded.map(\.candidateID) == ["trad"])
+        #expect(blurry.excluded.first?.kind == .sharpness && blurry.excluded.first?.reason.contains("Tydligt oskarp") == true)
+    }
+
+    @Test("Kurerat läge: rimlighetsventilen tar fortfarande tillbaka en oskarp bild när det är för få kvar")
+    func curatedValveStillWorks() {
+        var list = Array(villa().prefix(5))
+        for i in list.indices { list[i].sharpness = 200 }
+        list[0].sharpness = 10
+        let sel = ReelSelector.select(list, count: 5, curated: true)
+        #expect(sel.picks.count == 5 && sel.excluded.isEmpty)
+    }
+
     @Test("Blir för få kvar tas mjuka bortfall tillbaka")
     func softExclusionsReinstated() {
         var list = Array(villa().prefix(5))
