@@ -648,11 +648,8 @@ struct PhotoFlowCLI {
             standardError("Indatamappen finns inte: \(inputURL.path)\n")
             exit(1)
         }
-        let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "tif", "tiff", "heic"]
-        let files = ((try? FileManager.default.contentsOfDirectory(
-            at: inputURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? [])
-            .filter { imageExtensions.contains($0.pathExtension.lowercased()) }
-            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        // Utan TIFF-tvillingar (samma regel som redigeraren och pipelinens filmförslag).
+        let files = ReelFileIndex.filmImages(in: inputURL, filmDirectory: outputURL)
         guard !files.isEmpty else {
             standardError("Inga bilder i \(inputURL.path)\n")
             exit(1)

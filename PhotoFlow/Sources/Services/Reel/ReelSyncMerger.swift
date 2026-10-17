@@ -63,6 +63,38 @@ nonisolated enum ReelFileIndex {
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
     }
 
+    static let lightExtensions: Set<String> = ["jpg", "jpeg", "png", "heic"]
+    static let tiffExtensions: Set<String> = ["tif", "tiff"]
+
+    /// Utan TIFF-tvillingar: en `.tif`/`.tiff` hoppas över när en JPG/HEIC/PNG med samma stam finns i
+    /// listan (`DSC_1635_enh.tiff` mot `DSC_1635_enh.jpg`). TIFF:en är 50 gånger större och ger
+    /// filmen ingenting (analysen läser hela filen över nätet). Filer i `keeping` (filnamn) behålls
+    /// alltid: bilder en befintlig film redan använder, så att den känns igen och inget går förlorat.
+    /// Ordningen bevaras.
+    static func withoutTiffTwins(_ files: [URL], keeping: Set<String> = []) -> [URL] {
+        func stem(_ url: URL) -> String { url.deletingPathExtension().lastPathComponent.lowercased() }
+        let lightStems = Set(files.filter { lightExtensions.contains($0.pathExtension.lowercased()) }.map(stem))
+        return files.filter { url in
+            guard tiffExtensions.contains(url.pathExtension.lowercased()) else { return true }
+            return keeping.contains(url.lastPathComponent) || !lightStems.contains(stem(url))
+        }
+    }
+
+    /// Filnamnen (utan mapp) som en befintlig `reel.json` i filmmappen refererar till via `sources.path`.
+    /// Tomt om filen saknas eller inte går att läsa.
+    static func referencedFileNames(inFilmDirectory directory: URL?) -> Set<String> {
+        guard let directory,
+              let data = try? Data(contentsOf: directory.appendingPathComponent("reel.json")),
+              let spec = try? ReelSpec.decode(from: data) else { return [] }
+        return Set(spec.assets.flatMap(\.sources).compactMap(\.path).map { ($0 as NSString).lastPathComponent })
+    }
+
+    /// Bilderna en film byggs av: alla bilder i mappen utom TIFF-tvillingar (se `withoutTiffTwins`),
+    /// med undantag för det en befintlig `reel.json` i `filmDirectory` använder.
+    static func filmImages(in directory: URL, filmDirectory: URL?) -> [URL] {
+        withoutTiffTwins(imageFiles(in: directory), keeping: referencedFileNames(inFilmDirectory: filmDirectory))
+    }
+
     /// Hashar alla bilder i mappen (utanför anroparens aktör).
     @concurrent
     static func build(sourceDirectory: URL) async -> [String: URL] {

@@ -68,13 +68,17 @@ nonisolated enum ReelProposal {
     /// Bildfilerna i en källmapp (sorterade). FÖRBÄTTRADE: bara `_enh.jpg` (TIFF:en är för stor
     /// för filmen). TITTBILDER: JPEG, utan exponeringarna i de bracketgrupper som har en HDR-JPEG
     /// i samma mapp (annars kommer samma motiv med både mörk, ljus och HDR-version).
-    static func images(of kind: SourceKind, in directory: URL, existing: ExistingData = ExistingData()) -> [URL] {
+    static func images(of kind: SourceKind, in directory: URL, existing: ExistingData = ExistingData(),
+                       filmDirectory: URL? = nil) -> [URL] {
         let entries = (try? FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
         var files: [URL]
         switch kind {
         case .finished:
-            files = entries.filter { finishedExtensions.contains($0.pathExtension.lowercased()) }
+            // Utan TIFF-tvillingar (JPG:en räcker för filmen), utom bilder en befintlig film redan använder.
+            files = ReelFileIndex.withoutTiffTwins(
+                entries.filter { finishedExtensions.contains($0.pathExtension.lowercased()) },
+                keeping: ReelFileIndex.referencedFileNames(inFilmDirectory: filmDirectory))
         case .enhanced:
             files = entries.filter {
                 ["jpg", "jpeg"].contains($0.pathExtension.lowercased())
@@ -99,9 +103,10 @@ nonisolated enum ReelProposal {
     static func selectSource(outputDir: URL, folderName: String, existing: ExistingData = ExistingData())
         -> (source: Source?, counts: [SourceKind: Int]) {
         var counts: [SourceKind: Int] = [:]
+        let filmDir = AddressFolderLayout.reelDir(in: outputDir, folderName: folderName)
         for kind in [SourceKind.finished, .enhanced, .preview] {
             let dir = kind.directory(in: outputDir, folderName: folderName)
-            let files = images(of: kind, in: dir, existing: existing)
+            let files = images(of: kind, in: dir, existing: existing, filmDirectory: filmDir)
             counts[kind] = files.count
             if files.count >= minimumImages { return (Source(kind: kind, directory: dir, files: files), counts) }
         }

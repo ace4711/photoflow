@@ -436,12 +436,10 @@ final class ReelEditorModel {
 
     // MARK: Källa och analys
 
-    /// Bildfilerna i en mapp, i filnamnsordning.
-    static func imageFiles(in directory: URL) -> [URL] {
-        ((try? FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? [])
-            .filter { imageExtensions.contains($0.pathExtension.lowercased()) }
-            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+    /// Bildfilerna i en mapp, i filnamnsordning, utan TIFF-tvillingar (se `ReelFileIndex.withoutTiffTwins`).
+    /// `filmDirectory`: filmmappen, vars `reel.json` talar om vilka TIFF-filer som ändå ska vara med.
+    static func imageFiles(in directory: URL, filmDirectory: URL? = nil) -> [URL] {
+        ReelFileIndex.filmImages(in: directory, filmDirectory: filmDirectory)
     }
 
     /// Öppnar en källmapp: analyserar (cache i `reel_analysis.json` i utmappen) och föreslår film.
@@ -449,7 +447,7 @@ final class ReelEditorModel {
         cancelAll()
         let source = source.resolvingSymlinksInPath()
         let reelDir = AddressFolderLayout.reelDir(forSource: source)
-        let files = Self.imageFiles(in: source)
+        let files = Self.imageFiles(in: source, filmDirectory: reelDir)
         guard !files.isEmpty else {
             phase = .failed("Inga bilder hittades i \"\(source.lastPathComponent)\".")
             return
