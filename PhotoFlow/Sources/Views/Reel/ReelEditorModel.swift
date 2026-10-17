@@ -592,6 +592,38 @@ final class ReelEditorModel {
         apply(order: order, overrides: o, op: "motion")
     }
 
+    /// Klippets analys (matchad mot assetens sha256), för motivlager och "Centrera på motivet".
+    func analysis(forAsset assetID: String) -> ReelImageAnalysis? {
+        guard let sha = spec?.assets.first(where: { $0.id == assetID })?.sha256 else { return nil }
+        return items.first { $0.analysis.sha256 == sha }?.analysis
+    }
+
+    /// Bildens storlek och utformatets bildförhållande för geometriberäkningar i rörelseeditorn.
+    func motionGeometryContext(forAsset assetID: String) -> (imageSize: CGSize, frameAspect: Double)? {
+        guard let spec, let asset = spec.assets.first(where: { $0.id == assetID }),
+              let output = spec.outputs.first, asset.width > 0, asset.height > 0 else { return nil }
+        return (CGSize(width: asset.width, height: asset.height), ReelMotionPlanner.frameAspect(output))
+    }
+
+    /// Byter start och slut på klippets rörelse. Låser rörelsen som egen (`custom`).
+    func swapMotionEnds(_ assetID: String) {
+        guard let clip = spec?.timeline.first(where: { $0.asset == assetID }) else { return }
+        setCustomMotion(assetID, fit: clip.fit, motion: .init(from: clip.motion.to, to: clip.motion.from))
+    }
+
+    /// Flyttar båda ramarnas mitt till motivets tyngdpunkt (analysens `focus`), med bibehållen zoom
+    /// och klampat mot bilden. Gör inget utan känt motiv.
+    func centerMotionOnSubject(_ assetID: String) {
+        guard let clip = spec?.timeline.first(where: { $0.asset == assetID }),
+              let focus = analysis(forAsset: assetID)?.focus,
+              let g = motionGeometryContext(forAsset: assetID) else { return }
+        func centered(_ key: ReelSpec.MotionKey) -> ReelSpec.MotionKey {
+            ReelMotionGeometry.clamped(.init(cx: focus.x, cy: focus.y, zoom: key.zoom),
+                                       fit: clip.fit, imageSize: g.imageSize, frameAspect: g.frameAspect)
+        }
+        setCustomMotion(assetID, fit: clip.fit, motion: .init(from: centered(clip.motion.from), to: centered(clip.motion.to)))
+    }
+
     /// Låser klippets övergång in. `nil` = låst på filmens standardövergång; `{type: cut}` ger hårt klipp.
     func setTransition(_ assetID: String, _ transition: ReelSpec.Transition?) {
         var o = currentOverrides()
