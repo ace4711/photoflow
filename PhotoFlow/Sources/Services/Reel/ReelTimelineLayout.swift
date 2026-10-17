@@ -162,6 +162,46 @@ nonisolated enum ReelTimelineLayout {
         guard layout.blocks.indices.contains(index) else { return index }
         let dragged = layout.blocks[index]
         let center = dragged.x + dragged.width / 2 + dx
-        return layout.blocks.filter { $0.index != index && $0.x + $0.width / 2 < center }.count
+        return insertionIndex(layout, x: center, excluding: index)
+    }
+
+    /// Antal block (utom `excluding`) vars mittpunkt ligger till vänster om `x`: platsen där något
+    /// som släpps vid `x` hamnar. Samma regel för flytt inom tidslinjen (`dropIndex`) och för bilder
+    /// som dras in från rutnätet (`externalDrop`).
+    static func insertionIndex(_ layout: Layout, x: Double, excluding: Int? = nil) -> Int {
+        layout.blocks.filter { $0.index != excluding && $0.x + $0.width / 2 < x }.count
+    }
+
+    // MARK: Släpp från rutnätet
+
+    /// Vad en bild från rutnätet gör när den släpps vid `x`.
+    nonisolated enum ExternalDrop: Equatable, Sendable {
+        /// Infoga som nytt klipp på plats `index` (0...antal klipp), se `ReelEditorModel.insertCandidate`.
+        case insert(Int)
+        /// Byt bild i klipp `index`.
+        case replace(Int)
+    }
+
+    /// Andel av blockets bredd (räknat från mitten) där en släppt bild byter klippets bild; utanför
+    /// den, nära skarvarna, infogas den i stället. 0,3 ger byte i mittersta 60 % av blocket.
+    static let replaceZone = 0.3
+
+    /// Släpp vid `x` (pixlar från tidslinjens vänsterkant): i mitten av ett block = byt bild, nära
+    /// en skarv, i ett överlapp eller utanför blocken = infoga där (`insertionIndex`).
+    static func externalDrop(_ layout: Layout, x: Double, replaceZone: Double = replaceZone) -> ExternalDrop {
+        if let block = layout.blocks.last(where: { x >= $0.x && x < $0.end }),
+           abs(x - (block.x + block.width / 2)) <= block.width * replaceZone {
+            return .replace(block.index)
+        }
+        return .insert(insertionIndex(layout, x: x))
+    }
+
+    /// Var släppindikatorn för en infogning på plats `index` ritas: mitt i skarven mellan klipp
+    /// `index − 1` och `index` (mitt i överlappet om det finns ett), annars filmens början eller slut.
+    static func insertionX(_ layout: Layout, at index: Int) -> Double {
+        guard let first = layout.blocks.first, let last = layout.blocks.last else { return 0 }
+        if index <= 0 { return first.x }
+        if index >= layout.blocks.count { return last.end }
+        return (layout.blocks[index - 1].end + layout.blocks[index].x) / 2
     }
 }

@@ -64,16 +64,27 @@ final class ReelEditorModel {
         var durationLocked: Bool
     }
 
-    struct CandidateRow: Identifiable, Equatable {
+    nonisolated struct CandidateRow: Identifiable, Equatable, Sendable {
         var id: String            // sha256
         var url: URL?
         var filename: String
         var room: String?
         var category: String?
         var score: Double
+        /// Bortfallsskäl: urvalets (verktygsbild, sned horisont, oskarp, dubblett) eller "Utesluten av dig".
         var excludedReason: String?
         /// Plats i filmen (0-baserad) om bilden är vald.
         var clipIndex: Int?
+        /// Låst i filmen (`editor.pinnedAssets`).
+        var isPinned = false
+        /// Utesluten av fotografen (`editor.excludedAssets`), till skillnad från urvalets bortfall.
+        var isUserExcluded = false
+        /// Urvalsskäl för en bild i filmen (`provenance.autoSelection`), "Vald av dig" för en bild
+        /// fotografen lagt in själv; nil för bilder utanför filmen.
+        var selectionReason: String?
+
+        /// Rummet som visas och filtreras på: rum, annars kategori, annars "Okänt rum".
+        var roomLabel: String { room ?? category ?? "Okänt rum" }
     }
 
     // MARK: Tillstånd
@@ -148,6 +159,7 @@ final class ReelEditorModel {
         case "reorder": return "Ändra ordning"
         case "remove": return "Ta bort bild"
         case "add": return "Lägg till bild"
+        case "insert": return "Infoga bild"
         case "replace": return "Byt bild"
         case "duration": return "Ändra längd"
         case "motion": return "Ändra rörelse"
@@ -317,11 +329,18 @@ final class ReelEditorModel {
             spec?.assets.first { $0.id == clip.asset }.map { ($0.sha256, i) }
         })
         let userExcluded = Set(spec?.editor?.excludedAssets ?? [])
+        let pinned = Set(spec?.editor?.pinnedAssets ?? [])
+        let reasons = Dictionary((spec?.provenance.autoSelection ?? []).map { ($0.asset, $0.reason) },
+                                 uniquingKeysWith: { a, _ in a })
         let rows = candidates.map { c in
-            CandidateRow(id: c.id, url: urls[c.id], filename: c.filename, room: c.room, category: c.category,
-                         score: scores[c.id] ?? 0,
-                         excludedReason: userExcluded.contains(c.id) ? "Utesluten av dig" : excluded[c.id],
-                         clipIndex: placed[c.id])
+            let index = placed[c.id]
+            let assetID = index.flatMap { spec?.timeline[$0].asset }
+            return CandidateRow(id: c.id, url: urls[c.id], filename: c.filename, room: c.room, category: c.category,
+                                score: scores[c.id] ?? 0,
+                                excludedReason: userExcluded.contains(c.id) ? "Utesluten av dig" : excluded[c.id],
+                                clipIndex: index,
+                                isPinned: pinned.contains(c.id), isUserExcluded: userExcluded.contains(c.id),
+                                selectionReason: assetID.map { reasons[$0] ?? "Vald av dig" })
         }
         return rows.sorted {
             if ($0.excludedReason == nil) != ($1.excludedReason == nil) { return $0.excludedReason == nil }
@@ -520,19 +539,63 @@ final class ReelEditorModel {
         apply(order: o, op: "remove")
     }
 
+    /// Får en bild till läggas till (filmen har färre än `countRange.upperBound` klipp)?
+    var canAddClip: Bool { order.count < Self.countRange.upperBound }
+
+    /// Klippets asset-id om bilden (sha256) redan är med i filmen.
+    func assetID(forCandidate id: String) -> String? {
+        guard let spec else { return nil }
+        let inFilm = Set(order)
+        return spec.assets.first { $0.sha256 == id && inFilm.contains($0.id) }?.id
+    }
+
+    /// En bild som fotografen själv lägger in i filmen är inte längre utesluten.
+    private static func unexclude(_ id: String) -> (inout ReelSpec.EditorState) -> Void {
+        { $0.excludedAssets?.removeAll { $0 == id } }
+    }
+
     /// Lägger bilden sist i filmen (högst `countRange.upperBound` klipp).
     func addCandidate(_ id: String) {
-        guard order.count < Self.countRange.upperBound, let asset = newAsset(forCandidate: id) else { return }
-        apply(order: order + [asset.id], newAssets: [asset], op: "add")
+        guard canAddClip, let asset = newAsset(forCandidate: id) else { return }
+        apply(order: order + [asset.id], newAssets: [asset], editor: Self.unexclude(id), op: "add")
         selectedAssetID = asset.id
     }
 
-    /// Byter klippets bild mot en annan; klippets rörelseval och längd följer inte med.
+    /// Infogar bilden som nytt klipp på plats `index` (0 = först, antal klipp = sist), inom taket
+    /// `countRange.upperBound` och som ett ångringssteg. Är bilden redan med i filmen flyttas dess
+    /// klipp dit i stället (ingen dubblett); `index` räknas då i nuvarande ordning, alltså före flytten.
+    /// En utesluten bild blir inte längre utesluten.
+    func insertCandidate(_ id: String, at index: Int) {
+        let clamped = min(max(index, 0), order.count)
+        if let existing = assetID(forCandidate: id), let from = order.firstIndex(of: existing) {
+            moveClip(existing, to: from < clamped ? clamped - 1 : clamped)
+            selectedAssetID = existing
+            return
+        }
+        guard canAddClip, let asset = newAsset(forCandidate: id) else { return }
+        var o = order
+        o.insert(asset.id, at: clamped)
+        apply(order: o, newAssets: [asset], editor: Self.unexclude(id), op: "insert")
+        selectedAssetID = asset.id
+    }
+
+    /// Byter klippets bild mot en annan; klippets rörelseval och längd följer inte med. Är bilden
+    /// redan med i filmen byter de två klippen plats i stället (ingen dubblett). En utesluten bild
+    /// blir inte längre utesluten.
     func replaceClip(_ assetID: String, withCandidate id: String) {
-        guard let pos = order.firstIndex(of: assetID), let asset = newAsset(forCandidate: id) else { return }
+        guard let pos = order.firstIndex(of: assetID) else { return }
+        if let existing = self.assetID(forCandidate: id) {
+            guard existing != assetID, let other = order.firstIndex(of: existing) else { return }
+            var o = order
+            o.swapAt(pos, other)
+            apply(order: o, op: "reorder")
+            selectedAssetID = existing
+            return
+        }
+        guard let asset = newAsset(forCandidate: id) else { return }
         var o = order
         o[pos] = asset.id
-        apply(order: o, newAssets: [asset], op: "replace")
+        apply(order: o, newAssets: [asset], editor: Self.unexclude(id), op: "replace")
         selectedAssetID = asset.id
     }
 
@@ -596,6 +659,25 @@ final class ReelEditorModel {
     func analysis(forAsset assetID: String) -> ReelImageAnalysis? {
         guard let sha = spec?.assets.first(where: { $0.id == assetID })?.sha256 else { return nil }
         return items.first { $0.analysis.sha256 == sha }?.analysis
+    }
+
+    /// Varför klippet fick sin rörelse (plan 4.5): beräknas på nytt ur specen med planerarens
+    /// regel (`ReelMotionPlanner.motionReasons`), med klippens nuvarande lås. "Vald av dig" när
+    /// rörelsen är ett förval eller dragen för hand.
+    func motionReason(forAsset assetID: String) -> ReelMotionPlanner.MotionReason? {
+        guard let spec, let i = spec.timeline.firstIndex(where: { $0.asset == assetID }) else { return nil }
+        let reasons = Self.motionReasons(spec)
+        return reasons.indices.contains(i) ? reasons[i] : nil
+    }
+
+    /// Rörelseskälen för alla klipp i specens ordning (samma indata som `ReelComposer.rebuild` ger planeraren).
+    nonisolated static func motionReasons(_ spec: ReelSpec) -> [ReelMotionPlanner.MotionReason] {
+        let byID = Dictionary(spec.assets.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let assets = spec.timeline.compactMap { byID[$0.asset] }
+        guard assets.count == spec.timeline.count, let output = spec.outputs.first else { return [] }
+        return ReelMotionPlanner.motionReasons(ReelComposer.plannerImages(assets),
+                                               frameAspect: ReelMotionPlanner.frameAspect(output),
+                                               overrides: ReelComposer.overrides(in: spec))
     }
 
     /// Bildens storlek och utformatets bildförhållande för geometriberäkningar i rörelseeditorn.
@@ -678,9 +760,20 @@ final class ReelEditorModel {
         apply(order: order, editor: { $0.orderLocked = locked }, op: "orderLock")
     }
 
-    /// Låser/släpper en bild (sha256) som "ska vara med" vid nästa förslag. Låsning släpper en uteslutning.
+    /// Låser/släpper en bild (sha256) som "ska vara med" vid nästa förslag. Låsning släpper en
+    /// uteslutning. En låst bild som inte är med i filmen läggs till sist i samma ångringssteg om
+    /// det finns plats (under `countRange.upperBound`); är filmen full markeras den bara som låst och
+    /// kommer med vid nästa "Föreslå igen" (som då kan göra filmen längre än begärt antal). Att
+    /// släppa låset tar inte bort bilden ur filmen.
     func togglePinned(_ candidateID: String) {
-        apply(order: order, editor: { e in
+        let pinning = !(spec?.editor?.pinnedAssets ?? []).contains(candidateID)
+        var o = order
+        var added: [ReelSpec.Asset] = []
+        if pinning, assetID(forCandidate: candidateID) == nil, canAddClip, let asset = newAsset(forCandidate: candidateID) {
+            o.append(asset.id)
+            added = [asset]
+        }
+        apply(order: o, newAssets: added, editor: { e in
             var pinned = e.pinnedAssets ?? []
             if let i = pinned.firstIndex(of: candidateID) { pinned.remove(at: i) } else {
                 pinned.append(candidateID)
@@ -688,6 +781,7 @@ final class ReelEditorModel {
             }
             e.pinnedAssets = pinned
         }, op: "pin")
+        if let asset = added.first { selectedAssetID = asset.id }
     }
 
     /// Utesluter/återtar en bild (sha256). Uteslutning släpper en låsning, och en bild som är med i

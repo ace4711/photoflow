@@ -150,6 +150,14 @@ nonisolated enum ReelMotionPlanner {
     /// Rörelsetyper per bild: förval från fotografen först, sedan automatiskt val, och till sist
     /// en medveten blandning så att minst `minZoomShare` av klippen är zoom/contain.
     static func kinds(_ images: [Image], frameAspect: Double, overrides: [String: ClipOverride] = [:]) -> [Kind] {
+        kindDecisions(images, frameAspect: frameAspect, overrides: overrides).kinds
+    }
+
+    /// Samma val som `kinds`, plus vilka klipp som styrdes av fotografen (`forced`) och vilka som
+    /// blev zoom bara genom blandningsregeln (`mixed`). Delas av `kinds` och `motionReasons`, så att
+    /// förklaringen alltid följer exakt samma regel som planeringen.
+    private static func kindDecisions(_ images: [Image], frameAspect: Double, overrides: [String: ClipOverride])
+        -> (kinds: [Kind], forced: Set<Int>, mixed: Set<Int>) {
         var result = images.map { kind(of: $0, frameAspect: frameAspect) }
         var forced = Set<Int>()
         for (i, image) in images.enumerated() {
@@ -163,18 +171,91 @@ nonisolated enum ReelMotionPlanner {
             case .contain: result[i] = .containBlur; forced.insert(i)
             }
         }
-        guard images.count >= 3 else { return result }
+        guard images.count >= 3 else { return (result, forced, []) }
         let wanted = max(1, Int(Double(images.count) * minZoomShare))
         var have = result.filter { $0 != .pan }.count
+        var mixed = Set<Int>()
         // Smalaste motivet först: det vinner mest på att zoomas.
         let candidates = images.indices
             .filter { result[$0] == .pan && !forced.contains($0) }
             .sorted { (images[$0].focusWidth ?? images[$0].salientWidth ?? 1) < (images[$1].focusWidth ?? images[$1].salientWidth ?? 1) }
         for i in candidates where have < wanted {
             result[i] = .zoom
+            mixed.insert(i)
             have += 1
         }
-        return result
+        return (result, forced, mixed)
+    }
+
+    // MARK: - Varför (rörelse)
+
+    /// Varför ett klipp fick sin rörelsetyp (plan 4.5). Andelar är av bildens bredd: `subject` är
+    /// motivbredden som regeln använde (`focusWidth`, annars `salientWidth`; nil = okänd, regeln antar
+    /// då 50 %), `frame` är hur stor del av bredden ramen visar vid zoom 1 (`visibleWidth`).
+    nonisolated enum MotionReason: Equatable, Sendable {
+        /// Förval eller egen rörelse från fotografen.
+        case chosenByUser
+        /// Motivet ryms i ramen: zoom.
+        case subjectFits(subject: Double?, frame: Double)
+        /// Bilden är nästan lika smal som ramen (synlig bredd ≥ `wideSubject`): inget att panorera, zoom.
+        case narrowImage(frame: Double)
+        /// Motivet är bredare än ramen: panorering.
+        case subjectWider(subject: Double?, frame: Double)
+        /// Bred exteriör (motiv över `wideSubject`): hela bilden med suddig bakgrund.
+        case wideExterior(subject: Double?)
+        /// Hade panorerats, men blev zoom för att minst `minZoomShare` av klippen ska vara zoom.
+        case variation(subject: Double?, frame: Double)
+
+        /// Rörelsetypen skälet leder till (nil för fotografens egna val).
+        var kind: Kind? {
+            switch self {
+            case .chosenByUser: return nil
+            case .subjectFits, .narrowImage, .variation: return .zoom
+            case .subjectWider: return .pan
+            case .wideExterior: return .containBlur
+            }
+        }
+
+        /// Kort förklaring på svenska, t.ex. "Panorering: motivet (62 % av bredden) är bredare än ramen (37 %)".
+        var text: String {
+            func pct(_ x: Double) -> String { "\(Int((x * 100).rounded())) %" }
+            func subjectText(_ s: Double?) -> String { s.map { "motivet (\(pct($0)) av bredden)" } ?? "motivet (okänd bredd, antas 50 %)" }
+            switch self {
+            case .chosenByUser:
+                return "Vald av dig"
+            case .subjectFits(let s, let f):
+                return "Zoom: \(subjectText(s)) ryms i ramen (\(pct(f)))"
+            case .narrowImage(let f):
+                return "Zoom: ramen visar nästan hela bildens bredd (\(pct(f))), så det finns inget att panorera"
+            case .subjectWider(let s, let f):
+                return "Panorering: \(subjectText(s)) är bredare än ramen (\(pct(f)))"
+            case .wideExterior(let s):
+                return "Hela bilden: bred exteriör, \(subjectText(s))"
+            case .variation(let s, let f):
+                return "Zoom för variation (minst \(pct(minZoomShare)) zoom): \(subjectText(s)) är bredare än ramen (\(pct(f))) och hade annars panorerats"
+            }
+        }
+    }
+
+    /// Skälet till varje klipps rörelsetyp, i samma ordning som `images` och med exakt samma regel
+    /// som `plan` (`kind(of:)`, fotografens förval och blandningsregeln). Ren funktion: beräknas på
+    /// nytt när den behövs och sparas inte i specen.
+    static func motionReasons(_ images: [Image], frameAspect: Double,
+                              overrides: [String: ClipOverride] = [:]) -> [MotionReason] {
+        let d = kindDecisions(images, frameAspect: frameAspect, overrides: overrides)
+        return images.enumerated().map { i, image in
+            let frame = visibleWidth(imageAspect: image.aspect, frameAspect: frameAspect)
+            let subject = image.focusWidth ?? image.salientWidth
+            if d.forced.contains(i) { return .chosenByUser }
+            if d.mixed.contains(i) { return .variation(subject: subject, frame: frame) }
+            switch d.kinds[i] {
+            case .containBlur: return .wideExterior(subject: subject)
+            case .pan: return .subjectWider(subject: subject, frame: frame)
+            case .zoom:
+                // Samma ordning som `kind(of:)`: ryms motivet räknas det före den smala bilden.
+                return (subject ?? 0.5) <= frame ? .subjectFits(subject: subject, frame: frame) : .narrowImage(frame: frame)
+            }
+        }
     }
 
     /// Vilken sorts rörelse en egen rörelse är (styr grundlängd och zoomandelen): contain-blur,
