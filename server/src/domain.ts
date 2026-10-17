@@ -14,6 +14,7 @@ import { inspectJpeg, JpegError } from "./jpeg.ts";
 import { parseReelSpec, ReelSpecError, CURRENT_VERSION } from "../../web/reel/src/reelSpec.ts";
 import type { ReelSpec } from "../../web/reel/src/reelSpec.ts";
 import { totalDuration } from "../../web/reel/src/reelTimeline.ts";
+import { lockViolations } from "./locks.ts";
 
 export type Status = "draft" | "proposed" | "approved" | "rendered";
 export type Role = "photographer" | "agent";
@@ -240,6 +241,10 @@ function canonicalize(d: Deps, o: ObjectRow, input: unknown, actor: Actor, prev:
   }
   if (new Set(spec.outputs.map((x) => x.id)).size !== spec.outputs.length) throw bad("Utbildsprofilernas id måste vara unika.");
   if (actor.role === "agent" && prev && canonicalJson(prev.outputs) !== canonicalJson(spec.outputs)) throw bad("Mäklaren får inte ändra utbildsprofilerna.");
+  if (actor.role === "agent" && prev) {
+    const v = lockViolations(prev, spec);
+    if (v.length) throw new ApiError(422, "invalid_spec", `Mäklaren får inte ändra fotografens lås. ${v.join(" ")}`, { lockViolations: v });
+  }
 
   const pool = new Map(poolOf(d, o.id).map((p) => [p.sha256, p]));
   for (const a of spec.assets) {
