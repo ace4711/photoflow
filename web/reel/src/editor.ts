@@ -11,12 +11,14 @@ import type { Asset, Clip, ReelSpec } from "./reelSpec.ts";
 import { clipStarts, totalDuration, transition } from "./reelTimeline.ts";
 import { renderFrame } from "./canvasRenderer.ts";
 import type { DrawableImage } from "./canvasRenderer.ts";
-import { approvedCopy, editedCopy } from "./approve.ts";
+import { approvedCopy, editedCopy, sortKeys } from "./approve.ts";
 import { ShareClient, ShareError, STATUS_TEXT, tokenFromHash } from "./shareApi.ts";
 import type { ShareView } from "./shareApi.ts";
 import { matchAssets } from "./assetMatcher.ts";
-import { PRESETS, PRESET_LABELS, planClip } from "./motionPresets.ts";
+import { CUSTOM, CUSTOM_LABEL, MAX_CLIPS, PRESETS, PRESET_LABELS } from "./motionPresets.ts";
 import type { Preset } from "./motionPresets.ts";
+import * as regi from "./regi.ts";
+import { LOCKED_BY_PHOTOGRAPHER, RegiError } from "./regi.ts";
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 
@@ -231,67 +233,75 @@ function resizeCanvas(): void {
 
 function logEdit(op: string): void { if (pendingOps[pendingOps.length - 1] !== op) pendingOps.push(op); }
 
-function changed(op: string): void {
-  logEdit(op);
+function changed(ops: string[]): void {
+  if (ops.length === 0) return;
+  ops.forEach(logEdit);
   if (share) { share.dirty = true; updateShareUi(); }
   time = Math.min(time, total());
   selected = Math.min(selected, Math.max(0, spec!.timeline.length - 1));
   renderAll();
 }
 
+// Själva ändringarna (och reglerna för fotografens lås) finns i regi.ts.
+
+function attempt(f: () => string[]): string[] | null {
+  try {
+    return f();
+  } catch (e) {
+    if (e instanceof RegiError) { message(e.message, "err"); return null; }
+    throw e;
+  }
+}
+
 function moveClip(from: number, to: number): void {
-  if (!spec || to < 0 || to >= spec.timeline.length || from === to) return;
-  const [c] = spec.timeline.splice(from, 1);
-  spec.timeline.splice(to, 0, c);
+  if (!spec) return;
+  const ops = regi.moveClip(spec, from, to, frameAspect());
+  if (!ops.length) return;
   selected = to;
-  changed("reorder");
+  changed(ops);
   seekToClip(to);
 }
 
 function removeClip(i: number): void {
   if (!spec) return;
-  if (spec.timeline.length <= 1) { message("Filmen måste ha minst ett klipp.", "err"); return; }
-  spec.timeline.splice(i, 1);
-  changed("remove");
+  const clip = spec.timeline[i];
+  if (clip && spec.timeline.length > 1 && regi.isPinned(spec, clip) &&
+      !confirm("Fotografen har låst bilden så att den alltid är med. Ta bort den ändå? Låsningen släpps då, så bilden kommer inte tillbaka vid ett nytt förslag.")) return;
+  const ops = attempt(() => regi.removeClip(spec!, i, frameAspect()));
+  if (!ops) return;
+  changed(ops);
+  if (ops.includes("unpin")) message("Bilden togs bort och fotografens låsning av den släpptes.");
 }
 
 function setDuration(i: number, d: number): void {
-  if (!spec || !Number.isFinite(d)) return;
-  const c = spec.timeline[i];
-  c.duration = Math.round(Math.min(Math.max(d, 0.5), MAX_CLIP_SECONDS()) * 10) / 10;
-  c.durationLocked = true;
-  changed("duration");
+  if (!spec) return;
+  changed(regi.setDuration(spec, i, d, MAX_CLIP_SECONDS()));
 }
 
 function setPreset(i: number, preset: Preset): void {
   if (!spec) return;
   const c = spec.timeline[i];
-  if (preset === "auto") {
-    delete c.motionPreset; // behåll nuvarande motion
-  } else {
-    const asset = assetOf(c.asset);
-    if (!asset) return;
-    const p = planClip({
-      asset, frameAspect: frameAspect(), preset, index: i, count: spec.timeline.length,
-      lockedDuration: c.durationLocked ? c.duration : undefined, current: c,
-    });
-    c.fit = p.fit; c.motion = p.motion; c.duration = p.duration;
-    c.motionPreset = preset;
+  if (c?.motionPreset === CUSTOM &&
+      !confirm("Fotografen har gjort en egen rörelse för bilden. Vill du ersätta den med förvalet?")) {
+    renderStrip(); // återställ menyn till "Egen rörelse"
+    return;
   }
-  changed("motion");
+  changed(regi.setPreset(spec, i, preset, frameAspect()));
 }
 
 async function addClip(assetId: string): Promise<void> {
   if (!spec) return;
   const asset = assetOf(assetId);
   if (!asset) return;
+  const excluded = regi.isExcluded(spec, asset);
+  if (excluded && regi.canAddMore(spec) &&
+      !confirm("Fotografen har uteslutit bilden ur filmen. Lägga till den ändå? Uteslutningen släpps då.")) return;
   if (share) await ensureFull(assetId);
-  const index = spec.timeline.length;
-  const p = planClip({ asset, frameAspect: frameAspect(), preset: "auto", index, count: index + 1 });
-  const clip: Clip = { asset: assetId, ...p };
-  spec.timeline.push(clip);
+  const ops = attempt(() => regi.addClip(spec!, assetId, frameAspect(), { allowExcluded: excluded }));
+  if (!ops) return;
+  const index = spec.timeline.length - 1;
   selected = index;
-  changed("add");
+  changed(ops);
   seekToClip(index);
 }
 
@@ -317,6 +327,10 @@ function renderAll(): void {
   if (!spec) return;
   renderStrip(); renderCandidates(); draw(); updateTransport();
   $("total").textContent = `${spec.timeline.length} klipp, ${sv(total())} s`;
+  const film = regi.filmLocks(spec);
+  const box = $("filmLocks");
+  box.replaceChildren(...film.map((t) => lockBadge(t, `${t}. ${LOCKED_BY_PHOTOGRAPHER}.`)));
+  box.hidden = film.length === 0;
 }
 
 function highlightSelected(): void {
@@ -339,6 +353,31 @@ function thumbEl(assetId: string, onClick?: () => void): HTMLElement {
   return img;
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** Liten låsikon (SVG, följer textfärgen). */
+function lockIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("lock-icon");
+  const body = document.createElementNS(SVG_NS, "rect");
+  for (const [k, v] of [["x", "3"], ["y", "7"], ["width", "10"], ["height", "7"], ["rx", "1.5"], ["fill", "currentColor"]]) body.setAttribute(k, v);
+  const shackle = document.createElementNS(SVG_NS, "path");
+  for (const [k, v] of [["d", "M5.5 7V5a2.5 2.5 0 0 1 5 0v2"], ["fill", "none"], ["stroke", "currentColor"], ["stroke-width", "1.6"]]) shackle.setAttribute(k, v);
+  svg.append(body, shackle);
+  return svg;
+}
+
+/** Låsmärke: ikon och text, med en förklaring i title och för skärmläsare. */
+function lockBadge(text: string, title: string): HTMLElement {
+  const b = el("span", "lock");
+  b.title = title;
+  b.setAttribute("aria-label", title);
+  b.append(lockIcon(), el("span", undefined, text));
+  return b;
+}
+
 function renderStrip(): void {
   const strip = $("strip");
   strip.replaceChildren();
@@ -350,18 +389,42 @@ function renderStrip(): void {
     grip.title = "Dra för att flytta";
     grip.addEventListener("pointerdown", (e) => startDrag(e, li, grip, i));
 
+    const locks = regi.clipLocks(s, i);
     const info = el("div", "info");
     info.append(el("div", "name", `${i + 1}. ${asset.analysis?.room ?? asset.id}`),
       el("div", "sub", fileNames.get(clip.asset) ?? "bilden saknas"));
+    // Övergången in visas men går inte att ändra här (fotografen styr övergångar i Mac-appen).
+    if (locks.transition) {
+      const t = el("div", "trans", `In: ${locks.transition}`);
+      if (locks.transitionLocked) {
+        t.append(" ", lockBadge(LOCKED_BY_PHOTOGRAPHER, "Övergången är vald av fotografen och följer med klippet."));
+      }
+      info.append(t);
+    }
+    if (locks.pinned) {
+      info.append(lockBadge(`Alltid med · ${LOCKED_BY_PHOTOGRAPHER.toLowerCase()}`,
+        "Fotografen har låst bilden så att den alltid är med i filmen."));
+    }
 
     const controls = el("div", "controls");
     const sel = el("select");
     sel.setAttribute("aria-label", "Rörelse");
-    const current = (clip.motionPreset as Preset | undefined) ?? "auto";
+    const current: string = locks.customMotion ? CUSTOM
+      : (PRESETS as readonly string[]).includes(clip.motionPreset ?? "") ? clip.motionPreset! : "auto";
+    if (locks.customMotion) {
+      // Egen rörelse är inget menyval: visas bara för klippet som har den.
+      const o = el("option", undefined, CUSTOM_LABEL); o.value = CUSTOM; o.selected = true; sel.append(o);
+    }
     for (const p of PRESETS) {
       const o = el("option", undefined, PRESET_LABELS[p]); o.value = p; o.selected = p === current; sel.append(o);
     }
-    sel.addEventListener("change", () => setPreset(i, sel.value as Preset));
+    sel.addEventListener("change", () => { if (sel.value !== CUSTOM) setPreset(i, sel.value as Preset); });
+    const motionBox = el("div", "motion");
+    motionBox.append(sel);
+    if (locks.customMotion) {
+      motionBox.append(lockBadge(LOCKED_BY_PHOTOGRAPHER,
+        "Fotografen har gjort en egen rörelse för bilden. Den behålls tills du väljer ett annat förval."));
+    }
 
     const dur = el("span", "dur");
     const minus = el("button", "btn small", "−"); minus.setAttribute("aria-label", "Kortare");
@@ -372,6 +435,13 @@ function renderStrip(): void {
     plus.addEventListener("click", () => setDuration(i, clip.duration + 0.5));
     input.addEventListener("change", () => setDuration(i, parseFloat(input.value.replace(",", "."))));
     dur.append(minus, input, el("span", "muted", "s"), plus);
+    if (locks.durationLocked) {
+      const l = el("span", "lock icon-only");
+      l.title = "Längden är låst och räknas inte om automatiskt.";
+      l.setAttribute("aria-label", l.title);
+      l.append(lockIcon());
+      dur.append(l);
+    }
 
     const up = el("button", "btn small", "↑"); up.setAttribute("aria-label", "Flytta upp"); up.disabled = i === 0;
     const down = el("button", "btn small", "↓"); down.setAttribute("aria-label", "Flytta ner"); down.disabled = i === s.timeline.length - 1;
@@ -379,7 +449,7 @@ function renderStrip(): void {
     up.addEventListener("click", () => moveClip(i, i - 1));
     down.addEventListener("click", () => moveClip(i, i + 1));
     del.addEventListener("click", () => removeClip(i));
-    controls.append(sel, dur, el("span", "spacer"), up, down, del);
+    controls.append(motionBox, dur, el("span", "spacer"), up, down, del);
 
     li.append(grip, thumbEl(clip.asset, () => seekToClip(i)), info, controls);
     strip.append(li);
@@ -388,16 +458,23 @@ function renderStrip(): void {
 
 function renderCandidates(): void {
   const s = spec!;
-  const onTimeline = new Set(s.timeline.map((c) => c.asset));
   const box = $("candidates");
   box.replaceChildren();
-  const rest = s.assets.filter((a) => !onTimeline.has(a.id) && images.has(a.id));
+  // Uteslutna bilder visas sist och gråade; de kan bara läggas till efter en fråga.
+  const rest = regi.candidates(s, (id) => images.has(id));
   $("candWrap").hidden = rest.length === 0;
-  for (const a of rest) {
-    const c = el("div", "cand");
-    const b = el("button", "btn small", "Lägg till");
+  const full = !regi.canAddMore(s);
+  const note = $("candFull");
+  note.hidden = !full;
+  note.textContent = `Högst ${MAX_CLIPS} klipp i en film. Ta bort ett klipp för att lägga till en annan bild.`;
+  for (const { asset: a, excluded } of rest) {
+    const c = el("div", excluded ? "cand excluded" : "cand");
+    const b = el("button", "btn small", excluded ? "Lägg till ändå" : "Lägg till");
+    b.disabled = full;
     b.addEventListener("click", () => void addClip(a.id));
-    c.append(thumbEl(a.id), el("div", undefined, a.analysis?.room ?? a.id), b);
+    c.append(thumbEl(a.id), el("div", undefined, a.analysis?.room ?? a.id));
+    if (excluded) c.append(el("div", "why", "Utesluten av fotografen"));
+    c.append(b);
     box.append(c);
   }
 }
@@ -581,14 +658,6 @@ async function approveShare(): Promise<void> {
 }
 
 // ------------------------------------------------------------------ godkänn
-
-function sortKeys(v: unknown): unknown {
-  if (Array.isArray(v)) return v.map(sortKeys);
-  if (v && typeof v === "object") {
-    return Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys((v as Record<string, unknown>)[k])]));
-  }
-  return v;
-}
 
 const isoNow = (): string => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 

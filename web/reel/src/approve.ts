@@ -17,6 +17,15 @@ export function approvedCopy(src: ReelSpec, ops: string[], name: string, at: str
   return out;
 }
 
+/** JSON-värdet med nycklarna sorterade (stabil fil att ladda ner och jämföra). Ändrar inga värden. */
+export function sortKeys(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(sortKeys);
+  if (v && typeof v === "object") {
+    return Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys((v as Record<string, unknown>)[k])]));
+  }
+  return v;
+}
+
 /** Kopia med mäklarens ändringar loggade i provenance.edits men utan att röra revision och status (servern räknar upp dem). */
 export function editedCopy(src: ReelSpec, ops: string[], name: string, at: string): ReelSpec {
   const out = structuredClone(src);
