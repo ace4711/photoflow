@@ -66,7 +66,9 @@ struct ReelSelectorTests {
     @Test("Villa med bra fasad: fasaden öppnar, även när ett rum har lite högre poäng (inom marginalen)")
     func houseOpensWithGoodFacade() {
         var list = villa()
-        list[0].quality = 0.80   // fasad: 0,0275 under vardagsrummet (0,85)
+        // Fasad 0,82 mot vardagsrummets 0,85: absolut 0,0165 och med estetikens rang inom objektet
+        // (`qualityRankBoost`) ca 0,044 under, alltså inom marginalen 0,08.
+        list[0].quality = 0.82
         let sel = ReelSelector.select(list)
         #expect(sel.template == .house)
         #expect(sel.picks.first?.candidateID == "fasad")
@@ -502,5 +504,20 @@ struct ReelSelectorTests {
         #expect(sel.picks.count == 4)
         #expect(Set(sel.picks.map(\.candidateID)).count == 4)
         #expect(ids(sel).contains("k2"))
+    }
+
+    @Test("Estetiken jämförs inom objektet: rangen sprider poängen men behåller medelnivån")
+    func qualityRankWithinObject() {
+        let w = ReelSelector.Weights()
+        let low = cand("l", room: "Kök", q: 0.75, axis: 0), high = cand("h", room: "Kök", q: 0.85, axis: 1)
+        let plainGap = ReelSelector.baseScore(high, sharpnessPercentile: 0.5, weights: w)
+            - ReelSelector.baseScore(low, sharpnessPercentile: 0.5, weights: w)
+        let rankedGap = ReelSelector.baseScore(high, sharpnessPercentile: 0.5, qualityPercentile: 1, weights: w)
+            - ReelSelector.baseScore(low, sharpnessPercentile: 0.5, qualityPercentile: 0, weights: w)
+        #expect(abs(rankedGap - (plainGap + w.quality * w.qualityRankBoost)) < 1e-12)
+        // Mittenrang ändrar inte poängen.
+        #expect(ReelSelector.baseScore(low, sharpnessPercentile: 0.5, qualityPercentile: 0.5, weights: w)
+                == ReelSelector.baseScore(low, sharpnessPercentile: 0.5, weights: w))
+        #expect(ReelSelector.qualityPercentiles([low, high]) == ["l": 0, "h": 1])
     }
 }

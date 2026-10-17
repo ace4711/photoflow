@@ -45,6 +45,12 @@ nonisolated enum ReelSelector {
     /// Vikterna är startvärden ur planen och ska kalibreras mot fotografens egna val.
     nonisolated struct Weights: Sendable, Equatable {
         var quality = 0.55
+        /// Estetiken jämförs inom objektet: kvalitetstermen är den absoluta poängen plus
+        /// `qualityRankBoost`·(percentilrank − 0,5). Medelnivån är oförändrad (så att gränser som
+        /// `bathroomMinScore` betyder samma sak), men skillnaden mellan objektets vackraste och
+        /// minst vackra bild blir större. Vision ger ofta alla bilder i ett objekt 0,73–0,87, och
+        /// utan rangen väger estetiken då nästan ingenting mot skärpa och ljus.
+        var qualityRankBoost = 0.3
         var sharpness = 0.15
         var feature = 0.10
         var light = 0.10
@@ -260,10 +266,19 @@ nonisolated enum ReelSelector {
 
     /// Percentilrank (0...1) för varje kandidats skärpa bland dem som har skärpa; saknad = 0,5.
     static func sharpnessPercentiles(_ candidates: [ReelCandidate]) -> [String: Double] {
-        let values = candidates.compactMap(\.sharpness)
+        percentiles(candidates, \.sharpness)
+    }
+
+    /// Percentilrank (0...1) för varje kandidats estetiska kvalitet inom objektet; saknad = 0,5.
+    static func qualityPercentiles(_ candidates: [ReelCandidate]) -> [String: Double] {
+        percentiles(candidates, \.quality)
+    }
+
+    private static func percentiles(_ candidates: [ReelCandidate], _ key: KeyPath<ReelCandidate, Double?>) -> [String: Double] {
+        let values = candidates.compactMap { $0[keyPath: key] }
         var result: [String: Double] = [:]
         for c in candidates {
-            guard let s = c.sharpness, values.count > 1 else { result[c.id] = 0.5; continue }
+            guard let s = c[keyPath: key], values.count > 1 else { result[c.id] = 0.5; continue }
             let less = values.filter { $0 < s }.count
             let equal = values.filter { $0 == s }.count
             result[c.id] = (Double(less) + Double(equal - 1) / 2) / Double(values.count - 1)
@@ -289,8 +304,12 @@ nonisolated enum ReelSelector {
         return min(max(1 - w, 0), 1)
     }
 
-    static func baseScore(_ c: ReelCandidate, sharpnessPercentile: Double, weights w: Weights) -> Double {
-        let q = c.quality ?? 0.5
+    /// `qualityPercentile`: kvalitetens rang inom objektet (se `Weights.qualityRankBoost`); nil = bara
+    /// den absoluta poängen.
+    static func baseScore(_ c: ReelCandidate, sharpnessPercentile: Double, qualityPercentile: Double? = nil,
+                          weights w: Weights) -> Double {
+        var q = c.quality ?? 0.5
+        if c.quality != nil, let rank = qualityPercentile { q += w.qualityRankBoost * (rank - 0.5) }
         return w.quality * q
             + w.sharpness * sharpnessPercentile
             + w.feature * featureBonus(c)
@@ -445,8 +464,13 @@ nonisolated enum ReelSelector {
         let fixedCount = requested.map { min(max($0, minCount), maxCount) }
         let byID = Dictionary(candidates.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let pct = sharpnessPercentiles(candidates)
+        // Estetikens rang räknas bara när minst fyra bilder har kvalitetspoäng (annars säger rangen inget).
+        let qualityRanks = candidates.filter { $0.quality != nil }.count >= 4 ? qualityPercentiles(candidates) : [:]
         var scores: [String: Double] = [:]
-        for c in candidates { scores[c.id] = baseScore(c, sharpnessPercentile: pct[c.id] ?? 0.5, weights: weights) }
+        for c in candidates {
+            scores[c.id] = baseScore(c, sharpnessPercentile: pct[c.id] ?? 0.5, qualityPercentile: qualityRanks[c.id],
+                                     weights: weights)
+        }
         func score(_ c: ReelCandidate) -> Double { scores[c.id] ?? 0 }
 
         // Steg 1: hårda filter.
