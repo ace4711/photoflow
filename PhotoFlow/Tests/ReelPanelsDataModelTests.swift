@@ -151,11 +151,16 @@ struct ReelPanelsDataModelTests {
 
         let landscape = ReelComposer.rebuild(moved, order: moved.timeline.map(\.asset), format: .landscape)
         #expect(landscape.outputs[0].id == "landscape")
-        #expect(panelsClips(landscape).map(\.panels) == panelsClips(moved).map(\.panels))
-        #expect(panelsClips(landscape).map(\.layout) == [.stack, .sequence])
+        // R6d: ett låst rutklipps layout följer formatet (stapel passar inte 16:9: sida vid sida) och nycklarna klampas
+        // mot de nya rutorna (fixturens halvor har mittpunkten på skarven, så de flyttas in i halvan); rutornas
+        // bilder och källor är oförändrade. Sekvensen behåller sin layout.
+        #expect(panelsClips(landscape).map { $0.panels?.map(\.asset) } == panelsClips(moved).map { $0.panels?.map(\.asset) })
+        #expect(panelsClips(landscape).map { $0.panels?.map(\.source) } == panelsClips(moved).map { $0.panels?.map(\.source) })
+        #expect(panelsClips(landscape).map(\.layout) == [.side, .sequence])
         // Och tillbaka igen.
         let back = ReelComposer.rebuild(landscape, order: landscape.timeline.map(\.asset), format: .vertical)
-        #expect(panelsClips(back).map(\.panels) == panelsClips(f.spec).reversed().map(\.panels))
+        #expect(panelsClips(back).map { $0.panels?.map(\.asset) } == panelsClips(f.spec).reversed().map { $0.panels?.map(\.asset) })
+        #expect(panelsClips(back).map(\.layout) == panelsClips(f.spec).reversed().map(\.layout))
 
         // Ett rutklipp längd följer reglerna men kan låsas: låst längd behålls.
         var locked = moved

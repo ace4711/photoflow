@@ -471,7 +471,7 @@ struct ReelCollageTests {
         #expect(again.assets == vertical.assets)
     }
 
-    @Test("En extra bild (urvalet valde den inte) lämnar filmen när kollaget upplöses; en vald partner får eget klipp")
+    @Test("En extra bild (urvalet valde den inte) får också eget klipp när kollaget upplöses, och kollaget kommer tillbaka")
     func extraPartnerLeavesOnDissolve() throws {
         var list = items().filter { $0.analysis.room != "Matplats" }
         list.append(item(8, room: "Kök", q: 0.6))
@@ -483,8 +483,13 @@ struct ReelCollageTests {
         let reasons = Dictionary(uniqueKeysWithValues: (spec.provenance.autoSelection ?? []).map { ($0.asset, $0) })
         #expect(reasons[partner]?.slot == "extra" && reasons[partner]?.reason.hasSuffix("extra bild utan egen plats") == true)
         let landscape = ReelComposer.rebuild(spec, order: spec.timeline.map(\.asset), format: .landscape)
-        #expect(landscape.timeline.count == spec.timeline.count && !landscape.assets.contains { $0.id == partner })
+        #expect(landscape.timeline.count == spec.timeline.count + 1 && landscape.timeline.contains { $0.asset == partner })
         #expect(landscape.timeline.allSatisfy { $0.fit != .panels } && landscape.version == 1)
+        // Tillbaka till 9:16: samma kollage utan "Föreslå igen" (båda klippen märkta, intilliggande, olåsta).
+        let back = ReelComposer.rebuild(landscape, order: landscape.timeline.map(\.asset), format: .vertical)
+        #expect(back.timeline == spec.timeline && back.assets == spec.assets)
+        let backReasons = Dictionary(uniqueKeysWithValues: (back.provenance.autoSelection ?? []).map { ($0.asset, $0.reason) })
+        #expect(backReasons[partner]?.hasPrefix("Kollage:") == true && backReasons[partner]?.contains("kom tillbaka") == true)
     }
 
     @Test("Ändra ordning: kollaget följer ankaret; ta bort ankaret: båda bilderna lämnar filmen")
@@ -633,21 +638,25 @@ struct ReelCollageTests {
         #expect(model.candidateRows.first { $0.id == c.partnerSha }?.clipIndex == c.index)
     }
 
-    @Test("Pinna den ena: den stannar i filmen (kollaget är kvar tills nästa förslag, då är den ensam)")
+    @Test("Pinna den ena: kollaget låses som det är (båda bilderna kvar, ett klipp) och överlever \"Föreslå igen\"")
     func pinEitherImage() throws {
         let (model, root) = try makeModel()
         defer { try? FileManager.default.removeItem(at: root) }
         let c = try modelCollage(model)
         model.togglePinned(c.partnerSha)
         #expect(model.candidateRows.first { $0.id == c.partnerSha }?.isPinned == true)
-        #expect(model.candidateRows.first { $0.id == c.partnerSha }?.clipIndex != nil)
+        #expect(model.candidateRows.first { $0.id == c.partnerSha }?.clipIndex == c.index)
+        let locked = try #require(model.spec?.timeline[c.index])
+        #expect(ReelPanelEdit.isLocked(locked) && ReelPanelEdit.kind(of: locked) == .collage)
         model.suggestAgain()
         let spec = try #require(model.spec)
-        #expect(spec.assets.contains { $0.sha256 == c.partnerSha })
-        #expect(!spec.timeline.contains { clip in
-            ReelComposer.autoCollagePartner(clip).map { p in [sha(spec, clip.asset), sha(spec, p)].contains(c.partnerSha) } ?? false
-        }, "en låst bild ingår inte i ett automatiskt kollage")
-        #expect(model.candidateRows.first { $0.id == c.partnerSha }?.clipIndex != nil)
+        let together = spec.timeline.contains { clip in
+            ReelPanelEdit.kind(of: clip) == .collage
+                && Set(clip.referencedAssetIDs.map { sha(spec, $0) }) == Set([c.anchorSha, c.partnerSha])
+        }
+        #expect(together, "båda bilderna är kvar i samma kollage")
+        // Ingen av bilderna har dessutom ett eget klipp (ingen dubblett).
+        #expect(spec.timeline.filter { [c.anchorSha, c.partnerSha].contains(sha(spec, $0.asset)) }.count == 1)
     }
 
     @Test("Ta bort kollagets klipp: båda bilderna lämnar filmen")

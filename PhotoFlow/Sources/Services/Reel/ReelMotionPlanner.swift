@@ -575,8 +575,11 @@ nonisolated enum ReelMotionPlanner {
                                                      defaultTransition: defaultTransition).transition
                 }
                 previousPanSign = 0
-                let perPanel = lock.layout == .sequence ? Double(lock.panels.count) : 1
-                clips.append(.init(asset: first.asset, duration: override.duration ?? autoDuration * perPanel,
+                // Efter varandra: en montagehalvas längd per ruta. Stapel och sida vid sida: kollagets längd (zoom plus ingång).
+                let lockDuration = lock.layout == .sequence
+                    ? montageSegmentDuration * Double(lock.panels.count) * tempo.factor
+                    : collageBaseDuration * tempo.factor
+                clips.append(.init(asset: first.asset, duration: override.duration ?? lockDuration,
                                    fit: .panels, motion: first.motion, transitionIn: transition,
                                    motionPreset: Preset.custom.rawValue,
                                    durationLocked: override.duration == nil ? nil : true,

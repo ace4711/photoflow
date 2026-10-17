@@ -40,7 +40,7 @@ nonisolated enum ReelChoiceSummary {
             locked += clipLocks
             rows.append(.init(
                 index: i, assetID: clip.asset,
-                room: ReelComposer.autoCollagePartner(clip).map { partnerID in
+                room: collagePartnerID(clip).map { partnerID in
                     collageRoomLabel(asset, byID[partnerID])
                 } ?? roomLabel(asset),
                 motion: motionLabel(clip),
@@ -59,6 +59,12 @@ nonisolated enum ReelChoiceSummary {
             return "Montage: \(text)"
         }
         return asset?.analysis?.room ?? asset?.analysis?.category ?? "Okänt rum"
+    }
+
+    /// Andra rutans bild i ett kollage (planerarens eller fotografens): två olika bilder i rutorna.
+    static func collagePartnerID(_ clip: ReelSpec.Clip) -> String? {
+        guard ReelPanelEdit.kind(of: clip) == .collage, let panels = clip.panels, panels.count == 2 else { return nil }
+        return panels[1].asset
     }
 
     /// "Kök + Matplats" (eller "Kök + Kök") för ett kollage.

@@ -134,6 +134,8 @@ nonisolated enum ReelComposer {
         var lockedBySha: [String: ReelMotionPlanner.ClipOverride] = [:]
         var lockedOrder: [String] = []
         var oldIndexBySha: [String: Int] = [:]
+        // Bilder som ett låst rutklipps andra rutor visar: de är med i klippet och får inget eget klipp.
+        var absorbed = Set<String>()
         if let previous {
             let shaByAsset = Dictionary(previous.assets.map { ($0.id, $0.sha256) }, uniquingKeysWith: { a, _ in a })
             let perAsset = overrides(in: previous)
@@ -141,6 +143,11 @@ nonisolated enum ReelComposer {
                 guard let sha = shaByAsset[clip.asset] else { continue }
                 oldIndexBySha[sha] = i
                 if let o = perAsset[clip.asset], lockedBySha[sha] == nil { lockedBySha[sha] = o; lockedOrder.append(sha) }
+            }
+            for (sha, o) in lockedBySha {
+                for panel in o.panels?.panels ?? [] {
+                    if let other = shaByAsset[panel.asset], other != sha { absorbed.insert(other) }
+                }
             }
         }
         let pinnedIDs = editor?.pinnedAssets ?? []
@@ -154,7 +161,9 @@ nonisolated enum ReelComposer {
         // Ordning: förslagets, men med låsta klipp kvar på sin plats om `orderLocked`. Ett kollages partner
         // har inget eget klipp: den följer sitt ankare (andra rutan) och läggs in som extra bild nedan.
         let partnerIDs = selection.partnerIDs
-        var picks = selection.picks.filter { byID[$0.candidateID] != nil && !partnerIDs.contains($0.candidateID) }
+        var picks = selection.picks.filter {
+            byID[$0.candidateID] != nil && !partnerIDs.contains($0.candidateID) && !absorbed.contains($0.candidateID)
+        }
         if editor?.orderLocked == true {
             let pinned = Set(editor?.pinnedAssets ?? [])
             let n = picks.count
@@ -251,6 +260,13 @@ nonisolated enum ReelComposer {
                                            tempo: .init(editorValue: editor?.tempo),
                                            defaultTransition: style.defaultTransition,
                                            collages: collagePartner.compactMapValues { imageByID[$0] })
+        // En bild ingen ruta visar (t.ex. urvalets kollagepartner till ett klipp som fotografen låst med en annan
+        // partner) hör inte hemma i specen.
+        let referenced = Set(clips.flatMap(\.referencedAssetIDs))
+        if assets.contains(where: { !referenced.contains($0.id) }) {
+            assets.removeAll { !referenced.contains($0.id) }
+            auto.removeAll { !referenced.contains($0.asset) }
+        }
         var spec = ReelSpec(
             schema: ReelSpec.schemaName, version: 1, minReaderVersion: 1,
             id: options.specID, revision: 1, status: "draft",
@@ -319,13 +335,19 @@ nonisolated enum ReelComposer {
         if let format { out.outputs = [format.output] }
         let aspect = ReelMotionPlanner.frameAspect(out.outputs.first ?? ReelFormat.vertical.output)
         // Fotografens val (rörelse, längd) följer med bilden; utan `overrides` läses de ur nuvarande klipp.
-        let kept = overrides ?? Self.overrides(in: spec)
+        var kept = overrides ?? Self.overrides(in: spec)
+        let images = Dictionary(plannerImages(Array(known.values)).map { ($0.assetID, $0) }, uniquingKeysWith: { a, _ in a })
+        // Formatbyte: ett låst rutklipps layout och nycklar anpassas till det nya formatet.
+        if format != nil, let old = spec.outputs.first, abs(ReelMotionPlanner.frameAspect(old) - aspect) > 1e-9 {
+            for (id, o) in kept {
+                if let lock = o.panels { kept[id]?.panels = ReelPanelEdit.adapted(lock, images: images, frameAspect: aspect) }
+            }
+        }
 
         // Automatiska kollage (R6c) följer med bilden: ankaret finns kvar i `order` (annars lämnar båda
         // bilderna filmen), partnern är en extra bild. Ett kollage som inte längre gäller (formatet
         // motiverar det inte, en bild är utesluten, ankaret har fått ett eget förval) löses upp: partnern
         // blir ett eget klipp direkt efter ankaret, om den inte är utesluten.
-        let images = Dictionary(plannerImages(Array(known.values)).map { ($0.assetID, $0) }, uniquingKeysWith: { a, _ in a })
         let excludedSha = Set(spec.editor?.excludedAssets ?? [])
         var collages: [String: ReelMotionPlanner.Image] = [:]
         var dissolved = Set<String>()
@@ -340,9 +362,35 @@ nonisolated enum ReelComposer {
                 continue
             }
             dissolved.insert(clip.asset); dissolved.insert(partnerID)
-            // En vald partner blir ett eget klipp; en extra bild (urvalet valde den inte) lämnar filmen.
-            let isExtra = spec.provenance.autoSelection?.first { $0.asset == partnerID }?.slot == ReelSelector.Slot.extra.rawValue
-            if !isExtra, !excludedSha.contains(partnerSha), let at = used.firstIndex(of: clip.asset) { used.insert(partnerID, at: at + 1) }
+            // Partnern blir ett eget klipp direkt efter ankaret (även en extra bild: kollaget kommer då tillbaka när
+            // formatet passar igen, se nedan), om den inte är utesluten och filmen inte är full.
+            if !excludedSha.contains(partnerSha), used.count < ReelSelector.maxCount,
+               let at = used.firstIndex(of: clip.asset) { used.insert(partnerID, at: at + 1) }
+        }
+        // Kollage som löstes upp av ett formatbyte kommer tillbaka när formatet passar igen: två intilliggande
+        // automatiska klipp som båda bär märkningen "löstes upp" och som `collageActive` godkänner slås ihop.
+        // (Fotografens eget "Dela upp" märks inte, se `ReelEditorModel.splitPanels`, och slås inte ihop.)
+        var restoredReasons: [String: String] = [:]
+        if let layout = ReelMotionPlanner.collageLayout(frameAspect: aspect) {
+            let marked = Set((spec.provenance.autoSelection ?? []).filter { $0.reason.hasPrefix(dissolvedReason) }.map(\.asset))
+            func isAuto(_ id: String) -> Bool {
+                (kept[id]?.effectivePreset ?? .auto) == .auto && kept[id]?.panels == nil
+                    && !excludedSha.contains(known[id]?.sha256 ?? "")
+            }
+            var i = 0
+            while i + 1 < used.count {
+                let a = used[i], b = used[i + 1]
+                if marked.contains(a), marked.contains(b), collages[a] == nil, isAuto(a), isAuto(b),
+                   let ia = images[a], let ib = images[b],
+                   ReelMotionPlanner.collageActive(anchor: ia, partner: ib, frameAspect: aspect, override: kept[a]) {
+                    collages[a] = ib
+                    used.remove(at: i + 1)
+                    let pane = ReelMotionPlanner.ratioText(ReelMotionPlanner.collagePaneAspect(layout: layout, frameAspect: aspect))
+                    let reason = "Kollage: \(ReelMotionPlanner.collageRoomsText(ia, ib)), båda ryms i \(pane) (kom tillbaka när formatet passade igen)"
+                    restoredReasons[a] = reason; restoredReasons[b] = reason
+                }
+                i += 1
+            }
         }
         let assets = used.compactMap { known[$0] }
         out.timeline = ReelMotionPlanner.plan(plannerImages(assets), frameAspect: aspect, overrides: kept,
@@ -366,10 +414,11 @@ nonisolated enum ReelComposer {
         // Klippens bilder och rutornas (en kollagepartner har ingen egen plats i `order`).
         let referenced = Set(out.timeline.flatMap(\.referencedAssetIDs))
         prov.autoSelection = prov.autoSelection?.filter { sel in referenced.contains(sel.asset) }.map { sel in
+            var s = sel
+            if let reason = restoredReasons[sel.asset] { s.reason = reason; return s }
             // Ett upplöst kollage har inget kollage att motivera längre.
             guard dissolved.contains(sel.asset), sel.reason.hasPrefix("Kollage:") else { return sel }
-            var s = sel
-            s.reason = "Var del av ett kollage som löstes upp"
+            s.reason = dissolvedReason
             return s
         }
         prov.edits = (prov.edits ?? []) + [.init(at: wholeSeconds(now), by: by.role, op: op)]
@@ -378,6 +427,10 @@ nonisolated enum ReelComposer {
     }
 
     // MARK: - Hjälp
+
+    /// Urvalsskälet för bilder som var del av ett automatiskt kollage som löstes upp av ett formatbyte. Märket
+    /// används för att sätta ihop kollaget igen när formatet passar (se `rebuild`).
+    static let dissolvedReason = "Var del av ett kollage som löstes upp"
 
     /// Partnerns asset-id om klippet är ett automatiskt kollage (`stack`/`side` med två rutor, ankaret
     /// först, utan fotografens `custom`-lås); annars nil.

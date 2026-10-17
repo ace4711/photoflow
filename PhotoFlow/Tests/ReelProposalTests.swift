@@ -300,7 +300,7 @@ struct ReelProposalTests {
         #expect(data.precomputed(forKey: "hdr_group_3")?.room == "Badrum")
     }
 
-    @Test("Analysen använder pipelinens värden: ingen feature print, rum och kvalitet oförändrade, storlek och saliency uppmätta")
+    @Test("Analysen använder pipelinens värden: rum och kvalitet oförändrade, feature print räknas i efterhand, storlek och saliency uppmätta")
     func analyzerUsesPrecomputed() async throws {
         let root = try session()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -311,7 +311,7 @@ struct ReelProposalTests {
         let a = try #require(items.first?.analysis)
         #expect(a.room == "Kök" && a.category == "Interiör" && a.qualityScore == 0.77 && a.sharpness == 321)
         #expect(a.describedBy == "pipeline")                // Foundation Models tillfrågades inte
-        #expect(a.featurePrint == nil)                      // lätt analys: ingen feature print
+        #expect(a.featurePrint != nil)                      // lätt analys: feature print räknas i efterhand
         #expect(a.width == 320 && a.height == 240 && a.meanLuminance != nil)
         // Cachen återanvänds, med pipelinens värden ovanpå.
         var changed = pre; changed.room = "Hall"

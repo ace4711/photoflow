@@ -62,6 +62,12 @@ final class ReelEditorModel {
         var duration: Double
         var preset: ReelMotionPlanner.Preset
         var durationLocked: Bool
+        /// Rutklipp (spec v2): layouten, och andra rutans bild (kollage; hos ett montage samma bild som `url`).
+        var layout: ReelSpec.PanelLayout?
+        var secondURL: URL?
+        var panelKind: ReelPanelEdit.Kind = .none
+        /// Klippet är ett rutklipp som fotografen låst (`custom`), till skillnad från planerarens eget.
+        var panelsLocked = false
     }
 
     nonisolated struct CandidateRow: Identifiable, Equatable, Sendable {
@@ -75,6 +81,10 @@ final class ReelEditorModel {
         var excludedReason: String?
         /// Plats i filmen (0-baserad) om bilden är vald.
         var clipIndex: Int?
+        /// Rutan (0-baserad) bilden har i klippet och antalet rutor, när klippet är ett kollage med två
+        /// olika bilder; annars nil. Rutnätet visar "klipp N · ruta 1/2".
+        var panelIndex: Int?
+        var panelCount: Int?
         /// Låst i filmen (`editor.pinnedAssets`).
         var isPinned = false
         /// Utesluten av fotografen (`editor.excludedAssets`), till skillnad från urvalets bortfall.
@@ -82,6 +92,13 @@ final class ReelEditorModel {
         /// Urvalsskäl för en bild i filmen (`provenance.autoSelection`), "Vald av dig" för en bild
         /// fotografen lagt in själv; nil för bilder utanför filmen.
         var selectionReason: String?
+
+        /// Platsen i filmen som text: "klipp 3", "klipp 3 · ruta 2/2" för en bild i ett kollage; nil utanför filmen.
+        var filmLabel: String? {
+            guard let clipIndex else { return nil }
+            guard let panelIndex, let panelCount else { return "klipp \(clipIndex + 1)" }
+            return "klipp \(clipIndex + 1) · ruta \(panelIndex + 1)/\(panelCount)"
+        }
 
         /// Rummet som visas och filtreras på: rum, annars kategori, annars "Okänt rum".
         var roomLabel: String { room ?? category ?? "Okänt rum" }
@@ -113,13 +130,24 @@ final class ReelEditorModel {
     private(set) var adaptedCustomMotions = 0
     /// Markerat klipp. Ett markerat klipp och en markerad övergång utesluter varandra.
     var selectedAssetID: String? {
-        didSet { if selectedAssetID != nil { selectedTransitionAssetID = nil } }
+        didSet {
+            if selectedAssetID != nil { selectedTransitionAssetID = nil }
+            // "Dela ruta med…" gäller ett klipp: väljs ett annat klipp (eller inget) avbryts läget.
+            if partnerPickAssetID != nil, partnerPickAssetID != selectedAssetID { partnerPickAssetID = nil }
+            if oldValue != selectedAssetID { selectedPanelIndex = 0 }
+        }
     }
     /// Markerad övergång, angiven med det *inkommande* klippets asset-id (övergången ligger i
     /// klippets `transitionIn`, så första klippet har ingen).
     var selectedTransitionAssetID: String? {
         didSet { if selectedTransitionAssetID != nil { selectedAssetID = nil } }
     }
+
+    /// "Dela ruta med…": klippet (asset-id) som väntar på att fotografen klickar på en partnerbild i rutnätet.
+    /// Nästa klick i rutnätet väljer partner i stället för att markera eller byta (`selectCandidate`).
+    var partnerPickAssetID: String?
+    /// Vilken ruta i det markerade rutklippet som nästa bild i rutnätet byter (0 = första). Sätts av rutredigeraren.
+    var selectedPanelIndex = 0
 
     static let specFileName = "reel.json"
     static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "tif", "tiff", "heic"]
@@ -176,6 +204,13 @@ final class ReelEditorModel {
         case "easing": return "Ändra rörelsekurva"
         case "background": return "Ändra bakgrund"
         case "orderLock": return "Lås ordning"
+        case "panels": return "Ändra rutor"
+        case "pair": return "Dela ruta"
+        case "splitPanels": return "Dela upp"
+        case "swapPanels": return "Byt plats på rutor"
+        case "panelLayout": return "Ändra layout"
+        case "entrance": return "Ändra ingång"
+        case "framing": return "Flytta inramning"
         case "pin": return "Lås bild"
         case "exclude": return "Uteslut bild"
         case "format": return "Byt format"
@@ -210,7 +245,7 @@ final class ReelEditorModel {
     /// Lägger nuvarande tillstånd på ångra-stacken inför en ändring. Returnerar false om ändringen
     /// fortsätter ett sammanslaget steg som redan är öppet (samma `op` och `target`; inget nytt steg).
     @discardableResult
-    private func recordStep(op: String, target: String? = nil) -> Bool {
+    func recordStep(op: String, target: String? = nil) -> Bool {
         guard let spec else { return false }
         if coalescing {
             let key = "\(op)|\(target ?? "")"
@@ -348,7 +383,12 @@ final class ReelEditorModel {
                 reason: reasons[clip.asset] ?? "Vald av dig",
                 duration: clip.duration,
                 preset: clip.motionPreset.flatMap(ReelMotionPlanner.Preset.init(rawValue:)) ?? .auto,
-                durationLocked: clip.durationLocked == true)
+                durationLocked: clip.durationLocked == true,
+                layout: clip.fit == .panels ? clip.layout : nil,
+                secondURL: clip.panels.flatMap { $0.count > 1 ? $0[1] : nil }.flatMap { p in
+                    spec.assets.first { $0.id == p.asset }.flatMap { urls[$0.sha256] }
+                },
+                panelKind: ReelPanelEdit.kind(of: clip), panelsLocked: ReelPanelEdit.isLocked(clip))
         }
     }
 
@@ -371,11 +411,20 @@ final class ReelEditorModel {
                                  uniquingKeysWith: { a, _ in a })
         let rows = candidates.map { c in
             let index = placed[c.id]
-            let assetID = index.flatMap { spec?.timeline[$0].asset }
+            // Bildens egen asset i klippet (en kollagepartner har ett annat asset än klippets).
+            let clip = index.flatMap { spec?.timeline[$0] }
+            let panelAsset = clip.flatMap { clip in
+                clip.referencedAssetIDs.first { id in spec?.assets.first(where: { $0.id == id })?.sha256 == c.id }
+            }
+            let assetID = panelAsset ?? clip?.asset
+            var panelIndex: Int?, panelCount: Int?
+            if let clip, ReelPanelEdit.kind(of: clip) == .collage, let at = clip.panels?.firstIndex(where: { $0.asset == panelAsset }) {
+                panelIndex = at; panelCount = clip.panels?.count
+            }
             return CandidateRow(id: c.id, url: urls[c.id], filename: c.filename, room: c.room, category: c.category,
                                 score: scores[c.id] ?? 0,
                                 excludedReason: userExcluded.contains(c.id) ? "Utesluten av dig" : excluded[c.id],
-                                clipIndex: index,
+                                clipIndex: index, panelIndex: panelIndex, panelCount: panelCount,
                                 isPinned: pinned.contains(c.id), isUserExcluded: userExcluded.contains(c.id),
                                 selectionReason: assetID.map { reasons[$0] ?? "Vald av dig" })
         }
@@ -509,16 +558,21 @@ final class ReelEditorModel {
 
     // MARK: Redigering (allt via ReelComposer.rebuild)
 
-    private var order: [String] { spec?.timeline.map(\.asset) ?? [] }
+    var order: [String] { spec?.timeline.map(\.asset) ?? [] }
 
     /// `editor` ändrar redigerarens val (`spec.editor`) i samma steg; tomma val tas bort. `target` är
     /// klippet ändringen gäller (för sammanslagning, se `beginCoalescing`).
-    private func apply(order: [String], newAssets: [ReelSpec.Asset] = [], format: ReelFormat? = nil,
-                       overrides: [String: ReelMotionPlanner.ClipOverride]? = nil,
-                       editor: ((inout ReelSpec.EditorState) -> Void)? = nil,
-                       style: ((inout ReelSpec.Style) -> Void)? = nil, op: String, target: String? = nil) {
+    ///
+    /// `edit` ändrar specen (klippens rutor) innan den byggs om; fotografens val läses sedan ur den
+    /// ändrade specen (`ReelComposer.overrides(in:)`), så ett rutklipp som låsts med `edit` bevaras.
+    func apply(order: [String], newAssets: [ReelSpec.Asset] = [], format: ReelFormat? = nil,
+               overrides: [String: ReelMotionPlanner.ClipOverride]? = nil,
+               editor: ((inout ReelSpec.EditorState) -> Void)? = nil,
+               style: ((inout ReelSpec.Style) -> Void)? = nil,
+               edit: ((inout ReelSpec) -> Void)? = nil, op: String, target: String? = nil) {
         guard var current = spec else { return }
         let continuesStep = !recordStep(op: op, target: target)
+        if let edit { edit(&current) }
         if let style { style(&current.style) }
         if let editor {
             var e = current.editor ?? .init()
@@ -548,16 +602,16 @@ final class ReelEditorModel {
         saveSpec()
     }
 
-    private func currentOverrides() -> [String: ReelMotionPlanner.ClipOverride] {
+    func currentOverrides() -> [String: ReelMotionPlanner.ClipOverride] {
         spec.map(ReelComposer.overrides(in:)) ?? [:]
     }
 
-    private func nextAssetID() -> String {
+    func nextAssetID() -> String {
         let used = (spec?.assets ?? []).compactMap { Int($0.id.dropFirst()) }
         return "a\((used.max() ?? 0) + 1)"
     }
 
-    private func newAsset(forCandidate id: String) -> ReelSpec.Asset? {
+    func newAsset(forCandidate id: String) -> ReelSpec.Asset? {
         guard let item = items.first(where: { $0.analysis.sha256 == id }) else { return nil }
         return ReelComposer.asset(id: nextAssetID(), item: item, specDirectory: reelDirectory ?? FileManager.default.temporaryDirectory)
     }
@@ -611,7 +665,7 @@ final class ReelEditorModel {
     }
 
     /// En bild som fotografen själv lägger in i filmen är inte längre utesluten.
-    private static func unexclude(_ id: String) -> (inout ReelSpec.EditorState) -> Void {
+    static func unexclude(_ id: String) -> (inout ReelSpec.EditorState) -> Void {
         { $0.excludedAssets?.removeAll { $0 == id } }
     }
 
@@ -663,10 +717,19 @@ final class ReelEditorModel {
     /// Klick i kandidatrutnätet: redan vald bild markeras, annars byts det markerade klippets bild,
     /// och utan markerat klipp läggs bilden till sist.
     func selectCandidate(_ id: String) {
+        // "Dela ruta med…" pågår: bilden blir partner (en ogiltig bild avbryter inte läget).
+        if let anchor = partnerPickAssetID {
+            if pairClip(anchor, withCandidate: id) { partnerPickAssetID = nil }
+            return
+        }
         if let row = candidateRows.first(where: { $0.id == id }), let i = row.clipIndex {
             selectedAssetID = order[i]
         } else if let selectedAssetID, order.contains(selectedAssetID) {
-            replaceClip(selectedAssetID, withCandidate: id)
+            if panelKind(forAsset: selectedAssetID) == .collage {
+                replacePanel(selectedAssetID, panel: selectedPanelIndex, withCandidate: id)
+            } else {
+                replaceClip(selectedAssetID, withCandidate: id)
+            }
         } else {
             addCandidate(id)
         }
@@ -848,6 +911,15 @@ final class ReelEditorModel {
             o.append(asset.id)
             added = [asset]
         }
+        // Att låsa en bild i ett automatiskt kollage låser kollaget som det är (båda bilderna och layouten
+        // följer med vid "Föreslå igen"); det släpps med "Tillbaka till automatiskt".
+        var lockIndex: Int?
+        if pinning, let spec {
+            lockIndex = spec.timeline.firstIndex { clip in
+                ReelComposer.autoCollagePartner(clip) != nil
+                    && clip.referencedAssetIDs.contains { rid in spec.assets.first { $0.id == rid }?.sha256 == candidateID }
+            }
+        }
         apply(order: o, newAssets: added, editor: { e in
             var pinned = e.pinnedAssets ?? []
             if let i = pinned.firstIndex(of: candidateID) { pinned.remove(at: i) } else {
@@ -855,7 +927,7 @@ final class ReelEditorModel {
                 e.excludedAssets?.removeAll { $0 == candidateID }
             }
             e.pinnedAssets = pinned
-        }, op: "pin")
+        }, edit: lockIndex.map { i in { $0.timeline[i].motionPreset = ReelMotionPlanner.Preset.custom.rawValue } }, op: "pin")
         if let asset = added.first { selectedAssetID = asset.id }
     }
 
@@ -864,7 +936,21 @@ final class ReelEditorModel {
     func toggleExcluded(_ candidateID: String) {
         let excluding = !(spec?.editor?.excludedAssets ?? []).contains(candidateID)
         var o = order
-        if excluding, o.count > 1,
+        // Ett kollage som fotografen låst: den uteslutna bilden går ur, den andra blir ett vanligt klipp på samma plats.
+        var splitEdit: ((inout ReelSpec) -> Void)?
+        if excluding, let spec,
+           let i = spec.timeline.firstIndex(where: { clip in
+               ReelPanelEdit.kind(of: clip) == .collage && ReelPanelEdit.isLocked(clip)
+                   && clip.referencedAssetIDs.contains { rid in spec.assets.first { $0.id == rid }?.sha256 == candidateID }
+           }) {
+            let clip = spec.timeline[i]
+            if let keep = clip.referencedAssetIDs.first(where: { rid in spec.assets.first { $0.id == rid }?.sha256 != candidateID }) {
+                splitEdit = { $0.timeline[i] = ReelPanelEdit.plainClip(clip, asset: keep) }
+                o = o.map { $0 == clip.asset ? keep : $0 }
+                if selectedAssetID == clip.asset { selectedAssetID = keep }
+            }
+        }
+        if splitEdit == nil, excluding, o.count > 1,
            let asset = spec?.assets.first(where: { $0.sha256 == candidateID && o.contains($0.id) }) {
             // Ankaret i ett automatiskt kollage: kollaget löses upp och partnern tar klippets plats.
             if let clip = spec?.timeline.first(where: { $0.asset == asset.id }),
@@ -883,7 +969,7 @@ final class ReelEditorModel {
                 e.pinnedAssets?.removeAll { $0 == candidateID }
             }
             e.excludedAssets = excluded
-        }, op: "exclude")
+        }, edit: splitEdit, op: "exclude")
     }
 
     /// Bildens innehållshash (kandidat-id i rutnätet) för ett klipp i filmen.
