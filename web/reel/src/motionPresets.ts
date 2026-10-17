@@ -108,6 +108,7 @@ export function automaticDuration(kind: Kind, index: number, count: number, temp
  * sidled; annars bara cover-rörelse utan zoom.
  */
 export function panSign(clip: Pick<Clip, "fit" | "motion" | "motionPreset">): number {
+  if (clip.fit === "panels") return 0; // rutklipp panorerar inte (R6e)
   const dx = clip.motion.to.cx - clip.motion.from.cx;
   if (clip.motionPreset === CUSTOM) return Math.abs(dx) > 0.02 ? (dx > 0 ? 1 : -1) : 0;
   if (!(Math.abs(clip.motion.to.zoom - clip.motion.from.zoom) < 1e-9) || clip.fit !== "cover" || dx === 0) return 0;

@@ -7,6 +7,11 @@
 // och släppa en uteslutning (aktivt tillagd utesluten bild). Mäklaren får inte ändra
 // style, editor.tempo, editor.orderLocked, lägga till pinningar eller uteslutningar,
 // ändra en låst övergång eller en egen rörelse ("custom") på en bild som finns kvar.
+// Rutklipp (version 2, fit "panels": kollage och montage) är fotografens regi (beslut 4):
+// ett rutklipp som fanns i fotografens version får bara finnas kvar med oförändrade fit,
+// layout, panels, gutter och entrance (matchat på första rutans sha256, rutornas bilder
+// jämförda som sha256). Mäklaren får flytta, ändra längd på och ta bort det, men inte
+// skapa ett nytt rutklipp eller ändra rutorna.
 // Klipp matchas på bildens sha256, eftersom asset-id kan numreras om. En pinning som
 // fotografen hade i sin senaste revision får läggas tillbaka (webben återställer den när
 // en borttagen pinnad bild läggs till igen). En låst bild får inte läggas till en gång till.
@@ -71,6 +76,40 @@ function matchable(old: Clip[], now: Clip[]): boolean {
   return go(0);
 }
 
+const isPanelsClip = (c: Clip) => c.fit === "panels" || c.panels !== undefined;
+
+/** Rutklippets utformning med bilderna som sha256 (asset-id kan numreras om), för jämförelse. */
+function panelsForm(spec: ReelSpec, c: Clip): unknown {
+  const shaOf = new Map(spec.assets.map((a) => [a.id, a.sha256]));
+  return {
+    fit: c.fit, layout: c.layout, gutter: c.gutter, entrance: c.entrance,
+    panels: Array.isArray(c.panels)
+      ? c.panels.map((p) => ({ ...p, asset: shaOf.get(p.asset) ?? `?${p.asset}` }))
+      : c.panels,
+  };
+}
+
+/** Rutklipp som mäklaren har ändrat eller skapat (tom lista: inget brott). */
+function panelsViolations(p: ReelSpec, n: ReelSpec): string[] {
+  const shaOf = new Map(n.assets.map((a) => [a.id, a.sha256]));
+  const olds = p.timeline.filter(isPanelsClip).map((c) => ({ sha: p.assets.find((a) => a.id === c.asset)?.sha256, form: panelsForm(p, c) }));
+  const used = new Array<boolean>(olds.length).fill(false);
+  const out: string[] = [];
+  n.timeline.forEach((c, i) => {
+    if (!isPanelsClip(c)) return;
+    const sha = shaOf.get(c.asset);
+    const form = panelsForm(n, c);
+    // varje rutklipp måste motsvara ett eget, oförändrat rutklipp i fotografens version
+    const k = olds.findIndex((o, j) => !used[j] && o.sha === sha && jsonNear(o.form, form));
+    if (k >= 0) { used[k] = true; return; }
+    const existed = olds.some((o) => o.sha === sha);
+    out.push(existed
+      ? `Klipp ${i + 1}: kollaget eller montaget är fotografens och kan inte ändras här.`
+      : `Klipp ${i + 1}: bara fotografen kan göra kollage eller montage.`);
+  });
+  return out;
+}
+
 export interface LockOptions {
   /**
    * Pinningar (sha256) som mäklaren får lägga tillbaka: fotografens pinningar i den senaste
@@ -103,6 +142,8 @@ export function lockViolations(prev: ReelSpec, next: ReelSpec, opts: LockOptions
   // Låst övergång och egen rörelse följer bilden så länge den finns kvar. Bilden kan stå
   // flera gånger; då måste varje kvarvarande klipp motsvara ett eget klipp i fotografens
   // version och hålla dess lås, så att en oförändrad kopia inte kan skydda en ändrad.
+  out.push(...panelsViolations(p, n));
+
   const before = clipsBySha(p), after = clipsBySha(n);
   for (const [sha, olds] of before) {
     const locked = olds.filter((o) => isLocked(o.clip));
@@ -150,12 +191,59 @@ export function lockFieldErrors(spec: unknown): string[] {
     }
   }
   const tl = Array.isArray(spec.timeline) ? spec.timeline : [];
+  const ids = new Set((Array.isArray(spec.assets) ? spec.assets : []).map((a) => (isRec(a) ? a.id : undefined)));
   tl.forEach((c, i) => {
     if (!isRec(c)) return;
     for (const k of ["transitionLocked", "durationLocked"]) {
       if (!absent(c[k]) && typeof c[k] !== "boolean") out.push(`Klipp ${i + 1}: ${k} måste vara true eller false.`);
     }
     if (!absent(c.motionPreset) && typeof c.motionPreset !== "string") out.push(`Klipp ${i + 1}: motionPreset måste vara en sträng.`);
+    out.push(...panelFieldErrors(c, `Klipp ${i + 1}`, ids));
+    if (c.fit === "panels" && !(typeof spec.minReaderVersion === "number" && spec.minReaderVersion >= 2)) {
+      out.push(`Klipp ${i + 1}: rutklipp kräver minReaderVersion 2.`);
+    }
   });
+  return out;
+}
+
+const LAYOUTS = ["stack", "side", "sequence"];
+const ENTRANCES = ["slide", "fade", "none"];
+const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+
+/** Typkontroll av ett klipps rutfält (version 2). Gäller alla skrivningar, även fält på klipp som inte är rutklipp. */
+function panelFieldErrors(c: Record<string, unknown>, where: string, ids: Set<unknown>): string[] {
+  const out: string[] = [];
+  const has = c.fit === "panels" || !absent(c.panels) || !absent(c.layout);
+  if (!has && absent(c.gutter) && absent(c.entrance)) return out;
+  if (!absent(c.layout) && !(typeof c.layout === "string" && LAYOUTS.includes(c.layout))) out.push(`${where}: layout måste vara stack, side eller sequence.`);
+  if (c.fit === "panels" && absent(c.layout)) out.push(`${where}: rutklipp saknar layout.`);
+  if (!absent(c.panels) || c.fit === "panels") {
+    if (!Array.isArray(c.panels)) out.push(`${where}: panels måste vara en lista.`);
+    else {
+      const n = c.panels.length;
+      if (c.layout === "sequence" ? n < 2 : (c.layout === "stack" || c.layout === "side") && n !== 2) {
+        out.push(`${where}: layout ${String(c.layout)} kräver ${c.layout === "sequence" ? "minst två" : "exakt två"} rutor (fick ${n}).`);
+      }
+      c.panels.forEach((p, k) => {
+        const w = `${where} ruta ${k + 1}`;
+        if (!isRec(p)) { out.push(`${w}: måste vara ett objekt.`); return; }
+        if (typeof p.asset !== "string" || !ids.has(p.asset)) out.push(`${w}: asset måste vara en bild som finns i assets.`);
+        const s = p.source;
+        if (!absent(s)) {
+          const ok = isRec(s) && num(s.x) && num(s.y) && num(s.w) && num(s.h) && s.w > 0 && s.h > 0
+            && s.x >= 0 && s.y >= 0 && s.x + s.w <= 1 + 1e-9 && s.y + s.h <= 1 + 1e-9;
+          if (!ok) out.push(`${w}: source måste ligga inom bilden (x, y, w, h mellan 0 och 1).`);
+        }
+      });
+    }
+  }
+  if (!absent(c.gutter) && !(num(c.gutter) && c.gutter >= 0 && c.gutter <= 1)) out.push(`${where}: gutter måste vara ett tal mellan 0 och 1.`);
+  if (!absent(c.entrance)) {
+    const e = c.entrance;
+    if (!isRec(e) || typeof e.type !== "string" || !ENTRANCES.includes(e.type)) out.push(`${where}: entrance.type måste vara slide, fade eller none.`);
+    else for (const k of ["stagger", "duration"]) {
+      if (!absent(e[k]) && !(num(e[k]) && (e[k] as number) >= 0)) out.push(`${where}: entrance.${k} måste vara ett tal ≥ 0.`);
+    }
+  }
   return out;
 }

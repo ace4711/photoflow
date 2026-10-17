@@ -1,0 +1,377 @@
+{
+  "schema": "photoflow.reel",
+  "version": 2,
+  "minReaderVersion": 2,
+  "id": "6a1c2d3e-4b5f-4a60-8d7e-9f0a1b2c3d4e",
+  "revision": 3,
+  "status": "draft",
+  "createdAt": "2026-10-17T07:30:00Z",
+  "updatedAt": "2026-10-17T07:45:00Z",
+  "updatedBy": {
+    "role": "photographer",
+    "name": "Fredrik"
+  },
+  "property": {
+    "address": "Storgatan 4, Nacka",
+    "sessionID": "7C1F…",
+    "kind": "apartment"
+  },
+  "assets": [
+    {
+      "id": "a1",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "width": 6048,
+      "height": 4024,
+      "sources": [
+        {
+          "kind": "local",
+          "path": "../Storgatan 4 FÄRDIGA/DSC_3001.jpg"
+        }
+      ],
+      "analysis": {
+        "room": "Fasad",
+        "category": "Exteriör",
+        "focus": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "salientWidth": 0.5
+      }
+    },
+    {
+      "id": "a2",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "width": 6048,
+      "height": 4024,
+      "sources": [
+        {
+          "kind": "local",
+          "path": "../Storgatan 4 FÄRDIGA/DSC_3002.jpg"
+        }
+      ],
+      "analysis": {
+        "room": "Kök",
+        "category": "Interiör",
+        "focus": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "salientWidth": 0.5
+      }
+    },
+    {
+      "id": "a3",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "width": 6048,
+      "height": 4024,
+      "sources": [
+        {
+          "kind": "local",
+          "path": "../Storgatan 4 FÄRDIGA/DSC_3003.jpg"
+        }
+      ],
+      "analysis": {
+        "room": "Matplats",
+        "category": "Interiör",
+        "focus": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "salientWidth": 0.5
+      }
+    },
+    {
+      "id": "a4",
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "width": 4000,
+      "height": 6000,
+      "sources": [
+        {
+          "kind": "local",
+          "path": "../Storgatan 4 FÄRDIGA/DSC_3004.jpg"
+        }
+      ],
+      "analysis": {
+        "room": "Vardagsrum",
+        "category": "Interiör",
+        "focus": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "salientWidth": 0.5,
+        "panels": [
+          {
+            "x": 0,
+            "y": 0,
+            "w": 0.49,
+            "h": 1
+          },
+          {
+            "x": 0.51,
+            "y": 0,
+            "w": 0.49,
+            "h": 1
+          }
+        ],
+        "panelRooms": [
+          "Vardagsrum",
+          "Sovrum"
+        ]
+      }
+    },
+    {
+      "id": "a5",
+      "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "width": 6048,
+      "height": 4024,
+      "sources": [
+        {
+          "kind": "local",
+          "path": "../Storgatan 4 FÄRDIGA/DSC_3005.jpg"
+        }
+      ],
+      "analysis": {
+        "room": "Badrum",
+        "category": "Interiör",
+        "focus": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "salientWidth": 0.5
+      }
+    },
+    {
+      "id": "a6",
+      "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+      "width": 6048,
+      "height": 4024,
+      "sources": [
+        {
+          "kind": "local",
+          "path": "../Storgatan 4 FÄRDIGA/DSC_3006.jpg"
+        }
+      ],
+      "analysis": {
+        "room": "Sovrum",
+        "category": "Interiör",
+        "focus": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "salientWidth": 0.5
+      }
+    }
+  ],
+  "style": {
+    "defaultTransition": {
+      "type": "crossfade",
+      "duration": 0.5
+    },
+    "easing": "easeInOut",
+    "background": {
+      "type": "blur",
+      "amount": 0.5
+    }
+  },
+  "timeline": [
+    {
+      "asset": "a1",
+      "duration": 3.0,
+      "fit": "cover",
+      "motion": {
+        "from": {
+          "cx": 0.5,
+          "cy": 0.5,
+          "zoom": 1
+        },
+        "to": {
+          "cx": 0.5,
+          "cy": 0.5,
+          "zoom": 1.12
+        }
+      }
+    },
+    {
+      "asset": "a2",
+      "duration": 3.4,
+      "fit": "panels",
+      "motion": {
+        "from": {
+          "cx": 0.5,
+          "cy": 0.5,
+          "zoom": 1
+        },
+        "to": {
+          "cx": 0.5,
+          "cy": 0.5,
+          "zoom": 1.04
+        }
+      },
+      "transitionIn": {
+        "type": "crossfade",
+        "duration": 0.5
+      },
+      "layout": "stack",
+      "gutter": 0.006,
+      "entrance": {
+        "type": "slide",
+        "stagger": 0.3
+      },
+      "panels": [
+        {
+          "asset": "a2",
+          "source": null,
+          "motion": {
+            "from": {
+              "cx": 0.5,
+              "cy": 0.5,
+              "zoom": 1
+            },
+            "to": {
+              "cx": 0.5,
+              "cy": 0.5,
+              "zoom": 1.04
+            }
+          }
+        },
+        {
+          "asset": "a3",
+          "source": null,
+          "motion": {
+            "from": {
+              "cx": 0.5,
+              "cy": 0.5,
+              "zoom": 1
+            },
+            "to": {
+              "cx": 0.5,
+              "cy": 0.5,
+              "zoom": 1.04
+            }
+          }
+        }
+      ]
+    },
+    {
+      "asset": "a4",
+      "duration": 3.6,
+      "fit": "panels",
+      "motion": {
+        "from": {
+          "cx": 0.5,
+          "cy": 0.5,
+          "zoom": 1.0
+        },
+        "to": {
+          "cx": 0.5,
+          "cy": 0.5,
+          "zoom": 1.08
+        }
+      },
+      "transitionIn": {
+        "type": "crossfade",
+        "duration": 0.5
+      },
+      "layout": "sequence",
+      "panels": [
+        {
+          "asset": "a4",
+          "source": {
+            "x": 0,
+            "y": 0,
+            "w": 0.49,
+            "h": 1
+          },
+          "motion": {
+            "from": {
+              "cx": 0.5,
+              "cy": 0.5,
+              "zoom": 1.0
+            },
+            "to": {
+              "cx": 0.5,
+              "cy": 0.5,
+              "zoom": 1.08
+            }
+          }
+        },
+        {
+          "asset": "a4",
+          "source": {
+            "x": 0.51,
+            "y": 0,
+            "w": 0.49,
+            "h": 1
+          },
+          "motion": {
+            "from": {
+              "cx": 0.5,
+              "cy": 0.5,
+              "zoom": 1.08
+            },
+            "to": {
+              "cx": 0.5,
+              "cy": 0.5,
+              "zoom": 1.0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "asset": "a5",
+      "duration": 2.5,
+      "fit": "cover",
+      "motion": {
+        "from": {
+          "cx": 0.5,
+          "cy": 0.5,
+          "zoom": 1
+        },
+        "to": {
+          "cx": 0.5,
+          "cy": 0.5,
+          "zoom": 1.12
+        }
+      },
+      "transitionIn": {
+        "type": "crossfade",
+        "duration": 0.5
+      }
+    },
+    {
+      "asset": "a6",
+      "duration": 3.4,
+      "fit": "cover",
+      "motion": {
+        "from": {
+          "cx": 0.5,
+          "cy": 0.5,
+          "zoom": 1
+        },
+        "to": {
+          "cx": 0.5,
+          "cy": 0.5,
+          "zoom": 1.12
+        }
+      },
+      "transitionIn": {
+        "type": "crossfade",
+        "duration": 0.6
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "9x16",
+      "aspect": "9:16",
+      "width": 1080,
+      "height": 1920,
+      "fps": 30
+    }
+  ],
+  "provenance": {
+    "generator": "PhotoFlow reel planner 6"
+  },
+  "editor": {}
+}

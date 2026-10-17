@@ -6,7 +6,7 @@
 //    (mapp/filer/släpp) eller via ?spec=<url>, och "Godkänn" laddar bara ner
 //    en uppdaterad reel.json.
 
-import { parseReelSpec, ReelSpecError } from "./reelSpec.ts";
+import { parseReelSpec, ReelSpecError, referencedAssetIds } from "./reelSpec.ts";
 import type { Asset, Clip, ReelSpec } from "./reelSpec.ts";
 import { clipStarts, totalDuration, transition } from "./reelTimeline.ts";
 import { renderFrame } from "./canvasRenderer.ts";
@@ -171,7 +171,7 @@ async function loadFromUrl(url: string): Promise<void> {
 function start(missing: string[], bySha: number): void {
   if (!spec) return;
   const s = spec;
-  const used = new Set(s.timeline.map((c) => c.asset));
+  const used = new Set(s.timeline.flatMap((c) => referencedAssetIds(c)));
   const missingUsed = missing.filter((id) => used.has(id));
   const parts: string[] = [];
   if (missingUsed.length) parts.push(`Hittade inte bilderna för: ${missingUsed.join(", ")}. De visas som svart.`);
@@ -291,7 +291,11 @@ async function addClip(assetId: string): Promise<void> {
   const excluded = regi.isExcluded(spec, asset);
   if (excluded && regi.canAddMore(spec) &&
       !confirm("Fotografen har uteslutit bilden ur filmen. Lägga till den ändå? Uteslutningen släpps då.")) return;
-  if (share) await ensureFull(assetId);
+  if (share) {
+    // Ett borttaget rutklipp läggs tillbaka med alla sina bilder.
+    const gone = removed.get(assetId)?.clip;
+    for (const id of gone ? referencedAssetIds(gone) : [assetId]) await ensureFull(id);
+  }
   const restores = removed.has(assetId);
   const ops = attempt(() => regi.addClip(spec!, assetId, frameAspect(), { allowExcluded: excluded, removed }));
   if (!ops) return;
@@ -350,6 +354,13 @@ function thumbEl(assetId: string, onClick?: () => void): HTMLElement {
   return img;
 }
 
+/** Tumnaglar för ett rutklipps bilder (en per bild, i rutornas ordning). */
+function thumbPair(assetIds: string[], onClick: () => void): HTMLElement {
+  const box = el("div", "thumbs");
+  for (const id of assetIds) box.append(thumbEl(id, onClick));
+  return box;
+}
+
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 /** Liten låsikon (SVG, följer textfärgen). */
@@ -393,8 +404,14 @@ function renderStrip(): void {
 
     const locks = regi.clipLocks(s, i);
     const info = el("div", "info");
-    info.append(el("div", "name", `${i + 1}. ${asset.analysis?.room ?? asset.id}`),
-      el("div", "sub", fileNames.get(clip.asset) ?? "bilden saknas"));
+    if (locks.panels) {
+      info.append(el("div", "name", `${i + 1}. ${locks.panels.title}`),
+        el("div", "sub", locks.panels.assets.map((id) => fileNames.get(id) ?? "bilden saknas").join(" + ")),
+        lockBadge(LOCKED_BY_PHOTOGRAPHER, "Fotografen har gjort klippet av två bilder. Rutorna kan bara ändras av fotografen; du kan flytta klippet, ändra längden eller ta bort det."));
+    } else {
+      info.append(el("div", "name", `${i + 1}. ${asset.analysis?.room ?? asset.id}`),
+        el("div", "sub", fileNames.get(clip.asset) ?? "bilden saknas"));
+    }
     // Övergången in visas men går inte att ändra här (fotografen styr övergångar i Mac-appen).
     if (locks.transitionText) {
       const t = el("div", "trans", locks.transitionText);
@@ -449,9 +466,11 @@ function renderStrip(): void {
     up.addEventListener("click", () => moveClip(i, i - 1));
     down.addEventListener("click", () => moveClip(i, i + 1));
     del.addEventListener("click", () => removeClip(i));
-    controls.append(motionBox, dur, el("span", "spacer"), up, down, del);
+    controls.append(...(locks.panels ? [] : [motionBox]), dur, el("span", "spacer"), up, down, del);
 
-    li.append(grip, thumbEl(clip.asset, () => seekToClip(i)), info, controls);
+    // Rutklipp: båda bilderna som tumnaglar, och en rad som säger vad klippet är.
+    const thumb = locks.panels ? thumbPair(locks.panels.assets, () => seekToClip(i)) : thumbEl(clip.asset, () => seekToClip(i));
+    li.append(grip, thumb, info, controls);
     strip.append(li);
   });
 }
@@ -603,7 +622,7 @@ async function loadShare(token: string): Promise<void> {
   const urls = new Map(view.pool.map((p) => [p.sha256, { full: p.url, thumb: p.thumbUrl }]));
   share = { token, client, view, revision: view.object.currentRevision, dirty: false, urls, fullLoaded: new Set() };
   $("reload").hidden = true;
-  const onTimeline = new Set(spec.timeline.map((c) => c.asset));
+  const onTimeline = new Set(spec.timeline.flatMap((c) => referencedAssetIds(c)));
   const missing: string[] = [];
   await Promise.all(spec.assets.map(async (a) => {
     const u = urls.get(a.sha256);

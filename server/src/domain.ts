@@ -211,11 +211,11 @@ export function setPool(d: Deps, o: ObjectRow, body: unknown): { count: number }
 // ------------------------------------------------------------------ spec
 
 /**
- * Högsta specversion servern godtar. Webbläsarbiblioteket (`web/reel`) läser redan version 2 (rutor),
- * men servern lagrar, låskontrollerar och renderar bara version 1 tills R6e är klar; en v2-spec
- * avvisas därför tydligt i stället för att sparas.
+ * Högsta specversion servern godtar. Version 2 (R6e) = rutklipp (kollage, montage, docs/reel-spec-v2.md):
+ * servern lagrar och validerar dem, låskontrollen skyddar dem som fotografens val (locks.ts) och
+ * mäklarens webb ritar dem. Renderingen görs av fotografens Mac, som läser version 2.
  */
-const SERVER_READER_VERSION = 1;
+const SERVER_READER_VERSION = 2;
 
 const SERVER_FIELDS = ["revision", "updatedAt", "updatedBy", "status"];
 
@@ -235,7 +235,7 @@ function canonicalize(d: Deps, o: ObjectRow, input: unknown, actor: Actor, prev:
   const bad = (m: string) => new ApiError(422, "invalid_spec", m);
   if (spec.id !== o.reel_id) throw bad("Specens id stämmer inte med objektet.");
   if (spec.version > SERVER_READER_VERSION || spec.minReaderVersion > SERVER_READER_VERSION) {
-    throw bad(`Specens version stöds inte (version ${spec.version}, minReaderVersion ${spec.minReaderVersion}): servern godtar ännu bara version ${SERVER_READER_VERSION}, utan rutor.`);
+    throw bad(`Specens version stöds inte (version ${spec.version}, minReaderVersion ${spec.minReaderVersion}): servern godtar högst version ${SERVER_READER_VERSION}.`);
   }
   if (spec.timeline.length < 1) throw bad("Filmen måste ha minst ett klipp.");
   if (spec.timeline.length > d.cfg.limits.maxClips) throw bad(`Högst ${d.cfg.limits.maxClips} klipp i en film.`);

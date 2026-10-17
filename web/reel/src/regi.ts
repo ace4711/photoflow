@@ -20,9 +20,19 @@
 //    pinning) sparas under sessionen i `RemovedClips`, så att `addClip` av samma bild
 //    återställer dem i stället för att planera ett nytt klipp.
 //
+//  - Rutklipp (R6e, `fit: "panels"`, spec v2): kollage och montage är fotografens regi
+//    (beslut 4). Mäklaren får flytta, ta bort och ändra längd, men rutorna, layouten,
+//    gutter och ingång rörs aldrig (servern vägrar också, server/src/locks.ts). Ett
+//    rutklipps längd räknas inte om vid rollbyte (Mac-planeraren ger det samma längd på
+//    alla platser) och förval kan inte sättas. Alla rutornas bilder räknas som "i
+//    filmen" (`candidates`, `addClip`). Togs ett rutklipp bort läggs hela klippet
+//    tillbaka när dess första bild läggs till igen, om ingen av rutornas bilder hunnit
+//    bli ett eget klipp; annars blir det ett vanligt klipp.
+//
 // Funktionerna ändrar `spec` på plats och returnerar de op-namn som ska loggas i
 // provenance.edits.
 
+import { referencedAssetIds } from "./reelSpec.ts";
 import type { Asset, Clip, EditorState, ReelSpec } from "./reelSpec.ts";
 import {
   CUSTOM, MAX_CLIPS, PRESETS, automaticDuration, automaticTransition, customKind, isCustom, panSign,
@@ -101,6 +111,11 @@ function roles(spec: ReelSpec): Map<Clip, Role> {
   return new Map(spec.timeline.map((c, i) => [c, roleOf(i, n)]));
 }
 
+/** Är klippet ett rutklipp (kollage eller montage, spec v2)? */
+export function isPanelsClip(c: Clip): boolean {
+  return c.fit === "panels" && Array.isArray(c.panels) && c.panels.length >= 2;
+}
+
 /** Förvalet som ger samma sorts rörelse som klippet redan har (för automatiska klipp). */
 function equivalentPreset(clip: Clip): Preset {
   if (clip.fit === "contain-blur") return "contain";
@@ -121,6 +136,8 @@ export function retime(spec: ReelSpec, frameAspect: number, before: Map<Clip, Ro
   const n = spec.timeline.length;
   const tempo = tempoFactor(spec.editor?.tempo);
   spec.timeline.forEach((clip, i) => {
+    // Rutklipp: längd och rutor rörs aldrig (längden är densamma på alla platser).
+    if (isPanelsClip(clip)) return;
     if (before.get(clip) === roleOf(i, n) || clip.durationLocked === true) return;
     if (isCustom(clip)) {
       clip.duration = automaticDuration(customKind(clip), i, n, tempo);
@@ -160,7 +177,7 @@ export type RemovedClips = Map<string, { clip: Clip; pinned: boolean }>;
 
 /** Om klippet bär något av fotografens lås som en borttagning skulle ta bort. */
 function hasPhotographerLock(spec: ReelSpec, c: Clip): boolean {
-  return isCustom(c) || c.transitionLocked === true || isPinned(spec, c);
+  return isPanelsClip(c) || isCustom(c) || c.transitionLocked === true || isPinned(spec, c);
 }
 
 /**
@@ -170,6 +187,10 @@ function hasPhotographerLock(spec: ReelSpec, c: Clip): boolean {
 export function removalWarning(spec: ReelSpec, i: number): string | null {
   const c = spec.timeline[i];
   if (!c || !hasPhotographerLock(spec, c)) return null;
+  if (isPanelsClip(c)) {
+    return `${panelsTitle(spec, c)} är fotografens utformning av bilderna. Ta bort det ändå? Bilderna i klippet lämnar filmen. `
+      + "Lägger du tillbaka första bilden innan du lämnar sidan återställs klippet som det var.";
+  }
   const what: string[] = [];
   const pinned = isPinned(spec, c);
   if (pinned) what.push("låst bilden så att den alltid är med");
@@ -205,6 +226,11 @@ export function removeClip(spec: ReelSpec, i: number, frameAspect: number, remov
   return ops;
 }
 
+/** Alla bilder (asset-id) som är med i filmen, rutornas bilder inräknade. */
+function onTimeline(spec: ReelSpec): Set<string> {
+  return new Set(spec.timeline.flatMap((c) => referencedAssetIds(c)));
+}
+
 export function canAddMore(spec: ReelSpec): boolean {
   return spec.timeline.length < MAX_CLIPS;
 }
@@ -222,7 +248,7 @@ export function addClip(
 ): string[] {
   const asset = assetOf(spec, assetId);
   if (!asset) throw new RegiError("Bilden finns inte i filmen.");
-  if (spec.timeline.some((c) => c.asset === assetId)) throw new RegiError("Bilden är redan med i filmen.");
+  if (onTimeline(spec).has(assetId)) throw new RegiError("Bilden är redan med i filmen.");
   if (!canAddMore(spec)) throw new RegiError(`Högst ${MAX_CLIPS} klipp i en film.`);
   const ops = ["add"];
   if (isExcluded(spec, asset)) {
@@ -232,6 +258,24 @@ export function addClip(
   }
   const before = roles(spec);
   const index = spec.timeline.length;
+  const gone = opts.removed?.get(assetId);
+  if (gone && isPanelsClip(gone.clip)) {
+    // Ett borttaget rutklipp: lägg tillbaka det oförändrat om inga av dess bilder blivit egna klipp.
+    opts.removed!.delete(assetId);
+    const used = onTimeline(spec);
+    if (referencedAssetIds(gone.clip).every((id) => !used.has(id) && assetOf(spec, id))) {
+      const clip = structuredClone(gone.clip);
+      if (clip.transitionLocked !== true) delete clip.transitionIn;
+      spec.timeline.push(clip);
+      if (gone.pinned && !isPinned(spec, clip)) {
+        spec.editor ??= {};
+        spec.editor.pinnedAssets = [...strings(spec.editor.pinnedAssets), asset.sha256];
+        ops.push("pin");
+      }
+      retime(spec, frameAspect, before);
+      return ops;
+    }
+  }
   const tempo = tempoFactor(spec.editor?.tempo);
   const p = planClip({ asset, frameAspect, preset: "auto", index, count: index + 1, tempo });
   const clip: Clip = { asset: assetId, ...p };
@@ -277,7 +321,7 @@ export function setPreset(spec: ReelSpec, i: number, preset: Preset | typeof CUS
   const c = spec.timeline[i];
   // Egen rörelse kan varken väljas eller bytas bort i webben: mäklarens regi omfattar inte
   // panorering (plan, beslut 4), och servern vägrar en ändrad egen rörelse (server/src/locks.ts).
-  if (!c || preset === CUSTOM || isCustom(c)) return [];
+  if (!c || preset === CUSTOM || isCustom(c) || isPanelsClip(c)) return [];
   if (preset === "auto") {
     if (c.motionPreset === undefined) return [];
     delete c.motionPreset;
@@ -307,6 +351,8 @@ export interface ClipLocks {
   durationLocked: boolean;
   transitionLocked: boolean;
   pinned: boolean;
+  /** Rutklipp (kollage/montage): titeln ("Kollage: Kök och Matplats", "Montage") och asset-id för tumnaglarna; annars null. */
+  panels?: { title: string; assets: string[] };
   /** Övergången in till klippet ("Mjuk tona 0,5 s"), null för första klippet utan låst övergång. */
   transition: string | null;
   /**
@@ -317,6 +363,17 @@ export interface ClipLocks {
 }
 
 const sv = (n: number): string => n.toFixed(1).replace(".", ",");
+
+/** Rubrik för ett rutklipp: "Montage" (sekvens) eller "Kollage: Kök och Matplats". */
+export function panelsTitle(spec: ReelSpec, c: Clip): string {
+  if (c.layout === "sequence") return "Montage";
+  const names = (c.panels ?? []).map((p) => {
+    const a = assetOf(spec, p.asset);
+    return a?.analysis?.room ?? a?.id ?? p.asset;
+  });
+  const unique = names.filter((n, k) => names.indexOf(n) === k);
+  return unique.length === 1 ? `Kollage: ${unique[0]}, två bilder` : `Kollage: ${unique.join(" och ")}`;
+}
 
 export function clipLocks(spec: ReelSpec, i: number): ClipLocks {
   const c = spec.timeline[i];
@@ -331,7 +388,9 @@ export function clipLocks(spec: ReelSpec, i: number): ClipLocks {
     : i > 0 ? `In: ${transition}`
     : `Låst övergång: ${transition}. Används inte på första klippet, bara om klippet flyttas.`;
   return {
-    customMotion: isCustom(c),
+    // Ett rutklipps rörelse sitter i rutorna och visas inte som egen rörelse.
+    customMotion: isCustom(c) && !isPanelsClip(c),
+    ...(isPanelsClip(c) ? { panels: { title: panelsTitle(spec, c), assets: referencedAssetIds(c) } } : {}),
     durationLocked: c.durationLocked === true,
     transitionLocked: locked,
     pinned: isPinned(spec, c),
@@ -359,7 +418,7 @@ export interface Candidate { asset: Asset; excluded: boolean }
 
 /** Bilder som inte är med i filmen; uteslutna sist. `available` = bilden går att visa. */
 export function candidates(spec: ReelSpec, available: (id: string) => boolean): Candidate[] {
-  const on = new Set(spec.timeline.map((c) => c.asset));
+  const on = onTimeline(spec);
   const excl = editorOf(spec).excluded;
   const list = spec.assets
     .filter((a) => !on.has(a.id) && available(a.id))

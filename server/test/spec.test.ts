@@ -229,17 +229,18 @@ test("poolvalidering: dubbletter, max 40, ogiltig hash och specens id/duration/u
   // för många klipp
   const clips = specBody(Array.from({ length: 31 }, () => 0));
   assert.equal((await put(id, clips, 1)).status, 422);
-  // minReaderVersion 2 vägras
-  assert.equal((await put(id, specBody([0], { minReaderVersion: 2 }), 1)).status, 422);
-  // en riktig v2-spec (rutklipp) vägras tydligt och sparas inte (R6a: servern är fortfarande v1)
+  // en läsare nyare än servern (minReaderVersion 3) vägras; version 2 godtas (R6e, se panels.test.ts)
+  const tooNew = await put(id, specBody([0], { version: 3, minReaderVersion: 3 }), 1);
+  assert.equal(tooNew.status, 422);
+  assert.equal(tooNew.json.error.code, "invalid_spec");
+  // ett rutklipp med en ruta som pekar på en okänd bild vägras och sparas inte
   const panelsSpec = specBody([0, 1], { version: 2, minReaderVersion: 2 });
   const pc = (panelsSpec.timeline as any[])[1];
   const pm = { from: { cx: 0.5, cy: 0.5, zoom: 1 }, to: { cx: 0.5, cy: 0.5, zoom: 1.04 } };
-  Object.assign(pc, { fit: "panels", layout: "stack", panels: [{ asset: pc.asset, motion: pm }, { asset: "a3", motion: pm }] });
+  Object.assign(pc, { fit: "panels", layout: "stack", panels: [{ asset: pc.asset, motion: pm }, { asset: "a9", motion: pm }] });
   const pr = await put(id, panelsSpec, 1);
   assert.equal(pr.status, 422);
   assert.equal(pr.json.error.code, "invalid_spec");
-  assert.match(pr.json.error.message, /version 2.*bara version 1/);
   // fel reel-id
   assert.equal((await put(id, specBody([0], { id: "annat" }), 1)).status, 422);
   // mäklaren får inte ändra utbildsprofiler men fotografen får
