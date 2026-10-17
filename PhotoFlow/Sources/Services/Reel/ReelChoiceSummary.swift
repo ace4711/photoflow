@@ -40,7 +40,9 @@ nonisolated enum ReelChoiceSummary {
             locked += clipLocks
             rows.append(.init(
                 index: i, assetID: clip.asset,
-                room: roomLabel(asset),
+                room: ReelComposer.autoCollagePartner(clip).map { partnerID in
+                    collageRoomLabel(asset, byID[partnerID])
+                } ?? roomLabel(asset),
                 motion: motionLabel(clip),
                 transition: i == 0 ? nil : transitionLabel(ReelTimeline.transition(spec, at: i)),
                 locked: clipLocks > 0 || asset.map { pinned.contains($0.sha256) } == true))
@@ -59,6 +61,12 @@ nonisolated enum ReelChoiceSummary {
         return asset?.analysis?.room ?? asset?.analysis?.category ?? "Okänt rum"
     }
 
+    /// "Kök + Matplats" (eller "Kök + Kök") för ett kollage.
+    static func collageRoomLabel(_ a: ReelSpec.Asset?, _ b: ReelSpec.Asset?) -> String {
+        func name(_ asset: ReelSpec.Asset?) -> String { asset?.analysis?.room ?? asset?.analysis?.category ?? "Okänt rum" }
+        return "\(name(a)) + \(name(b))"
+    }
+
     static func templateLabel(_ kind: String?) -> String? {
         switch kind {
         case "house": return "Villa"
@@ -73,6 +81,10 @@ nonisolated enum ReelChoiceSummary {
             // Planerarens eget montageklipp (utan `custom`): två halvor efter varandra.
             if clip.layout == .sequence, clip.motionPreset != ReelMotionPlanner.Preset.custom.rawValue {
                 return "Montage: halvorna efter varandra"
+            }
+            // Planerarens eget kollage (utan `custom`): två bilder i var sin ruta.
+            if let layout = clip.layout, layout != .sequence, clip.motionPreset != ReelMotionPlanner.Preset.custom.rawValue {
+                return layout == .stack ? "Kollage: stapel" : "Kollage: sida vid sida"
             }
             let n = clip.panels?.count ?? 0
             let layout: String

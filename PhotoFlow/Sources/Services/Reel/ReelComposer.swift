@@ -70,7 +70,7 @@ nonisolated enum ReelComposer {
             sharpness: a.sharpness, featureVector: a.featureVector, salientWidth: a.salientWidth,
             meanLuminance: a.meanLuminance, captureHour: hour,
             room: a.room, category: a.category, features: a.features ?? [], caption: a.caption,
-            panelRooms: montageRooms(a))
+            panelRooms: montageRooms(a), width: a.width, height: a.height, focusWidth: a.focusWidth)
     }
 
     /// Rummet per halva för ett montage med beskrivna halvor (annars tom lista = ingen montage för urvalet).
@@ -144,13 +144,17 @@ nonisolated enum ReelComposer {
             }
         }
         let pinnedIDs = editor?.pinnedAssets ?? []
+        let frameAspect = ReelMotionPlanner.frameAspect(options.format.output)
         var selection = ReelSelector.select(candidates, count: options.count, weights: options.weights,
                                             curated: options.curated,
                                             pinned: pinnedIDs + lockedOrder.filter { !pinnedIDs.contains($0) },
-                                            excluded: editor?.excludedAssets ?? [])
+                                            excluded: editor?.excludedAssets ?? [],
+                                            frameAspect: frameAspect)
 
-        // Ordning: förslagets, men med låsta klipp kvar på sin plats om `orderLocked`.
-        var picks = selection.picks.filter { byID[$0.candidateID] != nil }
+        // Ordning: förslagets, men med låsta klipp kvar på sin plats om `orderLocked`. Ett kollages partner
+        // har inget eget klipp: den följer sitt ankare (andra rutan) och läggs in som extra bild nedan.
+        let partnerIDs = selection.partnerIDs
+        var picks = selection.picks.filter { byID[$0.candidateID] != nil && !partnerIDs.contains($0.candidateID) }
         if editor?.orderLocked == true {
             let pinned = Set(editor?.pinnedAssets ?? [])
             let n = picks.count
@@ -168,7 +172,13 @@ nonisolated enum ReelComposer {
             var it = rest.makeIterator()
             for i in placed.indices where placed[i] == nil { placed[i] = it.next() }
             picks = placed.compactMap { $0 }
-            selection.picks = picks
+            // Hela urvalet i den nya ordningen, partnerna direkt efter sina ankare.
+            let partnerPicks = Dictionary(selection.picks.filter { partnerIDs.contains($0.candidateID) }.map { ($0.candidateID, $0) },
+                                          uniquingKeysWith: { a, _ in a })
+            let partnerOf = Dictionary(selection.collages.map { ($0.anchorID, $0.partnerID) }, uniquingKeysWith: { a, _ in a })
+            selection.picks = picks.flatMap { pick in
+                [pick] + (partnerOf[pick.candidateID].flatMap { partnerPicks[$0] }.map { [$0] } ?? [])
+            }
         }
 
         var assets: [ReelSpec.Asset] = []
@@ -182,6 +192,18 @@ nonisolated enum ReelComposer {
             if let o = lockedBySha[pick.candidateID] { overridesByAsset[id] = o }
         }
         let clipAssetCount = assets.count
+        // Kollage (R6c): partnerbilden är andra rutan och ligger som extra asset efter klippens egna.
+        var collagePartner: [String: String] = [:]   // ankarets asset-id → partnerns asset-id
+        for pair in selection.collages {
+            guard let anchor = assets.first(where: { $0.sha256 == pair.anchorID }),
+                  let item = byID[pair.partnerID] else { continue }
+            let id = "a\(assets.count + 1)"
+            assets.append(asset(id: id, item: item, specDirectory: specDirectory))
+            collagePartner[anchor.id] = id
+            if let pick = selection.picks.first(where: { $0.candidateID == pair.partnerID }) {
+                auto.append(.init(asset: id, slot: pick.slotKey, reason: pick.reason))
+            }
+        }
         // Rutklipp: rutornas bilder bär de gamla asset-id:na; numrera om dem mot de nya (på sha256) och
         // lägg till partnerbilder som inte är något klipps egen bild som extra assets efter klippens.
         if let previous {
@@ -223,10 +245,12 @@ nonisolated enum ReelComposer {
         let style = previous?.style ?? defaultStyle
         // Planeraren ser bara klippens egna bilder (picks); extra rutbilder ligger sist i `assets`.
         let clipAssets = Array(assets.prefix(clipAssetCount))
+        let imageByID = Dictionary(plannerImages(assets).map { ($0.assetID, $0) }, uniquingKeysWith: { a, _ in a })
         let clips = ReelMotionPlanner.plan(plannerImages(clipAssets), frameAspect: ReelMotionPlanner.frameAspect(output),
                                            overrides: overridesByAsset,
                                            tempo: .init(editorValue: editor?.tempo),
-                                           defaultTransition: style.defaultTransition)
+                                           defaultTransition: style.defaultTransition,
+                                           collages: collagePartner.compactMapValues { imageByID[$0] })
         var spec = ReelSpec(
             schema: ReelSpec.schemaName, version: 1, minReaderVersion: 1,
             id: options.specID, revision: 1, status: "draft",
@@ -289,17 +313,41 @@ nonisolated enum ReelComposer {
     ) -> ReelSpec {
         var known = Dictionary(spec.assets.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         for a in newAssets { known[a.id] = a }
-        let used = order.filter { known[$0] != nil }
-        let assets = used.compactMap { known[$0] }
+        var used = order.filter { known[$0] != nil }
 
         var out = spec
         if let format { out.outputs = [format.output] }
         let aspect = ReelMotionPlanner.frameAspect(out.outputs.first ?? ReelFormat.vertical.output)
         // Fotografens val (rörelse, längd) följer med bilden; utan `overrides` läses de ur nuvarande klipp.
         let kept = overrides ?? Self.overrides(in: spec)
+
+        // Automatiska kollage (R6c) följer med bilden: ankaret finns kvar i `order` (annars lämnar båda
+        // bilderna filmen), partnern är en extra bild. Ett kollage som inte längre gäller (formatet
+        // motiverar det inte, en bild är utesluten, ankaret har fått ett eget förval) löses upp: partnern
+        // blir ett eget klipp direkt efter ankaret, om den inte är utesluten.
+        let images = Dictionary(plannerImages(Array(known.values)).map { ($0.assetID, $0) }, uniquingKeysWith: { a, _ in a })
+        let excludedSha = Set(spec.editor?.excludedAssets ?? [])
+        var collages: [String: ReelMotionPlanner.Image] = [:]
+        var dissolved = Set<String>()
+        for clip in spec.timeline {
+            guard let partnerID = autoCollagePartner(clip), used.contains(clip.asset), !used.contains(partnerID),
+                  let anchor = images[clip.asset], let partner = images[partnerID],
+                  let anchorSha = known[clip.asset]?.sha256, let partnerSha = known[partnerID]?.sha256 else { continue }
+            let blocked = excludedSha.contains(anchorSha) || excludedSha.contains(partnerSha)
+            if !blocked, ReelMotionPlanner.collageActive(anchor: anchor, partner: partner, frameAspect: aspect,
+                                                         override: kept[clip.asset]) {
+                collages[clip.asset] = partner
+                continue
+            }
+            dissolved.insert(clip.asset); dissolved.insert(partnerID)
+            // En vald partner blir ett eget klipp; en extra bild (urvalet valde den inte) lämnar filmen.
+            let isExtra = spec.provenance.autoSelection?.first { $0.asset == partnerID }?.slot == ReelSelector.Slot.extra.rawValue
+            if !isExtra, !excludedSha.contains(partnerSha), let at = used.firstIndex(of: clip.asset) { used.insert(partnerID, at: at + 1) }
+        }
+        let assets = used.compactMap { known[$0] }
         out.timeline = ReelMotionPlanner.plan(plannerImages(assets), frameAspect: aspect, overrides: kept,
                                               tempo: .init(editorValue: spec.editor?.tempo),
-                                              defaultTransition: spec.style.defaultTransition)
+                                              defaultTransition: spec.style.defaultTransition, collages: collages)
         // Bilder som rutklippens rutor pekar på men som inte är något klipps egen bild ligger kvar i `assets`.
         var extras: [ReelSpec.Asset] = []
         let have = Set(assets.map(\.id))
@@ -315,13 +363,31 @@ nonisolated enum ReelComposer {
         out.updatedBy = by
         out.status = "draft"
         var prov = spec.provenance
-        prov.autoSelection = prov.autoSelection?.filter { sel in used.contains(sel.asset) }
+        // Klippens bilder och rutornas (en kollagepartner har ingen egen plats i `order`).
+        let referenced = Set(out.timeline.flatMap(\.referencedAssetIDs))
+        prov.autoSelection = prov.autoSelection?.filter { sel in referenced.contains(sel.asset) }.map { sel in
+            // Ett upplöst kollage har inget kollage att motivera längre.
+            guard dissolved.contains(sel.asset), sel.reason.hasPrefix("Kollage:") else { return sel }
+            var s = sel
+            s.reason = "Var del av ett kollage som löstes upp"
+            return s
+        }
         prov.edits = (prov.edits ?? []) + [.init(at: wholeSeconds(now), by: by.role, op: op)]
         out.provenance = prov
         return out
     }
 
     // MARK: - Hjälp
+
+    /// Partnerns asset-id om klippet är ett automatiskt kollage (`stack`/`side` med två rutor, ankaret
+    /// först, utan fotografens `custom`-lås); annars nil.
+    static func autoCollagePartner(_ clip: ReelSpec.Clip) -> String? {
+        guard clip.fit == .panels, clip.layout == .stack || clip.layout == .side,
+              clip.motionPreset != ReelMotionPlanner.Preset.custom.rawValue,
+              let panels = clip.panels, panels.count == 2, panels[0].asset == clip.asset,
+              panels[1].asset != clip.asset else { return nil }
+        return panels[1].asset
+    }
 
     /// Antal klipp med egen rörelse vars nycklar ändrades av en ombyggnad (klampning mot ett annat
     /// format). UI:t kan visa "Egna rörelser har anpassats" när det är > 0.
@@ -381,7 +447,7 @@ nonisolated enum ReelComposer {
             return .init(assetID: a.id, width: a.width, height: a.height,
                          focus: a.analysis?.focus, salientWidth: a.analysis?.salientWidth,
                          isExterior: ReelSelector.isExterior(c) == true, focusWidth: a.analysis?.focusWidth,
-                         panels: a.analysis?.panels ?? [])
+                         panels: a.analysis?.panels ?? [], room: a.analysis?.room)
         }
     }
 }

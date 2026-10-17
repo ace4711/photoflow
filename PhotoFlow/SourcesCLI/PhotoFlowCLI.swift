@@ -695,6 +695,10 @@ struct PhotoFlowCLI {
             }
             log("Urval (\(spec.timeline.count) klipp, \(String(format: "%.1f", total)) s):")
             for p in picks { log("  \(p.asset) \(p.file) [\(p.slot)] \(p.reason)") }
+            for (n, clip) in spec.timeline.enumerated() where clip.fit == .panels {
+                let files = clip.referencedAssetIDs.map { names[$0] ?? $0 }.joined(separator: " + ")
+                log("  klipp \(n + 1): \(clip.layout?.rawValue ?? "rutor") \(files) (\(String(format: "%.1f", clip.duration)) s)")
+            }
             for e in result.selection.excluded.prefix(10) { log("  utesluten: \(e.reason)") }
 
             // Rendera

@@ -44,6 +44,26 @@ nonisolated enum ReelMotionPlanner {
     static let montageSegmentDuration = 1.8
     /// Sista klippet rör sig lugnare: så stor andel av vanlig amplitud.
     static let closingMotionScale = 0.6
+    /// Kollage (R6c): ingen panorering, bara en svag gemensam zoom 1,00 → 1,04 mot respektive motivs mitt,
+    /// och rutorna glider in efter varandra (`collageEntrance`).
+    static let collageZoomAmount = 1.04
+    static let collageEntrance = ReelSpec.Entrance(type: .slide, stagger: ReelSpec.Entrance.defaultStagger, duration: nil)
+    /// Ett kollage är ett vanligt klipps längd (zoom, 2,5 s) plus ingången (stagger 0,3 s + 0,6 s) = 3,4 s,
+    /// före tempo. Då hinner den andra rutan ligga stilla lika länge som en vanlig zoom.
+    static let collageBaseDuration = zoomDuration + ReelSpec.Entrance.defaultStagger + ReelSpec.Entrance.defaultDuration
+    /// Motivet får vara så här mycket (andel av bildbredden) bredare än rutans synliga bredd och ändå
+    /// räknas som att det ryms. Interiörers saliency-boxar är ofta 0,8-0,9 av bredden (Chronas väg 7:
+    /// median 0,87), så utan marginal skulle en 3:2-bild (synlig bredd 0,75 i 9:8) aldrig få en partner;
+    /// 0,15 släpper igenom bilder där högst ungefär en femtedel av motivets bredd beskärs.
+    static let collageFocusSlack = 0.15
+    /// Stapel (9:16) är till för liggande bilder, sida vid sida (16:9) för stående. Bildförhållande
+    /// (bredd/höjd) från vilket en bild räknas som liggande respektive stående i ett kollage.
+    static let collageLandscapeMinAspect = 1.15
+    static let collagePortraitMaxAspect = 0.87
+    /// Ramar med bildförhållande mellan dessa gränser (1:1) får inget automatiskt kollage: rutorna
+    /// skulle bli 2:1 (stapel) eller 1:2 (sida), alltså smalare remsor än en 3:2-bild i en kvadrat
+    /// (som visar 67 % av bredden). Ett kollage i 1:1 får fotografen göra för hand (R6d).
+    static let collageFrameAspectRange = 0.9...1.1
 
     // MARK: - Indata
 
@@ -60,6 +80,8 @@ nonisolated enum ReelMotionPlanner {
         /// Montage (R6b): källrektanglarna för de två stående halvorna (`ReelSpec.Analysis.panels`); tom
         /// för vanliga bilder.
         var panels: [ReelSpec.UnitRect] = []
+        /// Rummet (för förklaringar, t.ex. "Kollage: Kök och Matplats").
+        var room: String? = nil
 
         var aspect: Double { height > 0 ? Double(width) / Double(height) : 1 }
         var size: CGSize { CGSize(width: width, height: height) }
@@ -197,6 +219,104 @@ nonisolated enum ReelMotionPlanner {
         }
     }
 
+    // MARK: - Kollage (R6c)
+
+    /// Layouten ett automatiskt kollage får i en ram: stapel i stående format (9:16), sida vid sida i
+    /// liggande (16:9), inget i kvadratiskt (`collageFrameAspectRange`).
+    static func collageLayout(frameAspect: Double) -> ReelSpec.PanelLayout? {
+        if collageFrameAspectRange.contains(frameAspect) { return nil }
+        return frameAspect < 1 ? .stack : .side
+    }
+
+    /// Bildförhållandet (bredd/höjd) för en ruta i layouten, med förvald gutter (9:8 för stapel i 9:16).
+    static func collagePaneAspect(layout: ReelSpec.PanelLayout, frameAspect: Double,
+                                  gutter: Double = ReelSpec.Clip.defaultGutter) -> Double {
+        let d = ReelTimeline.panelDests(layout: layout, frameAspect: frameAspect, gutter: gutter)[0]
+        return d.height > 0 ? Double(d.width) * frameAspect / Double(d.height) : frameAspect
+    }
+
+    /// Passar bildens orienteringen i layouten (liggande i stapel, stående i sida vid sida)?
+    static func suitsCollage(_ image: Image, layout: ReelSpec.PanelLayout) -> Bool {
+        switch layout {
+        case .stack: return image.aspect >= collageLandscapeMinAspect
+        case .side: return image.aspect <= collagePortraitMaxAspect
+        case .sequence: return false
+        }
+    }
+
+    /// Ryms motivet i rutan? `focusWidth` (annars `salientWidth`, annars 50 %) högst rutans synliga bredd
+    /// plus `collageFocusSlack`.
+    static func fitsPane(_ image: Image, paneAspect: Double) -> Bool {
+        let subject = image.focusWidth ?? image.salientWidth ?? 0.5
+        return subject <= visibleWidth(imageAspect: image.aspect, frameAspect: paneAspect) + collageFocusSlack
+    }
+
+    /// Skulle bilden i ramen annars bli contain-blur eller en hård beskärning, så att den bör få en
+    /// partner? Stapel: en liggande bild vars motiv inte ryms i cover-utsnittet (eller som blir
+    /// contain-blur). Sida vid sida: en stående bild i en liggande ram (cover visar bara en bråkdel av
+    /// höjden). Ett montage (två bilder redan) behöver aldrig någon.
+    static func needsCollage(_ image: Image, frameAspect: Double) -> Bool {
+        guard let layout = collageLayout(frameAspect: frameAspect), image.panels.isEmpty,
+              suitsCollage(image, layout: layout) else { return false }
+        if layout == .side { return true }
+        let subject = image.focusWidth ?? image.salientWidth ?? 0.5
+        return kind(of: image, frameAspect: frameAspect) == .containBlur
+            || subject > visibleWidth(imageAspect: image.aspect, frameAspect: frameAspect)
+    }
+
+    /// Kan `anchor` och `partner` planeras som ett kollage i ramen? Båda av rätt orientering, motiven ryms
+    /// i rutan, ingen är ett montage, och fotografen har inte låst klippets utformning (förval, egen
+    /// rörelse, rutklipp): längd- och övergångslås hindrar inte.
+    static func collageActive(anchor: Image, partner: Image, frameAspect: Double, override: ClipOverride?) -> Bool {
+        guard let layout = collageLayout(frameAspect: frameAspect),
+              override?.panels == nil, (override?.effectivePreset ?? .auto) == .auto,
+              anchor.panels.isEmpty, partner.panels.isEmpty, anchor.assetID != partner.assetID,
+              suitsCollage(anchor, layout: layout), suitsCollage(partner, layout: layout) else { return false }
+        let pane = collagePaneAspect(layout: layout, frameAspect: frameAspect)
+        return fitsPane(anchor, paneAspect: pane) && fitsPane(partner, paneAspect: pane)
+    }
+
+    /// De kollage i `collages` (nyckel = första rutans bild) som gäller för bilderna i ramen.
+    static func activeCollages(_ images: [Image], frameAspect: Double, overrides: [String: ClipOverride],
+                               collages: [String: Image]) -> [String: Image] {
+        var result: [String: Image] = [:]
+        for image in images {
+            if let partner = collages[image.assetID],
+               collageActive(anchor: image, partner: partner, frameAspect: frameAspect, override: overrides[image.assetID]) {
+                result[image.assetID] = partner
+            }
+        }
+        return result
+    }
+
+    /// Rutorna för ett kollage: båda zoomar svagt (1,00 → 1,04) mot sitt eget motivs mittpunkt, klampad
+    /// i rutans cover-utsnitt. Ingen panorering.
+    static func collagePanels(anchor: Image, partner: Image, layout: ReelSpec.PanelLayout, frameAspect: Double,
+                              duration: Double) -> [ReelSpec.Panel] {
+        let pane = collagePaneAspect(layout: layout, frameAspect: frameAspect)
+        let end = endZoom(amount: collageZoomAmount, scale: 1, duration: duration)
+        return [anchor, partner].map { image in
+            let focus = image.focus ?? .init(x: 0.5, y: 0.5)
+            return .init(asset: image.assetID, source: nil,
+                         motion: .init(from: key(image, pane, .cover, cx: focus.x, cy: focus.y, zoom: 1),
+                                       to: key(image, pane, .cover, cx: focus.x, cy: focus.y, zoom: end)))
+        }
+    }
+
+    /// Bildförhållandet som "9:8" (närmaste enkla kvot, minst fel under 1 %); annars två decimaler.
+    static func ratioText(_ aspect: Double) -> String {
+        for q in 1...16 {
+            let p = Int((aspect * Double(q)).rounded())
+            if p > 0, abs(Double(p) / Double(q) - aspect) < 0.01 * aspect { return "\(p):\(q)" }
+        }
+        return String(format: "%.2f", aspect).replacingOccurrences(of: ".", with: ",")
+    }
+
+    /// "Kök och Matplats" / "Kök (två bilder)" för ett kollage.
+    static func collageRoomsText(_ a: Image, _ b: Image) -> String {
+        ReelSelector.montageRooms(ReelCandidate(id: "", filename: "", panelRooms: [a.room ?? "", b.room ?? ""])) ?? "okända rum"
+    }
+
     // MARK: - Val av rörelsetyp
 
     static func kind(of image: Image, frameAspect: Double) -> Kind {
@@ -205,6 +325,10 @@ nonisolated enum ReelMotionPlanner {
         // Ryms motivet, eller är bilden nästan lika bred som ramen (ingenting att panorera): zooma.
         if s <= w || w >= wideSubject { return .zoom }
         if s <= wideSubject { return .pan }
+        // En stående bild i ett stående format ska aldrig bli contain-blur: cover ger nästan hela bilden
+        // (2:3 i 9:16 visar 84 % av bredden). Chronas väg 7, DSC_9451: w = 0,844 låg just under
+        // `wideSubject` (0,85), och den breda fasaden (0,93) blev contain-blur med stora suddiga band.
+        if image.aspect < 1, frameAspect < 1 { return .zoom }
         return image.isExterior ? .containBlur : .pan
     }
 
@@ -212,20 +336,26 @@ nonisolated enum ReelMotionPlanner {
 
     /// Rörelsetyper per bild: förval från fotografen först, sedan automatiskt val, och till sist
     /// en medveten blandning så att minst `minZoomShare` av klippen är zoom/contain.
-    static func kinds(_ images: [Image], frameAspect: Double, overrides: [String: ClipOverride] = [:]) -> [Kind] {
-        kindDecisions(images, frameAspect: frameAspect, overrides: overrides).kinds
+    static func kinds(_ images: [Image], frameAspect: Double, overrides: [String: ClipOverride] = [:],
+                      collages: [String: Image] = [:]) -> [Kind] {
+        kindDecisions(images, frameAspect: frameAspect, overrides: overrides, collages: collages).kinds
     }
 
     /// Samma val som `kinds`, plus vilka klipp som styrdes av fotografen (`forced`) och vilka som
     /// blev zoom bara genom blandningsregeln (`mixed`). Delas av `kinds` och `motionReasons`, så att
     /// förklaringen alltid följer exakt samma regel som planeringen.
-    private static func kindDecisions(_ images: [Image], frameAspect: Double, overrides: [String: ClipOverride])
-        -> (kinds: [Kind], forced: Set<Int>, mixed: Set<Int>, montage: Set<Int>) {
+    private static func kindDecisions(_ images: [Image], frameAspect: Double, overrides: [String: ClipOverride],
+                                      collages: [String: Image] = [:])
+        -> (kinds: [Kind], forced: Set<Int>, mixed: Set<Int>, montage: Set<Int>, collage: Set<Int>) {
         var result = images.map { kind(of: $0, frameAspect: frameAspect) }
         var forced = Set<Int>()
         var montage = Set<Int>()
+        var collage = Set<Int>()
+        let active = activeCollages(images, frameAspect: frameAspect, overrides: overrides, collages: collages)
         for (i, image) in images.enumerated() {
             if overrides[image.assetID]?.panels != nil { result[i] = .zoom; forced.insert(i); continue }
+            // Kollage: två rutor med svag zoom; räknas som zoom men är inte fotografens val.
+            if active[image.assetID] != nil { result[i] = .zoom; collage.insert(i); continue }
             // Montage i sekvens: två zoomar efter varandra, räknas som zoom men är inte fotografens val.
             if isMontageSequence(image, frameAspect: frameAspect, override: overrides[image.assetID]) {
                 result[i] = .zoom; montage.insert(i); continue
@@ -240,20 +370,20 @@ nonisolated enum ReelMotionPlanner {
             case .contain: result[i] = .containBlur; forced.insert(i)
             }
         }
-        guard images.count >= 3 else { return (result, forced, [], montage) }
+        guard images.count >= 3 else { return (result, forced, [], montage, collage) }
         let wanted = max(1, Int(Double(images.count) * minZoomShare))
         var have = result.filter { $0 != .pan }.count
         var mixed = Set<Int>()
         // Smalaste motivet först: det vinner mest på att zoomas.
         let candidates = images.indices
-            .filter { result[$0] == .pan && !forced.contains($0) && !montage.contains($0) }
+            .filter { result[$0] == .pan && !forced.contains($0) && !montage.contains($0) && !collage.contains($0) }
             .sorted { (images[$0].focusWidth ?? images[$0].salientWidth ?? 1) < (images[$1].focusWidth ?? images[$1].salientWidth ?? 1) }
         for i in candidates where have < wanted {
             result[i] = .zoom
             mixed.insert(i)
             have += 1
         }
-        return (result, forced, mixed, montage)
+        return (result, forced, mixed, montage, collage)
     }
 
     // MARK: - Varför (rörelse)
@@ -278,6 +408,9 @@ nonisolated enum ReelMotionPlanner {
         case montageSequence(frame: Double, whole: Double)
         /// Montage i en ram som är bred nog för hela montaget: ett vanligt klipp med rörelsetypen `kind`.
         case montageWhole(frame: Double, whole: Double, kind: Kind)
+        /// Kollage (R6c): två bilder i `layout`, båda motiven ryms i rutan (bildförhållande `pane`). `rooms`
+        /// är bildernas rum ("Kök och Matplats").
+        case collage(layout: ReelSpec.PanelLayout, pane: Double, rooms: String)
         /// Hade panorerats, men blev zoom för att minst `minZoomShare` av klippen ska vara zoom.
         case variation(subject: Double?, frame: Double)
 
@@ -285,7 +418,7 @@ nonisolated enum ReelMotionPlanner {
         var kind: Kind? {
             switch self {
             case .chosenByUser: return nil
-            case .montageSequence: return .zoom
+            case .montageSequence, .collage: return .zoom
             case .montageWhole(_, _, let kind): return kind
             case .subjectFits, .narrowImage, .variation: return .zoom
             case .subjectWider: return .pan
@@ -313,6 +446,9 @@ nonisolated enum ReelMotionPlanner {
                 return "Montage: de två stående bilderna visas efter varandra (zoom på var och en), eftersom ramen (\(ratio(f))) är smalare än hela montaget (\(ratio(w)))"
             case .montageWhole(let f, let w, _):
                 return "Montage: ramen (\(ratio(f))) är bred nog för hela montaget (\(ratio(w))), så det visas som en vanlig bild"
+            case .collage(let layout, let pane, let rooms):
+                let how = layout == .stack ? "staplade" : "sida vid sida"
+                return "Kollage: \(rooms), båda ryms i \(ratioText(pane)) (två bilder \(how), svag gemensam zoom, ingen panorering)"
             case .variation(let s, let f):
                 return "Zoom för variation (minst \(pct(minZoomShare)) zoom): \(subjectText(s)) är bredare än ramen (\(pct(f))) och hade annars panorerats"
             }
@@ -323,12 +459,18 @@ nonisolated enum ReelMotionPlanner {
     /// som `plan` (`kind(of:)`, fotografens förval och blandningsregeln). Ren funktion: beräknas på
     /// nytt när den behövs och sparas inte i specen.
     static func motionReasons(_ images: [Image], frameAspect: Double,
-                              overrides: [String: ClipOverride] = [:]) -> [MotionReason] {
-        let d = kindDecisions(images, frameAspect: frameAspect, overrides: overrides)
+                              overrides: [String: ClipOverride] = [:],
+                              collages: [String: Image] = [:]) -> [MotionReason] {
+        let d = kindDecisions(images, frameAspect: frameAspect, overrides: overrides, collages: collages)
+        let active = activeCollages(images, frameAspect: frameAspect, overrides: overrides, collages: collages)
         return images.enumerated().map { i, image in
             let frame = visibleWidth(imageAspect: image.aspect, frameAspect: frameAspect)
             let subject = image.focusWidth ?? image.salientWidth
             if d.forced.contains(i) { return .chosenByUser }
+            if d.collage.contains(i), let partner = active[image.assetID], let layout = collageLayout(frameAspect: frameAspect) {
+                return .collage(layout: layout, pane: collagePaneAspect(layout: layout, frameAspect: frameAspect),
+                                rooms: collageRoomsText(image, partner))
+            }
             if d.montage.contains(i) { return .montageSequence(frame: frameAspect, whole: montageAspect(image)) }
             if montageAspect(image) > 0 { return .montageWhole(frame: frameAspect, whole: montageAspect(image), kind: d.kinds[i]) }
             if d.mixed.contains(i) { return .variation(subject: subject, frame: frame) }
@@ -357,13 +499,20 @@ nonisolated enum ReelMotionPlanner {
     /// sidledsriktning). De uttryckliga förvalen (zoomIn m.fl.) alternerar som förut inte.
     /// `tempo` skalar bara automatiska längder. Automatiska övergångar utgår från filmens
     /// standardövergång `defaultTransition` (se `automaticTransition`).
+    ///
+    /// `collages` är automatiska kollage (R6c): första rutans bild (asset-id) → partnerbilden. De gäller
+    /// bara när `collageActive` (formatet motiverar det, motiven ryms, klippet är inte låst); annars
+    /// planeras klippet som en vanlig bild och partnern ritas inte (anroparen lägger in den som eget klipp,
+    /// se `ReelComposer.rebuild`).
     static func plan(_ images: [Image], frameAspect: Double, overrides: [String: ClipOverride] = [:],
-                     tempo: Tempo = .normal, defaultTransition: ReelSpec.Transition = standardTransition) -> [ReelSpec.Clip] {
+                     tempo: Tempo = .normal, defaultTransition: ReelSpec.Transition = standardTransition,
+                     collages: [String: Image] = [:]) -> [ReelSpec.Clip] {
         var clips: [ReelSpec.Clip] = []
         var zoomIn = true            // alterneras mellan zoom-/contain-klipp
         var panRight = true          // alterneras mellan panoreringar
         var previousPanSign = 0.0    // riktningen (+1 höger) som föregående klipp panorerade, 0 = ingen
-        let kinds = kinds(images, frameAspect: frameAspect, overrides: overrides)
+        let kinds = kinds(images, frameAspect: frameAspect, overrides: overrides, collages: collages)
+        let activeCollage = activeCollages(images, frameAspect: frameAspect, overrides: overrides, collages: collages)
 
         for (i, image) in images.enumerated() {
             let isFirst = i == 0, isLast = i == images.count - 1 && images.count > 1
@@ -419,6 +568,29 @@ nonisolated enum ReelMotionPlanner {
                                    durationLocked: override.duration == nil ? nil : true,
                                    transitionLocked: override.transitionLocked ? true : nil,
                                    layout: .sequence, panels: panels))
+                continue
+            }
+
+            if let partner = activeCollage[image.assetID], let layout = collageLayout(frameAspect: frameAspect) {
+                // Kollage: två bilder i var sin ruta (stapel i 9:16, sida vid sida i 16:9), svag gemensam
+                // zoom och ingång efter varandra. Automatiskt (ingen `custom`): planeras om vid varje
+                // ombyggnad, så att det följer formatet.
+                let duration = override.duration ?? collageBaseDuration * tempo.factor
+                let panels = collagePanels(anchor: image, partner: partner, layout: layout, frameAspect: frameAspect,
+                                           duration: duration)
+                var transition: ReelSpec.Transition?
+                if override.transitionLocked {
+                    transition = override.transition
+                } else if i > 0 {
+                    transition = automaticTransition(previousPanSign: 0, isLast: isLast,
+                                                     defaultTransition: defaultTransition).transition
+                }
+                previousPanSign = 0
+                clips.append(.init(asset: image.assetID, duration: duration, fit: .panels, motion: panels[0].motion,
+                                   transitionIn: transition, motionPreset: nil,
+                                   durationLocked: override.duration == nil ? nil : true,
+                                   transitionLocked: override.transitionLocked ? true : nil,
+                                   layout: layout, panels: panels, gutter: nil, entrance: collageEntrance))
                 continue
             }
 

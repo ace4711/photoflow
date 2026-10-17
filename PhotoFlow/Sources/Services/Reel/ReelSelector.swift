@@ -27,6 +27,11 @@ nonisolated struct ReelCandidate: Sendable, Equatable, Identifiable {
     /// bilder. `room` är då den viktigaste av halvornas typer (`ReelSelector.primaryPanelIndex`), och
     /// montaget räknas som en plats i urvalet men täcker ingen rumstyp (en extra bild, se `select`).
     var panelRooms: [String] = []
+    /// Bildens mått i pixlar och bredden på den största saliency-boxen (andel av bredden): behövs för
+    /// kollage (R6c), som avgör om motivet ryms i en ruta.
+    var width: Int?
+    var height: Int?
+    var focusWidth: Double?
 }
 
 /// Automatiskt urval av bilder till ett bildspel (plan 3.2): hårda filter,
@@ -90,6 +95,22 @@ nonisolated enum ReelSelector {
         var autoMaxCount = 8
         /// Tillägg på avslutets värde för en skymningsbild.
         var duskClosingBonus = 0.08
+        /// Kollage (R6c, se `ReelCollage`). Högst så här stor andel av bilderna får en partner (minst ett
+        /// kollage): med 5-8 bilder 1-2 kollage, så att filmen inte blir bara kollage.
+        var collageMaxShare = 0.34
+        /// Partnerns och ankarets genomsnittsluminans får skilja så här mycket (0...1): två ljusa rum bredvid
+        /// ett mörkt ger ett ojämnt kollage. Riktiga objekt (Chronas): 0,53-0,75, spridning ofta under 0,1.
+        var collageMaxLuminanceDiff = 0.15
+        /// Minsta feature print-avstånd (kvadrerat) mellan paret: två vinklar av samma rum får vara lika,
+        /// men inte nära dubbletter (dubblettgränsen är 0,05; här det dubbla).
+        var collageMinDistance = 2 * PhotoQualityService.duplicateDistanceThreshold
+        /// Så många av de närmast bortvalda (bäst grundpoäng) kan vara partner.
+        var collagePoolSize = 6
+        /// Rumstyper som passar ihop i ett kollage, utöver samma typ med samma typ (hall och entré är redan
+        /// samma typ).
+        var collageRoomPairs: [[String]] = [["kök", "matplats"], ["vardagsrum", "matplats"], ["uteplats", "trädgård"]]
+        /// Rumstyper som aldrig är med i kollage: breda fasader och utsikter behåller cover/contain-blur.
+        var collageExcludedRooms: [String] = ["fasad", "utsikt"]
     }
 
     nonisolated enum Template: String, Sendable, Equatable {
@@ -100,12 +121,15 @@ nonisolated enum ReelSelector {
     /// (`Pick.roomType`).
     nonisolated enum Slot: String, Sendable, Equatable {
         case opening, closing, room
+        /// Kollagepartner som urvalet inte valt (en extra bild i andra rutan, utan egen plats).
+        case extra
 
         var label: String {
             switch self {
             case .opening: return "Öppning"
             case .closing: return "Avslut"
             case .room: return "Rum"
+            case .extra: return "Extra bild"
             }
         }
     }
@@ -142,11 +166,16 @@ nonisolated enum ReelSelector {
 
     nonisolated struct Selection: Sendable, Equatable {
         var template: Template
-        /// I föreslagen visningsordning.
+        /// I föreslagen visningsordning. Ett kollages partner ligger direkt efter ankaret.
         var picks: [Pick]
         var excluded: [Exclusion]
         /// Grundpoäng för alla kandidater (även bortfiltrerade), för UI:t.
         var scores: [String: Double]
+        /// Kollage (R6c): ankaret är klippets bild, partnern andra rutan. Båda finns i `picks`.
+        var collages: [ReelCollage.Pair] = []
+
+        /// Bilder som är partner i ett kollage och därför inte har ett eget klipp.
+        var partnerIDs: Set<String> { Set(collages.map(\.partnerID)) }
     }
 
     // MARK: - Rumsklassning
@@ -374,9 +403,35 @@ nonisolated enum ReelSelector {
     /// tas en bild bara bort på skärpan om den är tydligt oskarp i absoluta tal
     /// (`Weights.curatedSharpnessFloorRatio` av medianen), inte för att den ligger under 25:e
     /// percentilen, som alltid träffar några bilder. Övriga filter och rimlighetsventilen är oförändrade.
+    ///
+    /// `frameAspect` (ramens bredd/höjd; nil = inga kollage) slår på kollage (R6c, se `ReelCollage`): en vald
+    /// bild som annars blir contain-blur eller en hård beskärning får en partner, och paret är ett klipp
+    /// (en plats) men två bilder i `picks`. Bilderna täcker då båda sina rumstyper ("en av varje"). Ett
+    /// kollage vars partner var vald frigör en plats: urvalet körs om med en plats till (högst tre varv,
+    /// tills antalet kollage står still), så att nästa rumstyp i prioritetsordningen får den och filmen
+    /// visar fler rum på samma tid. Med fast antal (`count`) är antalet klipp (platser), inte bilder:
+    /// kollaget är en plats. Öppning och avslut är aldrig kollage (de ska fylla hela rutan); låsta bilder
+    /// ingår aldrig i ett automatiskt kollage.
     static func select(_ candidates: [ReelCandidate], count requested: Int? = nil, weights: Weights = Weights(),
                        curated: Bool = false,
-                       pinned pinnedIDs: [String] = [], excluded excludedIDs: [String] = []) -> Selection {
+                       pinned pinnedIDs: [String] = [], excluded excludedIDs: [String] = [],
+                       frameAspect: Double? = nil) -> Selection {
+        var extra = 0
+        var result = selectPass(candidates, count: requested, weights: weights, curated: curated, pinned: pinnedIDs,
+                                excluded: excludedIDs, frameAspect: frameAspect, extraSlots: 0)
+        for _ in 0..<3 {
+            let freed = result.collages.filter(\.partnerPicked).count
+            if freed == extra { break }
+            extra = freed
+            result = selectPass(candidates, count: requested, weights: weights, curated: curated, pinned: pinnedIDs,
+                                excluded: excludedIDs, frameAspect: frameAspect, extraSlots: extra)
+        }
+        return result
+    }
+
+    private static func selectPass(_ candidates: [ReelCandidate], count requested: Int?, weights: Weights,
+                                   curated: Bool, pinned pinnedIDs: [String], excluded excludedIDs: [String],
+                                   frameAspect: Double?, extraSlots: Int) -> Selection {
         let userExcluded = Set(excludedIDs)
         var pinnedList: [String] = []
         for c in candidates where pinnedIDs.contains(c.id) && !userExcluded.contains(c.id) && !pinnedList.contains(c.id) {
@@ -579,6 +634,8 @@ nonisolated enum ReelSelector {
         let important = byType.keys.filter(isImportant).count
         var target = fixedCount ?? min(max(important, weights.autoMinCount), weights.autoMaxCount)
         target = min(max(target, pinned.count), max(maxCount, pinned.count))
+        // Kollage med vald partner frigör platser (klipp), se `select`.
+        target += extraSlots
 
         // Valen. Låsta först, sedan öppning, avslut och "en av varje".
         var pickedIDs: [String] = []
@@ -652,10 +709,29 @@ nonisolated enum ReelSelector {
             return (seq[$0.id] ?? 0) < (seq[$1.id] ?? 0)
         }
 
-        let picks: [Pick] = displayOrder.map { c in
+        // Kollage: partner direkt efter ankaret (en bortvald partner läggs till som extra bild).
+        var collages: [ReelCollage.Pair] = []
+        var ordered = displayOrder
+        if let aspect = frameAspect {
+            collages = ReelCollage.pairs(
+                order: displayOrder, openingID: opening?.candidate.id, closingID: closing?.candidate.id,
+                pool: survivors.filter { !pickedIDs.contains($0.id) }, frameAspect: aspect, score: score,
+                distance: { dist[$0]?[$1] }, pinned: pinned, weights: weights)
+            for pair in collages {
+                guard let partner = byID[pair.partnerID] else { continue }
+                ordered.removeAll { $0.id == pair.partnerID }
+                guard let at = ordered.firstIndex(where: { $0.id == pair.anchorID }) else { continue }
+                ordered.insert(partner, at: at + 1)
+            }
+        }
+        let collageReason = Dictionary(collages.flatMap { [($0.anchorID, $0.reason), ($0.partnerID, $0.reason)] },
+                                       uniquingKeysWith: { a, _ in a })
+
+        let picks: [Pick] = ordered.map { c in
             let isOpening = c.id == opening?.candidate.id
             let isClosing = c.id == closing?.candidate.id
-            let slot: Slot = isOpening ? .opening : (isClosing ? .closing : .room)
+            let isExtra = collages.contains { !$0.partnerPicked && $0.partnerID == c.id }
+            let slot: Slot = isOpening ? .opening : (isClosing ? .closing : (isExtra ? .extra : .room))
             var text: String
             if isOpening, let o = opening {
                 text = openingReason(o, score: score(c))
@@ -665,10 +741,11 @@ nonisolated enum ReelSelector {
             } else {
                 text = roomReason(c, score: score(c), siblings: byType[typeKey(c)] ?? [])
             }
+            if let reason = collageReason[c.id] { text = reason }
             if pinned.contains(c.id) { text += ", låst av dig" }
             return Pick(candidateID: c.id, slot: slot, roomType: typeOf(c), reason: text, score: score(c))
         }
-        return Selection(template: template, picks: picks, excluded: excluded, scores: scores)
+        return Selection(template: template, picks: picks, excluded: excluded, scores: scores, collages: collages)
     }
 
     // MARK: - Motiveringar

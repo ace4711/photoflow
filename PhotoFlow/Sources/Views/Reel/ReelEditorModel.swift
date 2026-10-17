@@ -292,7 +292,7 @@ final class ReelEditorModel {
         spec = restored
         selection = entry.selection
         format = ReelFormat(rawValue: restored.outputs.first?.id ?? "") ?? format
-        count = min(max(restored.assets.count, Self.countRange.lowerBound), Self.countRange.upperBound)
+        count = min(max(restored.timeline.count, Self.countRange.lowerBound), Self.countRange.upperBound)
         adaptedCustomMotions = 0
         // Steg som numrerar om asset-id:n: samma id kan nu vara en annan bild.
         if Self.renumberingOps.contains(entry.op) { clearSelection() }
@@ -459,7 +459,7 @@ final class ReelEditorModel {
         if let restored = restoredSpec(specDirectory: specDir) {
             spec = restored
             format = ReelFormat(rawValue: restored.outputs.first?.id ?? "") ?? format
-            count = min(max(restored.assets.count, Self.countRange.lowerBound), Self.countRange.upperBound)
+            count = min(max(restored.timeline.count, Self.countRange.lowerBound), Self.countRange.upperBound)
         }
         clearSelection()
         clearHistory()
@@ -534,14 +534,14 @@ final class ReelEditorModel {
         }
         // Ett fast antal följer filmen när klipp läggs till eller tas bort för hand.
         if var e = rebuilt.editor, e.fixedCount != nil {
-            e.fixedCount = min(max(rebuilt.assets.count, Self.countRange.lowerBound), Self.countRange.upperBound)
+            e.fixedCount = min(max(rebuilt.timeline.count, Self.countRange.lowerBound), Self.countRange.upperBound)
             rebuilt.editor = e
         }
         adaptedCustomMotions = ReelComposer.adaptedCustomMotions(from: current, to: rebuilt)
         spec = rebuilt
         if let format { self.format = format }
         // "Bilder: N" i huvudet följer filmen när klipp läggs till eller tas bort för hand.
-        count = min(max(rebuilt.assets.count, Self.countRange.lowerBound), Self.countRange.upperBound)
+        count = min(max(rebuilt.timeline.count, Self.countRange.lowerBound), Self.countRange.upperBound)
         dropStaleSelection()
         revisionToken += 1
         if case .rendered = phase { phase = .ready }
@@ -745,9 +745,14 @@ final class ReelEditorModel {
         let byID = Dictionary(spec.assets.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let assets = spec.timeline.compactMap { byID[$0.asset] }
         guard assets.count == spec.timeline.count, let output = spec.outputs.first else { return [] }
+        let images = Dictionary(ReelComposer.plannerImages(spec.assets).map { ($0.assetID, $0) }, uniquingKeysWith: { a, _ in a })
+        var collages: [String: ReelMotionPlanner.Image] = [:]
+        for clip in spec.timeline {
+            if let partner = ReelComposer.autoCollagePartner(clip).flatMap({ images[$0] }) { collages[clip.asset] = partner }
+        }
         return ReelMotionPlanner.motionReasons(ReelComposer.plannerImages(assets),
                                                frameAspect: ReelMotionPlanner.frameAspect(output),
-                                               overrides: ReelComposer.overrides(in: spec))
+                                               overrides: ReelComposer.overrides(in: spec), collages: collages)
     }
 
     /// Bildens storlek och utformatets bildförhållande för geometriberäkningar i rörelseeditorn.
@@ -861,7 +866,14 @@ final class ReelEditorModel {
         var o = order
         if excluding, o.count > 1,
            let asset = spec?.assets.first(where: { $0.sha256 == candidateID && o.contains($0.id) }) {
-            o.removeAll { $0 == asset.id }
+            // Ankaret i ett automatiskt kollage: kollaget löses upp och partnern tar klippets plats.
+            if let clip = spec?.timeline.first(where: { $0.asset == asset.id }),
+               let partner = ReelComposer.autoCollagePartner(clip), !o.contains(partner),
+               let at = o.firstIndex(of: asset.id) {
+                o[at] = partner
+            } else {
+                o.removeAll { $0 == asset.id }
+            }
             if selectedAssetID == asset.id { selectedAssetID = nil }
         }
         apply(order: o, editor: { e in
@@ -931,7 +943,7 @@ final class ReelEditorModel {
         // Samma film i en ny version (id, revision, brand och logg följer med), även vid "Börja om helt".
         spec = spec.map { ReelComposer.continuing(result.spec, from: $0, op: op, now: now()) } ?? result.spec
         // Låsta bilder kan göra filmen längre än begärt antal; automatiskt antal visas som det faktiska.
-        count = min(max(result.spec.assets.count, Self.countRange.lowerBound), Self.countRange.upperBound)
+        count = min(max(result.spec.timeline.count, Self.countRange.lowerBound), Self.countRange.upperBound)
         adaptedCustomMotions = 0
         clearSelection()
         revisionToken += 1
@@ -962,7 +974,7 @@ final class ReelEditorModel {
         recordStep(op: "pull")
         spec = remote
         format = ReelFormat(rawValue: remote.outputs.first?.id ?? "") ?? format
-        count = min(max(remote.assets.count, Self.countRange.lowerBound), Self.countRange.upperBound)
+        count = min(max(remote.timeline.count, Self.countRange.lowerBound), Self.countRange.upperBound)
         clearSelection()
         revisionToken += 1
         if case .rendered = phase { phase = .ready }
