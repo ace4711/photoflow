@@ -198,3 +198,7 @@ Ett rutklipp och ett vanligt klipp kan mötas i vilken kombination som helst.
 ## 9. Montage (R6b)
 
 `assets[].analysis` har två valfria fält (tillägg inom v1): `panels` (två `UnitRect`, vänster och höger stående halva) och `panelRooms` (rum per halva). Planeraren gör en bild med `panels` till ett rutklipp (`fit: panels`, `layout: sequence`, två rutor med samma `asset` och `source` = halvorna, zoom in på första och ut på andra, 2 × 1,8 s skalat med tempo) när ramens bildförhållande är mindre än halvornas sammanlagda (9:16, 1:1). I 16:9 blir det ett vanligt klipp. Fotografens förval på bilden (zooma, panorera, hela bilden) gör det till ett vanligt klipp.
+
+## 10. Kollage (R6c)
+
+Planeraren gör två bilder till ett `stack`-klipp (9:16) eller `side`-klipp (16:9): `asset` = första rutans bild, två rutor utan `source`, samma svaga zoom 1,00 → 1,04 mot respektive motivs mitt, `entrance: {type: "slide", stagger: 0,3}`, förvald gutter, längd 3,4 s före tempo (2,5 s zoom + ingång 0,9 s), `motionPreset` saknas (automatiskt: planeras om vid formatbyte; `custom` = fotografens lås). Partnerbilden är en asset som inget klipp har som egen bild. I 1:1 görs inget automatiskt kollage. Ett kollage som inte längre motiveras av formatet löses upp (en vald partner blir ett eget klipp, en extra bild lämnar filmen).

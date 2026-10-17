@@ -25,7 +25,7 @@ nonisolated enum ReelFormat: String, Sendable, CaseIterable, Equatable {
 /// (inget Vision, ingen disk): analyserna kommer in färdiga.
 nonisolated enum ReelComposer {
 
-    static let generator = "PhotoFlow ReelComposer v1 / ReelSelector v2"
+    static let generator = "PhotoFlow ReelComposer v1 / ReelSelector v3 (kollage)"
 
     nonisolated struct Options: Sendable {
         /// Exakt antal bilder (3...12). nil = automatiskt: en bild per viktig rumstyp, 5...8

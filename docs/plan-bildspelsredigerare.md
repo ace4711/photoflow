@@ -253,5 +253,7 @@ Nya fält på klipp (`timeline[]`):
 
 **R6b är klar (17 oktober 2026):** `ReelPanelDetector` (ränna eller ensam kant), rum per halva, montage som `sequence` i 9:16/1:1 och vanligt klipp i 16:9, automatiska rutklipp planeras om vid formatbyte (bara `custom` är låst).
 
+**R6c är klar (17 oktober 2026):** `ReelCollage` (partnerregler), urvalet räknar kollage som en plats och ger nästa rumstyp den lediga platsen, planeraren gör `stack` (9:16) och `side` (16:9) med svag zoom 1,00 → 1,04 och inglidning, kollage upplöses vid formatbyte, stående bild i 9:16 blir aldrig contain-blur. Öppning och avslut är aldrig kollage; inget automatiskt kollage i 1:1.
+
 R6a först (allt annat bygger på den). R6b och R6c kan sedan gå parallellt. Ingen v2-film skickas till mäklaren förrän R6e är driftsatt.
 
