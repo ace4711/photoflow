@@ -10,6 +10,10 @@
 // contain-blur ritas som en grupp (bakgrund + förgrund) på en hjälpcanvas som
 // sedan blandas med lagrets opacitet och förskjutning, så att gruppen får en
 // enda alfa (precis som Swift-renderaren).
+//
+// Rutklipp (spec v2, docs/reel-spec-v2.md 4.2) ritas som en grupp på samma hjälpcanvas: svart ram,
+// varje ruta i sin dest (avrundad till heltalspixlar) med rutans egen förskjutning och opacitet,
+// klippt till ramen; gruppen blandas sedan med lagrets opacitet och förskjutning.
 
 import { state } from "./reelTimeline.ts";
 import type { LayerState, Rect } from "./reelTimeline.ts";
@@ -117,6 +121,33 @@ function drawLayerContent(ctx: Ctx2D, layer: LayerState, img: DrawableImage, w: 
 }
 
 /**
+ * Ritar ett klipps rutor (lager med `panel`) på `ctx` (som är gruppens hjälpcanvas, storlek w×h):
+ * svart botten, sedan varje ruta i sin dest förskjuten med `panel.offset`, blandad med `panel.opacity`.
+ * Bilder som saknas hoppas över.
+ */
+function drawPanelGroup(ctx: Ctx2D, layers: LayerState[], images: ReadonlyMap<string, DrawableImage>,
+                        w: number, h: number): void {
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, w, h);
+  for (const layer of layers) {
+    const img = images.get(layer.asset);
+    const info = layer.panel;
+    if (!img || !info) continue;
+    // dest avrundas till heltalspixlar (som destinationRect i Swift); förskjutningen läggs på efteråt.
+    const x0 = Math.round(layer.dest.x * w), x1 = Math.round((layer.dest.x + layer.dest.w) * w);
+    const y0 = Math.round(layer.dest.y * h), y1 = Math.round((layer.dest.y + layer.dest.h) * h);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, w, h);
+    ctx.clip();
+    ctx.globalAlpha = info.opacity;
+    ctx.translate(info.offset.x * w, info.offset.y * h);
+    drawCrop(ctx, img, layer.crop, x0, y0, x1 - x0, y1 - y0);
+    ctx.restore();
+  }
+}
+
+/**
  * Ritar bildrutan vid tid `t` på `ctx` (storlek `width`×`height` pixlar).
  * Svart där inget lager täcker.
  */
@@ -132,10 +163,33 @@ export function renderFrame(ctx: Ctx2D, spec: ReelSpec, t: number, width: number
   const layers = state(t, spec, { width, height });
   let group: Scratch | undefined;
   let pad: Scratch | undefined;
-  for (const layer of layers) {
+  for (let i = 0; i < layers.length; i++) {
+    const layer = layers[i];
+    const ox = layer.offset.x * width, oy = layer.offset.y * height;
+    if (layer.panel) {
+      // Rutlager med samma z är en grupp: rita den på hjälpcanvasen och blanda med lagrets opacitet/förskjutning.
+      let j = i + 1;
+      while (j < layers.length && layers[j].panel && layers[j].z === layer.z) j++;
+      group ??= (opts.scratch ??= createScratch());
+      group.resize(width, height);
+      group.ctx.save();
+      group.ctx.setTransform(1, 0, 0, 1, 0, 0);
+      group.ctx.globalAlpha = 1;
+      group.ctx.filter = "none";
+      drawPanelGroup(group.ctx, layers.slice(i, j), opts.images, width, height);
+      group.ctx.restore();
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, width, height);
+      ctx.clip();
+      ctx.globalAlpha = layer.opacity;
+      ctx.drawImage(group.source, ox, oy);
+      ctx.restore();
+      i = j - 1;
+      continue;
+    }
     const img = opts.images.get(layer.asset);
     if (!img) continue;
-    const ox = layer.offset.x * width, oy = layer.offset.y * height;
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, 0, width, height);

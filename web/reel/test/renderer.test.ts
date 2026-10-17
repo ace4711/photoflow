@@ -41,3 +41,30 @@ test("contain-blur: grupp på hjälpcanvas, bakgrund suddas, gruppen blandas med
   assert.ok(log.some((s) => s.startsWith("pad.draw")), "bakgrunden ritas på marginalcanvasen");
   assert.ok(log.some((s) => s.startsWith("main.draw group") && /a=0\.\d+/.test(s) && s.includes("f=none")), log.join("\n"));
 });
+
+test("rutklipp: rutorna ritas som en grupp på hjälpcanvasen (svart botten, dest i heltalspixlar) och gruppen blandas med opacitet", () => {
+  const panelSpec = parseReelSpec({
+    ...JSON.parse(JSON.stringify(spec)),
+    version: 2, minReaderVersion: 2,
+    timeline: [
+      spec.timeline[0],
+      {
+        asset: "a2", duration: 3, fit: "panels", layout: "stack", motionPreset: "custom", gutter: 0.04,
+        motion: spec.timeline[1].motion,
+        panels: [{ asset: "a2", motion: spec.timeline[1].motion }, { asset: "a3", motion: spec.timeline[2].motion }],
+        transitionIn: { type: "crossfade", duration: 0.5 },
+      },
+    ],
+  });
+  const log: string[] = [];
+  const group = scratch("group", log), pad = scratch("pad", log);
+  // Övergången börjar vid 2,5 s: t = 2,75 → gruppen har opacitet 0,5 (easeInOut av 0,5).
+  renderFrame(fake("main", log), panelSpec, 2.75, 540, 960, { images, scratch: group, backdropScratch: pad });
+  assert.ok(log.some((s) => s.startsWith("group.fill 0,0,540,960")), "gruppens svarta botten");
+  const panelDraws = log.filter((s) => s.startsWith("group.draw"));
+  assert.equal(panelDraws.length, 2, "två rutor");
+  // dest avrundas till heltalspixlar: ruta 1 får höjden round(dest.h · 960).
+  const dest = state(2.75, panelSpec, { width: 540, height: 960 }).filter((l) => l.panel)[0].dest;
+  assert.ok(panelDraws[0].endsWith(`,0,0,540,${Math.round(dest.h * 960)}`), panelDraws[0]);
+  assert.ok(log.some((s) => s.startsWith("main.draw group") && /a=0\.\d+/.test(s)), log.join("\n"));
+});
