@@ -138,6 +138,11 @@ struct PhotoFlowCLI {
                              eller 16:9 (1920x1080).
           --ai-tags <mapp>  Mapp med ai_tags.json (rum/bildtext som reserv;
                              standard: indatamappen).
+          --curated / --not-curated
+                             Kurerat läge: bara tydligt oskarpa bilder tas bort
+                             (för fotografens egna, redigerade bilder). Standard
+                             ur mappnamnet: kurerat utom för "<adress> FÖRBÄTTRADE"
+                             och "<adress> TITTBILDER".
           --no-render       Skriv bara reel.json och urvalet, ingen video.
           --no-ai           Hoppa över Foundation Models-beskrivningen
                              (rum/kategori) i analysen.
@@ -574,6 +579,7 @@ struct PhotoFlowCLI {
         var jsonOutput = false
         var render = true
         var aiTagsPath: String?
+        var curatedFlag: Bool?
 
         var idx = 0
         while idx < args.count {
@@ -593,6 +599,10 @@ struct PhotoFlowCLI {
                 aiTagsPath = args[idx]
             case "--no-render":
                 render = false
+            case "--curated":
+                curatedFlag = true
+            case "--not-curated":
+                curatedFlag = false
             case "--count":
                 idx += 1
                 guard idx < args.count, let n = Int(args[idx]), (3...12).contains(n) else { fail("--count kräver ett heltal 3-12") }
@@ -661,6 +671,8 @@ struct PhotoFlowCLI {
             options.count = count
             options.format = format
             options.address = inputURL.lastPathComponent
+            options.curated = curatedFlag ?? AddressFolderLayout.isCuratedSource(inputURL)
+            log("Skärpefilter: \(options.curated ? "kurerat (tydligt oskarpa bort)" : "percentil (25 % oskarpaste bort)")")
             let result = ReelComposer.compose(items: items, specDirectory: outputURL, options: options)
             let spec = result.spec
             let specURL = outputURL.appendingPathComponent("reel.json")
