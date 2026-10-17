@@ -132,6 +132,14 @@ nonisolated struct ReelSpec: Codable, Sendable, Equatable {
         /// Bredden (andel av bildbredden) på den största saliency-boxen, ett tätare mått
         /// än `salientWidth` (unionen). Valfritt; används av rörelseplaneringen. Tillägg inom v1.
         var focusWidth: Double?
+        /// Montage (R6b): källrektanglarna (vänster, höger) för de två stående halvorna, om bilden är två
+        /// bilder som satts ihop sida vid sida. Saknas fältet (eller är det tomt) är bilden ingen montage.
+        /// Planeraren gör ett sådant montage till ett rutklipp (`layout: sequence`) i smala format.
+        /// Tillägg inom v1 (läsare ignorerar det).
+        var panels: [UnitRect]?
+        /// Rumstypen per halva (samma ordning som `panels`; tom sträng = okänt rum), t.ex. ["Hall", "Uteplats"].
+        /// `room` är då den viktigaste av dem. Tillägg inom v1.
+        var panelRooms: [String]?
     }
 
     /// Punkt i normaliserade bildkoordinater [0,1].

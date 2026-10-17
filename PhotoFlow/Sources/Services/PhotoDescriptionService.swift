@@ -57,10 +57,21 @@ actor PhotoDescriptionService {
     /// (kontextgräns/guardrails/etc — loggas men stoppar aldrig pipelinen).
     /// Ingen nätverkstrafik: allt körs on-device.
     func describe(imageAt url: URL) async -> RoomTags? {
+        await describe(imageAt: url, cropping: nil)
+    }
+
+    /// Som `describe(imageAt:)`, men bara för en del av bilden (`crop` i normaliserade bildkoordinater,
+    /// origo uppe till vänster): en montagehalva. Utan `crop` hela bilden.
+    func describe(imageAt url: URL, cropping crop: CGRect?) async -> RoomTags? {
         guard #available(macOS 27.0, *) else { return nil }
         guard Self.isAvailable else { return nil }
-        guard let cgImage = Self.loadCGImage(url) else {
+        // Ett utsnitt tas ur en orienteringsriktig kopia (samma koordinater som analysen), 2048 px räcker modellen.
+        guard let full = crop == nil ? Self.loadCGImage(url) : Self.loadOrientedCGImage(url, maxPixels: 2048) else {
             print("[PhotoDescriptionService] Kunde inte läsa bild: \(url.lastPathComponent)")
+            return nil
+        }
+        guard let cgImage = crop.map({ Self.cropped(full, to: $0) }) ?? full else {
+            print("[PhotoDescriptionService] Kunde inte beskära bild: \(url.lastPathComponent)")
             return nil
         }
 
@@ -86,6 +97,27 @@ actor PhotoDescriptionService {
             print("[PhotoDescriptionService] Modellanrop misslyckades för \(url.lastPathComponent): \(error) — hoppar över bildbeskrivning för denna bild")
             return nil
         }
+    }
+
+    /// Utsnittet `unit` (normaliserade koordinater, origo uppe till vänster, klampat till bilden) i pixlar.
+    /// Nil om utsnittet blir tomt.
+    static func cropped(_ image: CGImage, to unit: CGRect) -> CGImage? {
+        let w = Double(image.width), h = Double(image.height)
+        let rect = CGRect(x: (unit.minX * w).rounded(), y: (unit.minY * h).rounded(),
+                          width: (unit.width * w).rounded(), height: (unit.height * h).rounded())
+            .intersection(CGRect(x: 0, y: 0, width: w, height: h))
+        guard rect.width >= 1, rect.height >= 1 else { return nil }
+        return image.cropping(to: rect)
+    }
+
+    private static func loadOrientedCGImage(_ url: URL, maxPixels: Int) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixels,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, opts as CFDictionary)
     }
 
     private static func loadCGImage(_ url: URL) -> CGImage? {

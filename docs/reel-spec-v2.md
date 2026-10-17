@@ -194,3 +194,7 @@ Ett rutklipp och ett vanligt klipp kan mötas i vilken kombination som helst.
 ## 8. Testvektorer
 
 `timeline-vectors.json` har åtta fall som börjar med `panels-` (genererade av Swift-implementationen, verifierade mot TypeScript): `panels-stack-slide`, `panels-side-slide`, `panels-fade-gutter`, `panels-no-entrance-default-gutter`, `panels-source-halves`, `panels-sequence-montage`, `panels-sequence-three-short` och `panels-linear-black`. De täcker alla tre layouter, `source` (montagehalvor, mittpunkt utanför `source` som klampas), gutter (förval, 0, 0,008, 0,02, 0,05), alla ingångstyper (`slide`, `fade`, `none`, saknad), övergång in i och ut ur rutklipp (`crossfade`, `push`, `fadeThroughBlack`, `cut`), `sequence` med två och tre rutor och kort klipp, linjär easing och svart bakgrund, i 9:16, 16:9 och 1:1. Varje lager har fältet `panel` (`{index, opacity, offset}` eller `null`); äldre fall saknar det, vilket läses som `null`.
+
+## 9. Montage (R6b)
+
+`assets[].analysis` har två valfria fält (tillägg inom v1): `panels` (två `UnitRect`, vänster och höger stående halva) och `panelRooms` (rum per halva). Planeraren gör en bild med `panels` till ett rutklipp (`fit: panels`, `layout: sequence`, två rutor med samma `asset` och `source` = halvorna, zoom in på första och ut på andra, 2 × 1,8 s skalat med tempo) när ramens bildförhållande är mindre än halvornas sammanlagda (9:16, 1:1). I 16:9 blir det ett vanligt klipp. Fotografens förval på bilden (zooma, panorera, hela bilden) gör det till ett vanligt klipp.

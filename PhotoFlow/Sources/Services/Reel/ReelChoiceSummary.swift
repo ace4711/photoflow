@@ -40,13 +40,23 @@ nonisolated enum ReelChoiceSummary {
             locked += clipLocks
             rows.append(.init(
                 index: i, assetID: clip.asset,
-                room: asset?.analysis?.room ?? asset?.analysis?.category ?? "Okänt rum",
+                room: roomLabel(asset),
                 motion: motionLabel(clip),
                 transition: i == 0 ? nil : transitionLabel(ReelTimeline.transition(spec, at: i)),
                 locked: clipLocks > 0 || asset.map { pinned.contains($0.sha256) } == true))
         }
         return .init(template: templateLabel(spec.property.kind), clipCount: spec.timeline.count,
                      lockedChoices: locked, rows: rows)
+    }
+
+    /// Rummet som visas för klippets bild: "Montage: Hall och Uteplats" för ett montage med beskrivna
+    /// halvor, annars rum, kategori eller "Okänt rum".
+    static func roomLabel(_ asset: ReelSpec.Asset?) -> String {
+        if let a = asset?.analysis, (a.panels?.count ?? 0) >= 2, let rooms = a.panelRooms,
+           let text = ReelSelector.montageRooms(ReelCandidate(id: "", filename: "", panelRooms: rooms)) {
+            return "Montage: \(text)"
+        }
+        return asset?.analysis?.room ?? asset?.analysis?.category ?? "Okänt rum"
     }
 
     static func templateLabel(_ kind: String?) -> String? {
@@ -60,6 +70,10 @@ nonisolated enum ReelChoiceSummary {
     /// Rörelsen som den faktiskt blev (läses ur nycklarna, inte ur förvalet).
     static func motionLabel(_ clip: ReelSpec.Clip) -> String {
         if clip.fit == .panels {
+            // Planerarens eget montageklipp (utan `custom`): två halvor efter varandra.
+            if clip.layout == .sequence, clip.motionPreset != ReelMotionPlanner.Preset.custom.rawValue {
+                return "Montage: halvorna efter varandra"
+            }
             let n = clip.panels?.count ?? 0
             let layout: String
             switch clip.layout {

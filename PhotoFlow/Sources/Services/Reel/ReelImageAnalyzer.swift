@@ -48,6 +48,21 @@ nonisolated struct ReelImageAnalysis: Codable, Sendable, Equatable {
     /// Varifrån rum/bildtext kom: "foundationModels" (modellen tillfrågades, även
     /// om svaret blev tomt), "aiTags" (reserv från sessionens ai_tags.json) eller nil.
     var describedBy: String?
+    /// Montage (R6b): källrektanglarna (vänster, höger) om bilden är två stående bilder som satts ihop
+    /// sida vid sida (`ReelPanelDetector`). Tom lista = undersökt, inget montage; nil = inte undersökt
+    /// (äldre cachad analys, räknas i efterhand utan att bilden mäts om i övrigt).
+    var panels: [ReelSpec.UnitRect]?
+    /// Rum, kategori och bildtext per halva (samma ordning som `panels`), från `PhotoDescriptionService`
+    /// på varje halva för sig. Nil = inte beskrivet (ingen modell, eller inget montage). `room`,
+    /// `category` och `caption` på hela analysen är då den viktigaste halvans (`applyPanelRooms`).
+    var panelRooms: [PanelDescription]?
+
+    /// Beskrivningen av en montagehalva.
+    nonisolated struct PanelDescription: Codable, Sendable, Equatable {
+        var room: String?
+        var category: String?
+        var caption: String?
+    }
 
     /// Bredden på den största saliency-boxen (andel av bildbredden): ett tätare mått än
     /// `salientWidth` (unionen), som på interiörer ofta är nästan hela bilden. Nil utan boxar.
@@ -259,6 +274,10 @@ nonisolated enum ReelImageAnalyzer {
         if Task.isCancelled { return nil }
         if let pipelineData { apply(pipelineData, to: &analysis) }
 
+        // Montage: skarvdetektering (billig, räknas i efterhand för äldre cachade analyser).
+        if analysis.panels == nil, let found = ReelPanelDetector.panels(url: url) { analysis.panels = found }
+        if Task.isCancelled { return nil }
+
         // Utan pipelinens poäng (färdiga bilder) bygger urvalet annars nästan bara på skärpa.
         if analysis.qualityScore == nil, let m = await qualityMeasurer(url) {
             analysis.qualityScore = m.score
@@ -278,6 +297,19 @@ nonisolated enum ReelImageAnalyzer {
                 analysis.caption = tags.caption
             }
         }
+        // Montage: modellen beskriver hela montaget som en bild (ofta fel), så varje halva beskrivs för sig.
+        if describe, PhotoDescriptionService.isAvailable, analysis.panelRooms == nil,
+           let panels = analysis.panels, panels.count >= 2 {
+            var described: [ReelImageAnalysis.PanelDescription] = []
+            for panel in panels {
+                let tags = await PhotoDescriptionService.shared.describe(imageAt: url, cropping: panel.cgRect)
+                described.append(.init(room: tags?.room, category: tags?.category, caption: tags?.caption))
+                if Task.isCancelled { return nil }
+            }
+            // Inget svar alls: lämna nil så att nästa körning försöker igen.
+            if described.contains(where: { $0.room != nil }) { analysis.panelRooms = described }
+        }
+        applyPanelRooms(to: &analysis)
         // Reserv: sessionens ai_tags.json, bara när modellen inte gav något rum.
         if analysis.room == nil, let aiTags,
            let entry = fallbackEntry(forFilename: url.lastPathComponent, in: aiTags) {
@@ -288,6 +320,18 @@ nonisolated enum ReelImageAnalyzer {
             if analysis.describedBy == nil { analysis.describedBy = "aiTags" }
         }
         return analysis
+    }
+
+    /// Montagets rum, kategori och bildtext = den viktigaste halvans (`ReelSelector.primaryPanelIndex`),
+    /// så att urval, motiveringar och specens asset ser ett rum. Bildtexten blir båda halvornas.
+    /// Idempotent: samma resultat om den körs igen på en redan tillämpad analys.
+    static func applyPanelRooms(to analysis: inout ReelImageAnalysis) {
+        guard let rooms = analysis.panelRooms, rooms.count >= 2,
+              let i = ReelSelector.primaryPanelIndex(rooms.map(\.room)), rooms[i].room != nil else { return }
+        analysis.room = rooms[i].room
+        analysis.category = rooms[i].category ?? analysis.category
+        let captions = rooms.compactMap(\.caption).filter { !$0.isEmpty }
+        if !captions.isEmpty { analysis.caption = captions.joined(separator: " | ") }
     }
 
     /// Pipelinens värden över en analys. Bara fält som pipelinen faktiskt har skrivs över

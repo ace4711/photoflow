@@ -64,10 +64,19 @@ nonisolated enum ReelComposer {
         let hour = a.exifDate.map { Calendar.current.component(.hour, from: $0) }
         return ReelCandidate(
             id: a.sha256, filename: item.url.lastPathComponent,
-            quality: a.qualityScore, isUtility: a.isUtility, horizonDegrees: a.horizonAngleDegrees,
+            // Visions nyttobildsflagga gäller hela montaget, som liknar en skärmdump eller ett dokument
+            // (två bilder med vit ränna); halvorna är fotografier, så flaggan ignoreras för montage.
+            quality: a.qualityScore, isUtility: a.isUtility && (a.panels?.count ?? 0) < 2, horizonDegrees: a.horizonAngleDegrees,
             sharpness: a.sharpness, featureVector: a.featureVector, salientWidth: a.salientWidth,
             meanLuminance: a.meanLuminance, captureHour: hour,
-            room: a.room, category: a.category, features: a.features ?? [], caption: a.caption)
+            room: a.room, category: a.category, features: a.features ?? [], caption: a.caption,
+            panelRooms: montageRooms(a))
+    }
+
+    /// Rummet per halva för ett montage med beskrivna halvor (annars tom lista = ingen montage för urvalet).
+    static func montageRooms(_ a: ReelImageAnalysis) -> [String] {
+        guard let panels = a.panels, panels.count >= 2, let rooms = a.panelRooms, rooms.count == panels.count else { return [] }
+        return rooms.map { $0.room ?? "" }
     }
 
     /// Specens asset för en analyserad bild. Sökvägen är relativ spec-filens mapp.
@@ -77,7 +86,9 @@ nonisolated enum ReelComposer {
             id: id, sha256: a.sha256, width: a.width, height: a.height,
             sources: [.init(kind: .local, path: relativePath(from: specDirectory, to: item.url))],
             analysis: .init(room: a.room, category: a.category, focus: a.focus, salientWidth: a.salientWidth,
-                            focusWidth: a.focusWidth))
+                            focusWidth: a.focusWidth,
+                            panels: a.panels?.isEmpty == false ? a.panels : nil,
+                            panelRooms: a.panels?.isEmpty == false && !montageRooms(a).isEmpty ? montageRooms(a) : nil))
     }
 
     /// Sökvägen till `file` relativt mappen `dir` ("../X FÄRDIGA/bild.jpg"). Symlänkar löses inte upp.
@@ -337,8 +348,11 @@ nonisolated enum ReelComposer {
         for clip in spec.timeline {
             let preset = clip.motionPreset.flatMap(ReelMotionPlanner.Preset.init(rawValue:)) ?? .auto
             let locked = clip.transitionLocked == true
-            if clip.fit == .panels, let layout = clip.layout, let panels = clip.panels, !panels.isEmpty {
-                // Rutklipp (spec v2): utformningen är fotografens låsta val; längd och övergång som för andra klipp.
+            if clip.fit == .panels, preset == .custom, let layout = clip.layout, let panels = clip.panels, !panels.isEmpty {
+                // Rutklipp (spec v2) med `motionPreset == "custom"`: utformningen är fotografens låsta val
+                // (längd och övergång som för andra klipp). Ett rutklipp utan `custom` är planerarens eget
+                // (ett montage i ett smalt format) och planeras om vid varje ombyggnad, så att det följer
+                // formatet; då gäller bara längd- och övergångslås, som för vanliga klipp.
                 result[clip.asset] = .init(
                     preset: .auto, duration: clip.durationLocked == true ? clip.duration : nil,
                     transitionLocked: locked, transition: locked ? clip.transitionIn : nil, custom: nil,
@@ -366,7 +380,8 @@ nonisolated enum ReelComposer {
             let c = ReelCandidate(id: a.id, filename: "", room: a.analysis?.room, category: a.analysis?.category)
             return .init(assetID: a.id, width: a.width, height: a.height,
                          focus: a.analysis?.focus, salientWidth: a.analysis?.salientWidth,
-                         isExterior: ReelSelector.isExterior(c) == true, focusWidth: a.analysis?.focusWidth)
+                         isExterior: ReelSelector.isExterior(c) == true, focusWidth: a.analysis?.focusWidth,
+                         panels: a.analysis?.panels ?? [])
         }
     }
 }

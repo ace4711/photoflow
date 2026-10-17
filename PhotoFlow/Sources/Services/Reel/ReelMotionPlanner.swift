@@ -38,6 +38,10 @@ nonisolated enum ReelMotionPlanner {
     static let maxZoomPerSecond = 0.04
     /// Över den här motivbredden (och exteriör) används contain-blur.
     static let wideSubject = 0.85
+    /// Montage (R6b): varje halva visas så här länge (sekunder, före tempo). Ett montageklipp är två
+    /// halvor efter varandra, alltså 2 × 1,8 = 3,6 s (en vanlig zoom är 2,5 s): varje halva hinner läsas
+    /// utan att klippet blir en dödtid, och den interna skjutningen (0,4 s) ligger mellan dem.
+    static let montageSegmentDuration = 1.8
     /// Sista klippet rör sig lugnare: så stor andel av vanlig amplitud.
     static let closingMotionScale = 0.6
 
@@ -53,6 +57,9 @@ nonisolated enum ReelMotionPlanner {
         var isExterior: Bool
         /// Bredden på den största saliency-boxen (tätare än `salientWidth`); styr rörelsetypen.
         var focusWidth: Double? = nil
+        /// Montage (R6b): källrektanglarna för de två stående halvorna (`ReelSpec.Analysis.panels`); tom
+        /// för vanliga bilder.
+        var panels: [ReelSpec.UnitRect] = []
 
         var aspect: Double { height > 0 ? Double(width) / Double(height) : 1 }
         var size: CGSize { CGSize(width: width, height: height) }
@@ -146,6 +153,50 @@ nonisolated enum ReelMotionPlanner {
         var effectivePreset: Preset { preset == .custom && custom == nil ? .auto : preset }
     }
 
+    // MARK: - Montage (R6b)
+
+    /// Halvans bildförhållande (bredd/höjd i pixlar).
+    static func panelAspect(_ rect: ReelSpec.UnitRect, of image: Image) -> Double {
+        let h = rect.h * Double(image.height)
+        return h > 0 ? rect.w * Double(image.width) / h : 1
+    }
+
+    /// De två halvornas sammanlagda bildförhållande: så brett ska ramen vara för att hela montaget ska
+    /// fylla den utan att sidorna beskärs. 0 om bilden inte är ett montage med två giltiga halvor.
+    static func montageAspect(_ image: Image) -> Double {
+        guard image.panels.count == 2, image.panels.allSatisfy({ $0.w > 0 && $0.h > 0 }) else { return 0 }
+        return image.panels.map { panelAspect($0, of: image) }.reduce(0, +)
+    }
+
+    /// Planeras bilden som ett montage i sekvens (två rutor efter varandra)? Ja när den är ett montage,
+    /// ramen är smalare än halvorna tillsammans (9:16, 1:1; i 16:9 visas det som ett vanligt klipp),
+    /// klippet inte är ett låst rutklipp och fotografen inte valt ett eget förval (zooma, panorera,
+    /// hela bilden, egen rörelse): ett förval gäller hela bilden som förut.
+    static func isMontageSequence(_ image: Image, frameAspect: Double, override: ClipOverride?) -> Bool {
+        guard override?.panels == nil, (override?.effectivePreset ?? .auto) == .auto else { return false }
+        let whole = montageAspect(image)
+        return whole > 0 && frameAspect < whole
+    }
+
+    /// Rutorna för ett montage i sekvens: första halvan zoomar in, den andra zoomar ut från samma zoom
+    /// (så att den interna skjutningen går mellan två lika inzoomade bilder). Varje halva fyller ramen
+    /// som cover mot sin egen del; mittpunkten är halvans mitt, klampad inom halvan. `segment` är
+    /// varje halvas tid (sekunder) och styr tempotaket för zoomen.
+    static func montagePanels(_ image: Image, frameAspect: Double, segment: Double) -> [ReelSpec.Panel] {
+        let end = endZoom(amount: zoomAmount, scale: 1, duration: segment)
+        return image.panels.enumerated().map { k, source in
+            let half = Image(assetID: image.assetID, width: max(Int((source.w * Double(image.width)).rounded()), 1),
+                             height: max(Int((source.h * Double(image.height)).rounded()), 1),
+                             focus: nil, salientWidth: nil, isExterior: image.isExterior)
+            func key(_ zoom: Double) -> ReelSpec.MotionKey {
+                let local = clampedCenter(half, frameAspect, .cover, cx: 0.5, cy: 0.5, zoom: zoom)
+                return .init(cx: source.x + Double(local.x) * source.w, cy: source.y + Double(local.y) * source.h, zoom: zoom)
+            }
+            let (z0, z1) = k == 0 ? (1.0, end) : (end, 1.0)
+            return .init(asset: image.assetID, source: source, motion: .init(from: key(z0), to: key(z1)))
+        }
+    }
+
     // MARK: - Val av rörelsetyp
 
     static func kind(of image: Image, frameAspect: Double) -> Kind {
@@ -169,11 +220,16 @@ nonisolated enum ReelMotionPlanner {
     /// blev zoom bara genom blandningsregeln (`mixed`). Delas av `kinds` och `motionReasons`, så att
     /// förklaringen alltid följer exakt samma regel som planeringen.
     private static func kindDecisions(_ images: [Image], frameAspect: Double, overrides: [String: ClipOverride])
-        -> (kinds: [Kind], forced: Set<Int>, mixed: Set<Int>) {
+        -> (kinds: [Kind], forced: Set<Int>, mixed: Set<Int>, montage: Set<Int>) {
         var result = images.map { kind(of: $0, frameAspect: frameAspect) }
         var forced = Set<Int>()
+        var montage = Set<Int>()
         for (i, image) in images.enumerated() {
             if overrides[image.assetID]?.panels != nil { result[i] = .zoom; forced.insert(i); continue }
+            // Montage i sekvens: två zoomar efter varandra, räknas som zoom men är inte fotografens val.
+            if isMontageSequence(image, frameAspect: frameAspect, override: overrides[image.assetID]) {
+                result[i] = .zoom; montage.insert(i); continue
+            }
             switch overrides[image.assetID]?.effectivePreset ?? .auto {
             case .auto: break
             case .custom:
@@ -184,20 +240,20 @@ nonisolated enum ReelMotionPlanner {
             case .contain: result[i] = .containBlur; forced.insert(i)
             }
         }
-        guard images.count >= 3 else { return (result, forced, []) }
+        guard images.count >= 3 else { return (result, forced, [], montage) }
         let wanted = max(1, Int(Double(images.count) * minZoomShare))
         var have = result.filter { $0 != .pan }.count
         var mixed = Set<Int>()
         // Smalaste motivet först: det vinner mest på att zoomas.
         let candidates = images.indices
-            .filter { result[$0] == .pan && !forced.contains($0) }
+            .filter { result[$0] == .pan && !forced.contains($0) && !montage.contains($0) }
             .sorted { (images[$0].focusWidth ?? images[$0].salientWidth ?? 1) < (images[$1].focusWidth ?? images[$1].salientWidth ?? 1) }
         for i in candidates where have < wanted {
             result[i] = .zoom
             mixed.insert(i)
             have += 1
         }
-        return (result, forced, mixed)
+        return (result, forced, mixed, montage)
     }
 
     // MARK: - Varför (rörelse)
@@ -216,6 +272,12 @@ nonisolated enum ReelMotionPlanner {
         case subjectWider(subject: Double?, frame: Double)
         /// Bred exteriör (motiv över `wideSubject`): hela bilden med suddig bakgrund.
         case wideExterior(subject: Double?)
+        /// Montage (två stående bilder sida vid sida) i en ram som är smalare än halvorna tillsammans:
+        /// halvorna visas efter varandra, var och en fyller ramen. `frame` är ramens bildförhållande
+        /// (bredd/höjd) och `whole` halvornas sammanlagda.
+        case montageSequence(frame: Double, whole: Double)
+        /// Montage i en ram som är bred nog för hela montaget: ett vanligt klipp med rörelsetypen `kind`.
+        case montageWhole(frame: Double, whole: Double, kind: Kind)
         /// Hade panorerats, men blev zoom för att minst `minZoomShare` av klippen ska vara zoom.
         case variation(subject: Double?, frame: Double)
 
@@ -223,6 +285,8 @@ nonisolated enum ReelMotionPlanner {
         var kind: Kind? {
             switch self {
             case .chosenByUser: return nil
+            case .montageSequence: return .zoom
+            case .montageWhole(_, _, let kind): return kind
             case .subjectFits, .narrowImage, .variation: return .zoom
             case .subjectWider: return .pan
             case .wideExterior: return .containBlur
@@ -232,6 +296,7 @@ nonisolated enum ReelMotionPlanner {
         /// Kort förklaring på svenska, t.ex. "Panorering: motivet (62 % av bredden) är bredare än ramen (37 %)".
         var text: String {
             func pct(_ x: Double) -> String { "\(Int((x * 100).rounded())) %" }
+            func ratio(_ x: Double) -> String { String(format: "%.2f", x).replacingOccurrences(of: ".", with: ",") }
             func subjectText(_ s: Double?) -> String { s.map { "motivet (\(pct($0)) av bredden)" } ?? "motivet (okänd bredd, antas 50 %)" }
             switch self {
             case .chosenByUser:
@@ -244,6 +309,10 @@ nonisolated enum ReelMotionPlanner {
                 return "Panorering: \(subjectText(s)) är bredare än ramen (\(pct(f)))"
             case .wideExterior(let s):
                 return "Hela bilden: bred exteriör, \(subjectText(s))"
+            case .montageSequence(let f, let w):
+                return "Montage: de två stående bilderna visas efter varandra (zoom på var och en), eftersom ramen (\(ratio(f))) är smalare än hela montaget (\(ratio(w)))"
+            case .montageWhole(let f, let w, _):
+                return "Montage: ramen (\(ratio(f))) är bred nog för hela montaget (\(ratio(w))), så det visas som en vanlig bild"
             case .variation(let s, let f):
                 return "Zoom för variation (minst \(pct(minZoomShare)) zoom): \(subjectText(s)) är bredare än ramen (\(pct(f))) och hade annars panorerats"
             }
@@ -260,6 +329,8 @@ nonisolated enum ReelMotionPlanner {
             let frame = visibleWidth(imageAspect: image.aspect, frameAspect: frameAspect)
             let subject = image.focusWidth ?? image.salientWidth
             if d.forced.contains(i) { return .chosenByUser }
+            if d.montage.contains(i) { return .montageSequence(frame: frameAspect, whole: montageAspect(image)) }
+            if montageAspect(image) > 0 { return .montageWhole(frame: frameAspect, whole: montageAspect(image), kind: d.kinds[i]) }
             if d.mixed.contains(i) { return .variation(subject: subject, frame: frame) }
             switch d.kinds[i] {
             case .containBlur: return .wideExterior(subject: subject)
@@ -327,6 +398,27 @@ nonisolated enum ReelMotionPlanner {
                                    durationLocked: override.duration == nil ? nil : true,
                                    transitionLocked: override.transitionLocked ? true : nil,
                                    layout: lock.layout, panels: lock.panels, gutter: lock.gutter, entrance: lock.entrance))
+                continue
+            }
+
+            if isMontageSequence(image, frameAspect: frameAspect, override: overrides[image.assetID]) {
+                // Montage i ett smalt format: två rutor efter varandra, var och en en halva som fyller
+                // ramen (`layout: sequence`). Automatiskt (ingen `custom`): planeras om vid varje ombyggnad.
+                let duration = override.duration ?? 2 * montageSegmentDuration * tempo.factor
+                let panels = montagePanels(image, frameAspect: frameAspect, segment: duration / 2)
+                var transition: ReelSpec.Transition?
+                if override.transitionLocked {
+                    transition = override.transition
+                } else if i > 0 {
+                    transition = automaticTransition(previousPanSign: previousPanSign, isLast: isLast,
+                                                     defaultTransition: defaultTransition).transition
+                }
+                previousPanSign = 0
+                clips.append(.init(asset: image.assetID, duration: duration, fit: .panels, motion: panels[0].motion,
+                                   transitionIn: transition, motionPreset: nil,
+                                   durationLocked: override.duration == nil ? nil : true,
+                                   transitionLocked: override.transitionLocked ? true : nil,
+                                   layout: .sequence, panels: panels))
                 continue
             }
 

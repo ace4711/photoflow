@@ -35,6 +35,10 @@ export interface Analysis {
   focus?: Point;
   salientWidth?: number;
   focusWidth?: number;
+  /** Montage (R6b): källrektanglar för de två stående halvorna; saknas/tom = ingen montage. */
+  panels?: UnitRect[];
+  /** Rumstyp per halva (samma ordning som `panels`). */
+  panelRooms?: string[];
 }
 
 export interface Asset {
