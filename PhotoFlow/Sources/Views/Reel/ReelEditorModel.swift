@@ -146,6 +146,8 @@ final class ReelEditorModel {
     static let historyLimit = 100
     @ObservationIgnored private var coalescing = false
     @ObservationIgnored private var coalescedStepOpen = false
+    /// Vilken ändring det öppna sammanslagna steget gäller (`op` och klipp), se `recordStep`.
+    @ObservationIgnored private var coalescedKey: String?
 
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
@@ -181,26 +183,40 @@ final class ReelEditorModel {
         }
     }
 
-    /// Slår ihop alla ändringar mellan `beginCoalescing()` och `endCoalescing()` till ett enda
+    /// Slår ihop ändringar mellan `beginCoalescing()` och `endCoalescing()` till ett enda
     /// ångringssteg (och ett enda revisionssteg), t.ex. en dragning som uppdaterar specen löpande.
+    /// Bara samma sorts ändring på samma klipp som den första slås ihop; något annat (en annan
+    /// `op`, ett annat klipp, ett nytt förslag, en hämtning) avslutar sammanslagningen och blir ett
+    /// eget steg, så att t.ex. ett bildbyte strax efter en piltangentsknuff kan ångras för sig.
     func beginCoalescing() {
         coalescing = true
         coalescedStepOpen = false
+        coalescedKey = nil
     }
 
     func endCoalescing() {
         coalescing = false
         coalescedStepOpen = false
+        coalescedKey = nil
     }
 
+    /// Pågår en sammanslagning (mellan `beginCoalescing` och `endCoalescing`, och inte avbruten)?
+    var isCoalescing: Bool { coalescing }
+
     /// Lägger nuvarande tillstånd på ångra-stacken inför en ändring. Returnerar false om ändringen
-    /// fortsätter ett sammanslaget steg som redan är öppet (inget nytt steg).
+    /// fortsätter ett sammanslaget steg som redan är öppet (samma `op` och `target`; inget nytt steg).
     @discardableResult
-    private func recordStep(op: String) -> Bool {
+    private func recordStep(op: String, target: String? = nil) -> Bool {
         guard let spec else { return false }
         if coalescing {
-            if coalescedStepOpen { return false }
-            coalescedStepOpen = true
+            let key = "\(op)|\(target ?? "")"
+            if coalescedStepOpen {
+                if key == coalescedKey { return false }
+                endCoalescing()
+            } else {
+                coalescedStepOpen = true
+                coalescedKey = key
+            }
         }
         undoStack.append(.init(spec: spec, selection: selection, op: op))
         if undoStack.count > Self.historyLimit { undoStack.removeFirst(undoStack.count - Self.historyLimit) }
@@ -215,7 +231,7 @@ final class ReelEditorModel {
 
     private func clearHistory() {
         undoStack.removeAll(); redoStack.removeAll()
-        coalescing = false; coalescedStepOpen = false
+        endCoalescing()
         undoManager?.removeAllActions(withTarget: self)
     }
 
@@ -262,7 +278,7 @@ final class ReelEditorModel {
     /// som en äldre version) för synken mot mäklaren, som jämför revisionsnummer. Samma skäl gör
     /// att status blir "draft" och en `edit` loggas, precis som för vilken annan ändring som helst.
     private func restore(_ entry: HistoryEntry, replacing current: ReelSpec, op: String) {
-        coalescing = false; coalescedStepOpen = false
+        endCoalescing()
         var restored = entry.spec
         restored.revision = max(current.revision, restored.revision) + 1
         let stamp = Date(timeIntervalSince1970: now().timeIntervalSince1970.rounded(.down))
@@ -274,10 +290,21 @@ final class ReelEditorModel {
         format = ReelFormat(rawValue: restored.outputs.first?.id ?? "") ?? format
         count = min(max(restored.assets.count, Self.countRange.lowerBound), Self.countRange.upperBound)
         adaptedCustomMotions = 0
+        // Steg som numrerar om asset-id:n: samma id kan nu vara en annan bild.
+        if Self.renumberingOps.contains(entry.op) { clearSelection() }
         dropStaleSelection()
         revisionToken += 1
         if case .rendered = phase { phase = .ready }
         saveSpec()
+    }
+
+    /// Ändringar som ersätter hela filmen och numrerar om asset-id:n (a1…an), så att en markering
+    /// efter dem skulle peka på en annan bild eller skarv.
+    private static let renumberingOps: Set<String> = ["suggestAgain", "startOver", "count", "pull"]
+
+    private func clearSelection() {
+        selectedAssetID = nil
+        selectedTransitionAssetID = nil
     }
 
     /// Släpper markeringar som pekar på klipp som inte finns kvar.
@@ -424,7 +451,7 @@ final class ReelEditorModel {
             format = ReelFormat(rawValue: restored.outputs.first?.id ?? "") ?? format
             count = min(max(restored.assets.count, Self.countRange.lowerBound), Self.countRange.upperBound)
         }
-        selectedAssetID = nil
+        clearSelection()
         clearHistory()
         revisionToken += 1
         phase = .ready
@@ -458,7 +485,7 @@ final class ReelEditorModel {
 
     private func reset() {
         items = []; candidates = []; urls = [:]; selection = nil; spec = nil
-        selectedAssetID = nil; saveError = nil
+        clearSelection(); saveError = nil
         clearHistory()
         revisionToken += 1
     }
@@ -472,13 +499,14 @@ final class ReelEditorModel {
 
     private var order: [String] { spec?.timeline.map(\.asset) ?? [] }
 
-    /// `editor` ändrar redigerarens val (`spec.editor`) i samma steg; tomma val tas bort.
+    /// `editor` ändrar redigerarens val (`spec.editor`) i samma steg; tomma val tas bort. `target` är
+    /// klippet ändringen gäller (för sammanslagning, se `beginCoalescing`).
     private func apply(order: [String], newAssets: [ReelSpec.Asset] = [], format: ReelFormat? = nil,
                        overrides: [String: ReelMotionPlanner.ClipOverride]? = nil,
                        editor: ((inout ReelSpec.EditorState) -> Void)? = nil,
-                       style: ((inout ReelSpec.Style) -> Void)? = nil, op: String) {
+                       style: ((inout ReelSpec.Style) -> Void)? = nil, op: String, target: String? = nil) {
         guard var current = spec else { return }
-        let continuesStep = !recordStep(op: op)
+        let continuesStep = !recordStep(op: op, target: target)
         if let style { style(&current.style) }
         if let editor {
             var e = current.editor ?? .init()
@@ -616,7 +644,7 @@ final class ReelEditorModel {
         var entry = o[assetID] ?? .init()
         entry.duration = min(max(seconds, Self.durationRange.lowerBound), Self.durationRange.upperBound)
         o[assetID] = entry
-        apply(order: order, overrides: o, op: "duration")
+        apply(order: order, overrides: o, op: "duration", target: assetID)
     }
 
     /// Tillbaka till automatisk längd för klippet.
@@ -625,7 +653,7 @@ final class ReelEditorModel {
         var entry = o[assetID] ?? .init()
         entry.duration = nil
         o[assetID] = entry.isDefault ? nil : entry
-        apply(order: order, overrides: o, op: "duration")
+        apply(order: order, overrides: o, op: "duration", target: assetID)
     }
 
     /// Förval av rörelse. `.custom` utan egen rörelse sedan tidigare utgår från klippets nuvarande
@@ -642,7 +670,7 @@ final class ReelEditorModel {
             entry.custom = nil
         }
         o[assetID] = entry.isDefault ? nil : entry
-        apply(order: order, overrides: o, op: "motion")
+        apply(order: order, overrides: o, op: "motion", target: assetID)
     }
 
     /// Egen rörelse (dragna start/slut): låser klippets rörelse som `custom`.
@@ -652,7 +680,7 @@ final class ReelEditorModel {
         entry.preset = .custom
         entry.custom = .init(fit: fit, motion: motion)
         o[assetID] = entry
-        apply(order: order, overrides: o, op: "motion")
+        apply(order: order, overrides: o, op: "motion", target: assetID)
     }
 
     /// Klippets analys (matchad mot assetens sha256), för motivlager och "Centrera på motivet".
@@ -713,7 +741,7 @@ final class ReelEditorModel {
         entry.transitionLocked = true
         entry.transition = transition
         o[assetID] = entry
-        apply(order: order, overrides: o, op: "transition")
+        apply(order: order, overrides: o, op: "transition", target: assetID)
     }
 
     /// Tillbaka till automatisk övergång för klippet.
@@ -723,7 +751,7 @@ final class ReelEditorModel {
         entry.transitionLocked = false
         entry.transition = nil
         o[assetID] = entry.isDefault ? nil : entry
-        apply(order: order, overrides: o, op: "transition")
+        apply(order: order, overrides: o, op: "transition", target: assetID)
     }
 
     /// Ändrar filmens stil (standardövergång, rörelsekurva, bakgrund). Går via `apply`: ett
@@ -842,7 +870,7 @@ final class ReelEditorModel {
         // Låsta bilder kan göra filmen längre än begärt antal.
         count = min(max(count, result.spec.assets.count), Self.countRange.upperBound)
         adaptedCustomMotions = 0
-        selectedAssetID = nil
+        clearSelection()
         revisionToken += 1
         if case .rendered = phase { phase = .ready }
         saveSpec()
@@ -872,7 +900,7 @@ final class ReelEditorModel {
         spec = remote
         format = ReelFormat(rawValue: remote.outputs.first?.id ?? "") ?? format
         count = min(max(remote.assets.count, Self.countRange.lowerBound), Self.countRange.upperBound)
-        selectedAssetID = nil
+        clearSelection()
         revisionToken += 1
         if case .rendered = phase { phase = .ready }
         saveSpec()

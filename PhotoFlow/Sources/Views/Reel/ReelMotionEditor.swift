@@ -37,7 +37,7 @@ struct ReelMotionEditor: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
 
-            Picker("Rörelse", selection: Binding(get: { row.preset }, set: { model.setPreset(row.id, $0) })) {
+            Picker("Rörelse", selection: Binding(get: { row.preset }, set: { p in act { model.setPreset(row.id, p) } })) {
                 ForEach(ReelMotionPlanner.Preset.selectableCases, id: \.self) { preset in
                     Text(preset.label).tag(preset)
                 }
@@ -51,12 +51,12 @@ struct ReelMotionEditor: View {
             }
 
             HStack {
-                Stepper(value: Binding(get: { row.duration }, set: { model.setDuration(row.id, seconds: $0) }),
+                Stepper(value: Binding(get: { row.duration }, set: { d in act { model.setDuration(row.id, seconds: d) } }),
                         in: ReelEditorModel.durationRange, step: 0.1) {
                     Text("Längd: \(Self.seconds(row.duration))")
                 }
                 if row.durationLocked {
-                    Button("Auto") { model.clearDuration(row.id) }
+                    Button("Auto") { act { model.clearDuration(row.id) } }
                         .buttonStyle(.link)
                         .help("Tillbaka till automatisk längd")
                 }
@@ -98,11 +98,11 @@ struct ReelMotionEditor: View {
         }
 
         HStack(spacing: 8) {
-            Button { model.swapMotionEnds(row.id) } label: { Label("Byt start/slut", systemImage: "arrow.left.arrow.right") }
+            Button { act { model.swapMotionEnds(row.id) } } label: { Label("Byt start/slut", systemImage: "arrow.left.arrow.right") }
                 .disabled(motion.from == motion.to)
-            Button { model.centerMotionOnSubject(row.id) } label: { Label("Centrera på motivet", systemImage: "scope") }
+            Button { act { model.centerMotionOnSubject(row.id) } } label: { Label("Centrera på motivet", systemImage: "scope") }
                 .disabled(analysis?.focus == nil)
-            Button { model.setPreset(row.id, .auto) } label: { Label("Tillbaka till automatisk", systemImage: "wand.and.stars") }
+            Button { act { model.setPreset(row.id, .auto) } } label: { Label("Tillbaka till automatisk", systemImage: "wand.and.stars") }
                 .disabled(row.preset == .auto)
         }
         .controlSize(.small)
@@ -154,7 +154,8 @@ struct ReelMotionEditor: View {
     /// Piltangenter: varje tryck sparas direkt, men trycken inom en kort stund är ett enda ångringssteg.
     private func nudge(_ motion: ReelSpec.Motion) {
         guard let clip, motion != clip.motion else { return }
-        if nudgeTask == nil { model.beginCoalescing() }
+        // Nytt fönster även om modellen avslutat det (ångra, eller en annan ändring emellan).
+        if nudgeTask == nil || !model.isCoalescing { model.beginCoalescing() }
         model.setCustomMotion(row.id, fit: clip.fit, motion: motion)
         nudgeTask?.cancel()
         nudgeTask = Task {
@@ -162,6 +163,13 @@ struct ReelMotionEditor: View {
             guard !Task.isCancelled else { return }
             endNudge()
         }
+    }
+
+    /// Övriga knappar i editorn: stäng först ett öppet knuffönster, så att ändringen blir ett eget steg.
+    private func act(_ change: () -> Void) {
+        nudgeTask?.cancel()
+        endNudge()
+        change()
     }
 
     private func endNudge() {

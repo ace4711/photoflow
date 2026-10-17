@@ -281,4 +281,94 @@ struct ReelUndoTests {
         model.undo()
         #expect(model.clipRows.count == 5)
     }
+
+    @Test("Markeringar släpps när filmen numreras om: nytt förslag, hämtning, ny mapp och ångra av dem")
+    func selectionClearedOnRenumbering() throws {
+        let (model, root, _) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let ids = model.clipRows.map(\.id)
+
+        model.selectedTransitionAssetID = ids[2]
+        model.suggestAgain()
+        #expect(model.selectedTransitionAssetID == nil)
+
+        model.selectedTransitionAssetID = ids[2]
+        model.setCount(6)
+        #expect(model.selectedTransitionAssetID == nil)
+
+        model.selectedTransitionAssetID = ids[2]
+        model.startOver()
+        #expect(model.selectedTransitionAssetID == nil)
+
+        model.selectedTransitionAssetID = ids[2]
+        model.undo()   // Börja om
+        #expect(model.selectedTransitionAssetID == nil)
+        model.selectedAssetID = ids[1]
+        model.redo()
+        #expect(model.selectedAssetID == nil)
+
+        model.selectedTransitionAssetID = ids[2]
+        model.adoptRemoteSpec(model.spec!)
+        #expect(model.selectedTransitionAssetID == nil)
+
+        model.selectedTransitionAssetID = ids[2]
+        model.prepare(items: items(in: root))
+        #expect(model.selectedTransitionAssetID == nil)
+
+        // Vanliga ändringar behåller en markering som finns kvar.
+        model.selectedTransitionAssetID = ids[2]
+        model.setDuration(ids[0], seconds: 4)
+        model.undo()
+        #expect(model.selectedTransitionAssetID == ids[2])
+    }
+
+    @Test("Sammanslagning gäller bara samma ändring på samma klipp: annat bryter och blir eget steg")
+    func coalescingIsScoped() throws {
+        let (model, root, _) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let ids = model.clipRows.map(\.id)
+        let clip = model.spec!.timeline[1]
+        func nudged(_ dx: Double) -> ReelSpec.Motion {
+            var m = clip.motion
+            m.to.zoom = max(m.to.zoom, m.from.zoom) + 0.05 + dx
+            return m
+        }
+        // Som piltangenterna: fönstret öppet, två knuffar på samma klipp.
+        model.beginCoalescing()
+        model.setCustomMotion(ids[1], fit: clip.fit, motion: nudged(0))
+        model.setCustomMotion(ids[1], fit: clip.fit, motion: nudged(0.05))
+        let revision = model.spec!.revision
+        let edits = model.spec!.provenance.edits?.count ?? 0
+        // Inom fönstret: en annan ändring (byt bild) och ett nytt förslag.
+        let spare = try #require(model.candidateRows.first { $0.clipIndex == nil })
+        model.replaceClip(ids[3], withCandidate: spare.id)
+        #expect(model.undoActionName == "Byt bild")
+        #expect(model.spec!.revision == revision + 1)
+        #expect(model.spec!.provenance.edits?.count == edits + 1)
+        #expect(model.spec!.provenance.edits?.last?.op == "replace")
+        #expect(!model.isCoalescing)
+        model.endCoalescing()   // fönstret stängs sent: ofarligt
+
+        model.undo()
+        #expect(model.spec!.assets.contains { $0.sha256 == spare.id } == false)
+        #expect(model.spec!.timeline[1].motionPreset == "custom")
+        #expect(model.undoActionName == "Ändra rörelse")
+        model.undo()
+        #expect(model.spec!.timeline[1].motionPreset == nil)
+        #expect(!model.canUndo)
+    }
+
+    @Test("Ångra under ett sammanslaget fönster avslutar det, så nästa knuff öppnar ett nytt steg")
+    func undoEndsCoalescing() throws {
+        let (model, root, _) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = model.clipRows[0].id
+        model.setDuration(id, seconds: 4)
+        model.beginCoalescing()
+        model.setDuration(id, seconds: 4.1)
+        #expect(model.isCoalescing)
+        model.undo()
+        #expect(!model.isCoalescing)
+    }
 }
+
