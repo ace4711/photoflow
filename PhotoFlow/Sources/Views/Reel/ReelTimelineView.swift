@@ -8,7 +8,10 @@ import AppKit
 ///
 /// - klipp: klick markerar klippet och flyttar spelhuvudet dit, dragning i sidled flyttar det,
 /// - högerkanten: dragning ändrar längden (visas live, och sparas som ett enda steg vid släpp),
-/// - övergångschip: klick markerar övergången,
+/// - övergångschip: klick markerar övergången, dragning i sidled ändrar dess längd (åt vänster =
+///   längre, så att chipet följer pekaren; snäpper till 0,05 s, 0,2–1,5 s, klampas mot de två klippens
+///   längd) och låser den med behållen typ. Chipet valdes framför överlappets kant eftersom
+///   överlappet bara är ca 20–40 px brett och kanten därför ligger under chipet,
 /// - linjalen och tom yta: klick och dragning flyttar spelhuvudet.
 struct ReelTimelineView: View {
     let model: ReelEditorModel
@@ -18,6 +21,8 @@ struct ReelTimelineView: View {
     private enum Drag: Equatable {
         case resize(index: Int, duration: Double)
         case move(index: Int, dx: Double)
+        /// Övergången in till klipp `index` med utkastets längd.
+        case transition(index: Int, duration: Double)
     }
 
     /// Vad dragningen gäller, bestämt av första träffen.
@@ -56,6 +61,11 @@ struct ReelTimelineView: View {
         let pps = ReelTimelineLayout.pixelsPerSecond(totalDuration: total, availableWidth: availableWidth - 2 * Self.inset)
         var shown = committed
         if case .resize(let i, let d) = drag, shown.timeline.indices.contains(i) { shown.timeline[i].duration = d }
+        if case .transition(let i, let d) = drag, shown.timeline.indices.contains(i) {
+            var t = shown.timeline[i].transitionIn ?? shown.style.defaultTransition
+            t.duration = d
+            shown.timeline[i].transitionIn = t
+        }
         let layout = ReelTimelineLayout.layout(shown, pixelsPerSecond: pps)
         let rows = model.clipRows
         let width = max(layout.contentWidth + 2 * Self.inset + 40, availableWidth)
@@ -166,6 +176,17 @@ struct ReelTimelineView: View {
                         .offset(x: 4, y: -4)
                 }
             }
+            .overlay(alignment: .top) {
+                if case .transition(let i, _) = drag, i == join.index {
+                    Text(ReelTransitionEditor.seconds(join.duration))
+                        .font(.caption.bold()).monospacedDigit()
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.accentColor, in: Capsule())
+                        .foregroundStyle(.white)
+                        .fixedSize()
+                        .offset(y: -24)
+                }
+            }
             .shadow(color: .black.opacity(0.3), radius: 1.5)
             .offset(x: Self.inset + join.centerX - half, y: Self.chipCenterY - half)
             .help(Self.chipHelp(join))
@@ -232,7 +253,16 @@ struct ReelTimelineView: View {
                                                                pixelsPerSecond: layout.pixelsPerSecond,
                                                                range: ReelEditorModel.durationRange)
                     drag = .resize(index: i, duration: d)
-                case .transition, nil:
+                case .transition(let i):
+                    // Hårt klipp har ingen längd att dra i: då blir det bara ett klick.
+                    // Utgå från den sparade specen (layouten visar redan utkastet).
+                    let original = spec.timeline[i].transitionIn ?? spec.style.defaultTransition
+                    guard original.type != .cut, abs(value.translation.width) > 3 else { break }
+                    let d = ReelTimelineLayout.draggedTransition(from: original.duration, dx: value.translation.width,
+                                                                 pixelsPerSecond: layout.pixelsPerSecond,
+                                                                 limit: min(spec.timeline[i - 1].duration, spec.timeline[i].duration))
+                    drag = .transition(index: i, duration: d)
+                case nil:
                     break
                 }
             }
@@ -259,6 +289,12 @@ struct ReelTimelineView: View {
                     }
                 case .transition(let i):
                     if let join = layout.joins.first(where: { $0.index == i }) {
+                        var t = spec.timeline[i].transitionIn ?? spec.style.defaultTransition
+                        if case .transition(_, let d) = drag, abs(d - t.duration) > 1e-9 {
+                            // Dragning låser övergången och behåller typ och riktning.
+                            t.duration = d
+                            model.setTransition(join.assetID, t)
+                        }
                         model.selectedTransitionAssetID = join.assetID
                     }
                 case nil:
