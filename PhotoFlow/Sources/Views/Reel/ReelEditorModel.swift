@@ -523,6 +523,8 @@ final class ReelEditorModel {
         adaptedCustomMotions = ReelComposer.adaptedCustomMotions(from: current, to: rebuilt)
         spec = rebuilt
         if let format { self.format = format }
+        // "Bilder: N" i huvudet följer filmen när klipp läggs till eller tas bort för hand.
+        count = min(max(rebuilt.assets.count, Self.countRange.lowerBound), Self.countRange.upperBound)
         dropStaleSelection()
         revisionToken += 1
         if case .rendered = phase { phase = .ready }

@@ -288,4 +288,17 @@ struct ReelSelectionEditTests {
         #expect(ReelCandidateDrag.candidateID(from: ReelCandidateDrag.prefix) == nil)
         #expect(ReelCandidateDrag.candidateID(from: "https://exempel.se") == nil)
     }
+
+    @Test("Antal bilder i huvudet följer filmen vid infogning, låsning och borttagning")
+    func countFollowsFilm() throws {
+        let (model, root) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let before = model.clipRows.count
+        #expect(model.count == before)
+        let outside = try #require(model.candidateRows.first { $0.clipIndex == nil && $0.excludedReason == nil })
+        model.insertCandidate(outside.id, at: 1)
+        #expect(model.count == before + 1)
+        model.removeClip(model.clipRows[0].id)
+        #expect(model.count == before)
+    }
 }
