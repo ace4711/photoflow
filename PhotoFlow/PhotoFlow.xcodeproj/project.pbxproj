@@ -245,6 +245,7 @@
 		9D8F4DE0885D55B7C8280318 /* StepCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D180E348EDC56158B0BF798D /* StepCardView.swift */; };
 		9DF431EAEE01AD8C3EB207A8 /* ReviewNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = AED7065D6886C21AC927A006 /* ReviewNavigation.swift */; };
 		9EC3A5DC0FB670DC9916C8B8 /* HDRLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F896F86D7D0B66BC08B64A95 /* HDRLog.swift */; };
+		9FB1FB58E32853C23CAA3608 /* ReelLockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE2910216B988022B40A434F /* ReelLockTests.swift */; };
 		A09638ACE3BD0599807913B8 /* EditSuggestion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748369AB88EBB1EB7B1443AD /* EditSuggestion.swift */; };
 		A12C9183B1EB5B4E6C232CF3 /* PipelineRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5DB3A99AD7128B30E2F8B89 /* PipelineRunner.swift */; };
 		A1ACA8D7D447CB0C835BAF90 /* HDRReEnhanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51FFA3D32229247BA68422EA /* HDRReEnhanceTests.swift */; };
@@ -577,6 +578,7 @@
 		ACFE8398C36DC1D9216B103B /* ReelSpec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelSpec.swift; sourceTree = "<group>"; };
 		ADC2D16642244E60D511C976 /* FieldLocationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldLocationService.swift; sourceTree = "<group>"; };
 		ADE6D33A3AAB34122377A837 /* HDRAlignment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRAlignment.swift; sourceTree = "<group>"; };
+		AE2910216B988022B40A434F /* ReelLockTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelLockTests.swift; sourceTree = "<group>"; };
 		AED7065D6886C21AC927A006 /* ReviewNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewNavigation.swift; sourceTree = "<group>"; };
 		AF069198E88FC10A80486CAD /* two_brackets_and_gap.csv */ = {isa = PBXFileReference; path = two_brackets_and_gap.csv; sourceTree = "<group>"; };
 		AF63168D1774C3566A1890FF /* DependencyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DependencyManager.swift; sourceTree = "<group>"; };
@@ -912,6 +914,7 @@
 				C5394CD3AAAE982C026575E0 /* ReelEditorModelTests.swift */,
 				EAA900448E73168708031EAF /* ReelImageAnalyzerTests.swift */,
 				16167AF056E96DEC81C47B53 /* ReelLibraryTests.swift */,
+				AE2910216B988022B40A434F /* ReelLockTests.swift */,
 				63A20F964CE38E3D0B211D80 /* ReelMotionPlannerTests.swift */,
 				650927EBEBA2BD089349A6AE /* ReelProposalTests.swift */,
 				41008028AD88FDF4444D506D /* ReelRemoteStateTests.swift */,
@@ -1479,6 +1482,7 @@
 				2790165ED62276CE2F3027F1 /* ReelEditorModelTests.swift in Sources */,
 				2B00AE90AC48537987DF0BD6 /* ReelImageAnalyzerTests.swift in Sources */,
 				93F55D548FC9B3910F9E1ED5 /* ReelLibraryTests.swift in Sources */,
+				9FB1FB58E32853C23CAA3608 /* ReelLockTests.swift in Sources */,
 				C0ACCDE773ACDDFF892FD9AF /* ReelMotionPlannerTests.swift in Sources */,
 				2EA30C7656888D9498B11E02 /* ReelProposalTests.swift in Sources */,
 				8A5D31B79BD57C5E8BB6845F /* ReelRemoteStateTests.swift in Sources */,
