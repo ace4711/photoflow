@@ -122,20 +122,18 @@ test("planClip med auto behåller en egen rörelse; ett aktivt förval ersätter
   // setPreset med CUSTOM gör ingenting (inget menyval).
   assert.deepEqual(regi.setPreset(s, 1, CUSTOM, ASPECT), []);
   assert.equal(byAsset(s, "a2").motionPreset, CUSTOM);
-  // Mäklarens aktiva val av förval ersätter.
-  assert.deepEqual(regi.setPreset(s, 1, "zoomIn", ASPECT), ["motion"]);
-  const z = byAsset(s, "a2");
-  assert.equal(z.motionPreset, "zoomIn");
-  assert.ok(z.motion.to.zoom > z.motion.from.zoom);
-  assert.deepEqual(z.transitionIn, { type: "cut", duration: 0 }, "den låsta övergången rörs inte av förvalet");
+  // Inte heller ett förval ersätter fotografens egna rörelse i webben (servern vägrar det också).
+  const before = structuredClone(byAsset(s, "a2"));
+  assert.deepEqual(regi.setPreset(s, 1, "zoomIn", ASPECT), []);
+  assert.deepEqual(byAsset(s, "a2"), before);
 });
 
-test("Automatisk på ett custom-klipp släpper fotografens rörelse aktivt", () => {
+test("Automatisk på ett custom-klipp ändrar ingenting (egen rörelse är fotografens)", () => {
   const s = load();
-  regi.setPreset(s, 1, "auto", ASPECT);
+  assert.deepEqual(regi.setPreset(s, 1, "auto", ASPECT), []);
   const c = byAsset(s, "a2");
-  assert.equal(c.motionPreset, undefined);
-  assert.notDeepEqual(c.motion, JSON.parse(raw).timeline[1].motion);
+  assert.equal(c.motionPreset, CUSTOM);
+  assert.deepEqual(c.motion, JSON.parse(raw).timeline[1].motion);
 });
 
 // ------------------------------------------------------------ övergångar
@@ -401,7 +399,7 @@ test("låst längd har synlig text, inte bara en ikon", () => {
   assert.match(src, /sr-only/);
 });
 
-test("byte från egen rörelse tar bort fotografens oklampade nycklar (customMotion)", () => {
+test("fotografens oklampade nycklar (customMotion) följer klippet och rörs inte", () => {
   const s = load();
   const c = byAsset(s, "a2");
   c.customMotion = { from: { cx: 0.62, cy: 0.6, zoom: 1.05 }, to: { cx: 0.33, cy: 0.6, zoom: 1.05 } };
@@ -409,6 +407,6 @@ test("byte från egen rörelse tar bort fotografens oklampade nycklar (customMot
   regi.moveClip(s, 1, 3, ASPECT);
   assert.ok(byAsset(s, "a2").customMotion, "customMotion följer klippet vid omordning");
   const i = order(s).indexOf("a2");
-  regi.setPreset(s, i, "panLeft", ASPECT);
-  assert.equal(byAsset(s, "a2").customMotion, undefined);
+  assert.deepEqual(regi.setPreset(s, i, "panLeft", ASPECT), []);
+  assert.ok(byAsset(s, "a2").customMotion, "customMotion ligger kvar");
 });

@@ -149,11 +149,16 @@ test("webbens regi-operationer på reel-locks-v1.json godtas av servern", () => 
   assert.deepEqual(lockViolations(prev, wire(s)), []);
 });
 
-test("webbens aktiva byte från egen rörelse till förval vägras av servern (regel 4)", () => {
+test("webben byter inte en egen rörelse mot ett förval, och servern vägrar en sådan ändring (regel 4)", () => {
   const prev = load();
   const s = load();
-  assert.deepEqual(regi.setPreset(s, idx(s, "a2"), "zoomIn", ASPECT), ["motion"]);
-  assert.match(lockViolations(prev, wire(s)).join(), /egen rörelse/);
+  assert.deepEqual(regi.setPreset(s, idx(s, "a2"), "zoomIn", ASPECT), []);
+  assert.deepEqual(lockViolations(prev, wire(s)), []);
+  // en klient som ändå skriver om rörelsen vägras
+  const forged = wire(s);
+  const c = forged.timeline.find((x) => x.asset === "a2")!;
+  c.motionPreset = "zoomIn"; c.motion.to.zoom = 1.12;
+  assert.match(lockViolations(prev, forged).join(), /egen rörelse/);
 });
 
 

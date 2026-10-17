@@ -6,8 +6,8 @@
 //    på plats 0. Övriga övergångar räknas om efter varje ändring med samma regel som
 //    `ReelMotionPlanner.automaticTransition` (push efter panorering, längre tona in sist).
 //  - `motionPreset: "custom"`: fit och motion behålls vid omordning, längdändring,
-//    tillägg och borttagning. De ersätts bara när mäklaren aktivt väljer ett annat
-//    förval (editor.ts frågar först).
+//    tillägg och borttagning, och kan inte bytas mot ett förval i webben (menyn är låst;
+//    servern vägrar också en ändrad egen rörelse, se server/src/locks.ts).
 //  - `durationLocked`: längden behålls. Andra längder räknas om med filmens tempo när ett
 //    klipp byter roll (första, mitten, sista), som Swift `rebuild` gör.
 //  - `editor`: bevaras. Uteslutna bilder (`excludedAssets`) går bara att lägga till efter
@@ -275,9 +275,10 @@ export function setDuration(spec: ReelSpec, i: number, d: number, maxSeconds: nu
  */
 export function setPreset(spec: ReelSpec, i: number, preset: Preset | typeof CUSTOM, frameAspect: number): string[] {
   const c = spec.timeline[i];
-  if (!c || preset === CUSTOM) return []; // egen rörelse kan inte väljas i webben
-  const wasCustom = isCustom(c);
-  if (preset === "auto" && !wasCustom) {
+  // Egen rörelse kan varken väljas eller bytas bort i webben: mäklarens regi omfattar inte
+  // panorering (plan, beslut 4), och servern vägrar en ändrad egen rörelse (server/src/locks.ts).
+  if (!c || preset === CUSTOM || isCustom(c)) return [];
+  if (preset === "auto") {
     if (c.motionPreset === undefined) return [];
     delete c.motionPreset;
   } else {
@@ -286,12 +287,10 @@ export function setPreset(spec: ReelSpec, i: number, preset: Preset | typeof CUS
     const p = planClip({
       asset, frameAspect, preset, index: i, count: spec.timeline.length,
       lockedDuration: c.durationLocked ? c.duration : undefined,
-      current: wasCustom ? undefined : c, tempo: tempoFactor(spec.editor?.tempo),
+      current: c, tempo: tempoFactor(spec.editor?.tempo),
     });
     c.fit = p.fit; c.motion = p.motion; c.duration = p.duration;
-    delete c.customMotion; // fotografens oklampade nycklar gäller inte längre
-    if (preset === "auto") delete c.motionPreset;
-    else c.motionPreset = preset;
+    c.motionPreset = preset;
   }
   // Rörelsen kan ha ändrat nästa klipps automatiska övergång (push efter panorering).
   retime(spec, frameAspect, roles(spec));

@@ -281,12 +281,6 @@ function setDuration(i: number, d: number): void {
 
 function setPreset(i: number, preset: Preset): void {
   if (!spec) return;
-  const c = spec.timeline[i];
-  if (c?.motionPreset === CUSTOM &&
-      !confirm("Fotografen har gjort en egen rörelse för bilden. Vill du ersätta den med förvalet?")) {
-    renderStrip(); // återställ menyn till "Egen rörelse"
-    return;
-  }
   changed(regi.setPreset(spec, i, preset, frameAspect()));
 }
 
@@ -426,12 +420,14 @@ function renderStrip(): void {
     for (const p of PRESETS) {
       const o = el("option", undefined, PRESET_LABELS[p]); o.value = p; o.selected = p === current; sel.append(o);
     }
+    // Egen rörelse är fotografens: menyn är låst (servern vägrar också en ändring).
+    sel.disabled = locks.customMotion;
     sel.addEventListener("change", () => { if (sel.value !== CUSTOM) setPreset(i, sel.value as Preset); });
     const motionBox = el("div", "motion");
     motionBox.append(sel);
     if (locks.customMotion) {
       motionBox.append(lockBadge(LOCKED_BY_PHOTOGRAPHER,
-        "Fotografen har gjort en egen rörelse för bilden. Den behålls tills du väljer ett annat förval."));
+        "Fotografen har gjort en egen rörelse för bilden. Den kan bara ändras av fotografen."));
     }
 
     const dur = el("span", "dur");
