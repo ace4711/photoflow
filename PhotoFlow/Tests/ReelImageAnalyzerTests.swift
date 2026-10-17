@@ -102,7 +102,8 @@ struct ReelImageAnalyzerTests {
         pre.room = "Kök"
         let counter = CountingMeasurer()
         let items = try await ReelImageAnalyzer.analyze(urls: [file], cacheDirectory: cacheDir, describe: false,
-                                                        precomputed: [file: pre], qualityMeasurer: counter.measure)
+                                                        precomputed: [file: pre], qualityMeasurer: counter.measure,
+                                                        featurePrintMeasurer: { _ in nil })
         #expect(items.first?.analysis.qualityScore == 0.66 && items.first?.analysis.featurePrint == nil)
         #expect(counter.count == 1)
         // Cachad med kvalitet: ingen ny mätning.
@@ -131,6 +132,57 @@ struct ReelImageAnalyzerTests {
         #expect(counter.count == 1)
         #expect(second[0].analysis.qualityScore == 0.66 && second[0].analysis.sharpness == 12345)
         #expect(ReelImageAnalyzer.loadCache(from: cacheDir)[sha]?.qualityScore == 0.66)
+    }
+
+    /// Räknar anrop till feature print-mätaren.
+    private final class CountingPrinter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var calls = 0
+        var count: Int { lock.withLock { calls } }
+        func measure(_ url: URL) async -> Data? {
+            lock.withLock { calls += 1 }
+            return [Float(1), 2, 3].withUnsafeBytes { Data($0) }
+        }
+    }
+
+    @Test("Feature print räknas i efterhand när den saknas, cachas och räknas inte om")
+    func featurePrintBackfilled() async throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("motiv.jpg")
+        try writeTestImage(to: file)
+        let cacheDir = dir.appendingPathComponent("FILM")
+        let first = try await ReelImageAnalyzer.analyze(urls: [file], cacheDirectory: cacheDir, describe: false,
+                                                        featurePrintMeasurer: { _ in nil })
+        let sha = first[0].analysis.sha256
+        var cache = ReelImageAnalyzer.loadCache(from: cacheDir)
+        cache[sha]?.featurePrint = nil
+        cache[sha]?.sharpness = 12345      // markör: en full ommätning skulle skriva över den
+        ReelImageAnalyzer.saveCache(cache, to: cacheDir)
+
+        let printer = CountingPrinter()
+        let second = try await ReelImageAnalyzer.analyze(urls: [file], cacheDirectory: cacheDir, describe: false,
+                                                         featurePrintMeasurer: printer.measure)
+        #expect(printer.count == 1)
+        #expect(second[0].analysis.featureVector == [1, 2, 3] && second[0].analysis.sharpness == 12345)
+        // Andra körningen: finns i cachen, ingen ny mätning.
+        _ = try await ReelImageAnalyzer.analyze(urls: [file], cacheDirectory: cacheDir, describe: false,
+                                                featurePrintMeasurer: printer.measure)
+        #expect(printer.count == 1)
+        #expect(ReelImageAnalyzer.loadCache(from: cacheDir)[sha]?.featureVector == [1, 2, 3])
+    }
+
+    @Test("measureFeaturePrint ger en vektor för en bild, nil för en saknad fil")
+    func measureFeaturePrintVector() async throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("motiv.jpg")
+        try writeTestImage(to: file)
+        let start = ContinuousClock.now
+        let data = try #require(await ReelImageAnalyzer.measureFeaturePrint(url: file))
+        print("feature print-tid (testbild): \(ContinuousClock.now - start)")
+        #expect(!data.isEmpty && data.count % MemoryLayout<Float>.size == 0)
+        #expect(await ReelImageAnalyzer.measureFeaturePrint(url: dir.appendingPathComponent("saknas.jpg")) == nil)
     }
 
     @Test("measureQuality ger en poäng i 0...1 för en nedskalad bild")

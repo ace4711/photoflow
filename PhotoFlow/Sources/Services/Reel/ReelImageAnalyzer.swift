@@ -133,6 +133,10 @@ nonisolated enum ReelImageAnalyzer {
     /// Räknar kvalitetspoängen för en bild. Injicerbar (tester, och bild utan Vision).
     typealias QualityMeasurer = @Sendable (URL) async -> QualityMeasurement?
 
+    /// Räknar feature print (råa `Float32`-värden, se `ReelImageAnalysis.featurePrint`) för en bild.
+    /// Injicerbar (tester).
+    typealias FeaturePrintMeasurer = @Sendable (URL) async -> Data?
+
     /// Längsta sidan på kopian som estetikpoängen räknas på. Pipelinen ger Vision hela previewn, men
     /// Vision skalar ändå ner den; på Chronas väg 7 (21 färdiga bilder, 5315 px) gav 1280 px i snitt
     /// 0,01 från fullstorleken (störst 0,02) på ~40 ms per bild.
@@ -153,6 +157,22 @@ nonisolated enum ReelImageAnalyzer {
               let scores = try? await CalculateImageAestheticsScoresRequest().perform(on: image) else { return nil }
         return QualityMeasurement(score: PhotoQualityService.normalizedQualityScore(overallScore: scores.overallScore),
                                   isUtility: scores.isUtility)
+    }
+
+    /// Feature print för en färdig bild som saknar den (cachad lätt analys, eller äldre cache): samma
+    /// Vision-begäran som `PhotoQualityService`, på en nedskalad kopia (Vision skalar ändå ner till
+    /// ett par hundra pixlar). Nil om bilden inte går att läsa eller Vision inte svarar.
+    @concurrent
+    static func measureFeaturePrint(url: URL) async -> Data? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: qualityMaxPixels,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, opts as CFDictionary),
+              let print = try? await GenerateImageFeaturePrintRequest().perform(on: image) else { return nil }
+        return floatData(from: print)
     }
 
     // MARK: - Cache
@@ -189,7 +209,8 @@ nonisolated enum ReelImageAnalyzer {
     /// `CancellationError`, men sparar först det som hunnit bli klart. `precomputed` ger värden ur
     /// pipelinens egna filer per bild (se `Precomputed`): då görs bara den lätta analysen.
     /// Saknar en bild kvalitetspoäng (ingen pipelinedata, eller en äldre cachad analys utan den) räknas
-    /// den i efterhand med `qualityMeasurer` och cachas; övriga mätningar görs inte om.
+    /// den i efterhand med `qualityMeasurer` och cachas; på samma sätt feature print (`featurePrintMeasurer`).
+    /// Övriga mätningar görs inte om.
     static func analyze(
         urls: [URL],
         cacheDirectory: URL?,
@@ -197,6 +218,7 @@ nonisolated enum ReelImageAnalyzer {
         describe: Bool = true,
         precomputed: [URL: Precomputed] = [:],
         qualityMeasurer: @escaping QualityMeasurer = { await measureQuality(url: $0) },
+        featurePrintMeasurer: @escaping FeaturePrintMeasurer = { await measureFeaturePrint(url: $0) },
         maxConcurrent: Int = 4,
         progress: @Sendable @MainActor (Int, Int) -> Void = { _, _ in }
     ) async throws -> [Item] {
@@ -217,7 +239,8 @@ nonisolated enum ReelImageAnalyzer {
                     next += 1; inFlight += 1
                     group.addTask {
                         (idx, await analyzeOne(url: url, cache: cacheSnapshot, describe: describe, aiTags: aiTags,
-                                               precomputed: precomputed[url], qualityMeasurer: qualityMeasurer))
+                                               precomputed: precomputed[url], qualityMeasurer: qualityMeasurer,
+                                               featurePrintMeasurer: featurePrintMeasurer))
                     }
                 }
                 while inFlight < max(1, maxConcurrent) && next < urls.count {
@@ -253,7 +276,8 @@ nonisolated enum ReelImageAnalyzer {
         describe: Bool,
         aiTags: [String: AITagsStore.Entry]?,
         precomputed: Precomputed? = nil,
-        qualityMeasurer: QualityMeasurer = { await measureQuality(url: $0) }
+        qualityMeasurer: QualityMeasurer = { await measureQuality(url: $0) },
+        featurePrintMeasurer: FeaturePrintMeasurer = { await measureFeaturePrint(url: $0) }
     ) async -> ReelImageAnalysis? {
         guard let sha = sha256Hex(of: url) else { return nil }
         if Task.isCancelled { return nil }
@@ -285,6 +309,11 @@ nonisolated enum ReelImageAnalyzer {
             // bli av med den för att kopian är nedskalad.
             if pipelineData == nil { analysis.isUtility = analysis.isUtility || m.isUtility }
         }
+        if Task.isCancelled { return nil }
+
+        // Feature print i efterhand: utan den kan urvalet inte se att två bilder visar samma sak
+        // (en balkongvy blev både kollageruta och avslut). Lättanalysen och äldre cachar saknar den.
+        if analysis.featurePrint == nil, let data = await featurePrintMeasurer(url) { analysis.featurePrint = data }
         if Task.isCancelled { return nil }
 
         if wantsModel, analysis.describedBy != "foundationModels" {
