@@ -7,7 +7,9 @@
 // och släppa en uteslutning (aktivt tillagd utesluten bild). Mäklaren får inte ändra
 // style, editor.tempo, editor.orderLocked, lägga till pinningar eller uteslutningar,
 // ändra en låst övergång eller en egen rörelse ("custom") på en bild som finns kvar.
-// Klipp matchas på bildens sha256, eftersom asset-id kan numreras om.
+// Klipp matchas på bildens sha256, eftersom asset-id kan numreras om. En pinning som
+// fotografen hade i sin senaste revision får läggas tillbaka (webben återställer den när
+// en borttagen pinnad bild läggs till igen). En låst bild får inte läggas till en gång till.
 
 import type { Clip, ReelSpec } from "../../web/reel/src/reelSpec.ts";
 
@@ -31,21 +33,58 @@ export function jsonNear(a: unknown, b: unknown): boolean {
 const json = (v: unknown): unknown => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 
-function clipsBySha(spec: ReelSpec): Map<string, { clip: Clip; index: number }> {
+type Placed = { clip: Clip; index: number };
+
+/** Alla klipp per bild (sha256), i tidslinjens ordning. Samma bild kan förekomma flera gånger. */
+function clipsBySha(spec: ReelSpec): Map<string, Placed[]> {
   const shaOf = new Map(spec.assets.map((a) => [a.id, a.sha256]));
-  const m = new Map<string, { clip: Clip; index: number }>();
+  const m = new Map<string, Placed[]>();
   spec.timeline.forEach((clip, index) => {
     const sha = shaOf.get(clip.asset);
-    if (sha && !m.has(sha)) m.set(sha, { clip, index });
+    if (!sha) return;
+    const l = m.get(sha);
+    if (l) l.push({ clip, index }); else m.set(sha, [{ clip, index }]);
   });
   return m;
+}
+
+const isLocked = (c: Clip) => c.transitionLocked === true || c.motionPreset === "custom";
+const transitionOk = (old: Clip, now: Clip) =>
+  old.transitionLocked !== true || (now.transitionLocked === true && jsonNear(old.transitionIn, now.transitionIn));
+const motionOk = (old: Clip, now: Clip) =>
+  old.motionPreset !== "custom" || (now.motionPreset === "custom" && now.fit === old.fit && jsonNear(old.motion, now.motion));
+const fits = (old: Clip, now: Clip) => transitionOk(old, now) && motionOk(old, now);
+
+/** Finns en parning där varje klipp i `now` motsvarar ett eget klipp i `old` vars lås det håller? */
+function matchable(old: Clip[], now: Clip[]): boolean {
+  const used = new Array<boolean>(old.length).fill(false);
+  const go = (k: number): boolean => {
+    if (k === now.length) return true;
+    for (let i = 0; i < old.length; i++) {
+      if (used[i] || !fits(old[i], now[k])) continue;
+      used[i] = true;
+      if (go(k + 1)) return true;
+      used[i] = false;
+    }
+    return false;
+  };
+  return go(0);
+}
+
+export interface LockOptions {
+  /**
+   * Pinningar (sha256) som mäklaren får lägga tillbaka: fotografens pinningar i den senaste
+   * revision fotografen sparade. Webbeditorn återställer pinningen när en borttagen pinnad
+   * bild läggs till igen, även om borttagningen redan har sparats.
+   */
+  restorablePins?: Iterable<string>;
 }
 
 /**
  * Lås som `next` bryter jämfört med föregående sparade revision `prev`, som svenska
  * meningar (tom lista: inget brott). Används bara för mäklarens skrivningar.
  */
-export function lockViolations(prev: ReelSpec, next: ReelSpec): string[] {
+export function lockViolations(prev: ReelSpec, next: ReelSpec, opts: LockOptions = {}): string[] {
   const out: string[] = [];
   const p = json(prev) as ReelSpec, n = json(next) as ReelSpec;
 
@@ -54,22 +93,68 @@ export function lockViolations(prev: ReelSpec, next: ReelSpec): string[] {
   const pe = (p.editor ?? {}) as Record<string, unknown>, ne = (n.editor ?? {}) as Record<string, unknown>;
   if (pe.tempo !== ne.tempo) out.push("Filmens tempo är fotografens val och kan inte ändras här.");
   if (pe.orderLocked !== ne.orderLocked) out.push("Fotografens ordningslås kan inte ändras här.");
-  const added = (key: string) => { const had = new Set(strings(pe[key])); return strings(ne[key]).filter((s) => !had.has(s)); };
-  if (added("pinnedAssets").length) out.push("Bara fotografen kan låsa bilder så att de alltid är med.");
+  const added = (key: string, allowed: Iterable<string> = []) => {
+    const had = new Set([...strings(pe[key]), ...allowed]);
+    return strings(ne[key]).filter((s) => !had.has(s));
+  };
+  if (added("pinnedAssets", opts.restorablePins).length) out.push("Bara fotografen kan låsa bilder så att de alltid är med.");
   if (added("excludedAssets").length) out.push("Bara fotografen kan utesluta bilder.");
 
+  // Låst övergång och egen rörelse följer bilden så länge den finns kvar. Bilden kan stå
+  // flera gånger; då måste varje kvarvarande klipp motsvara ett eget klipp i fotografens
+  // version och hålla dess lås, så att en oförändrad kopia inte kan skydda en ändrad.
   const before = clipsBySha(p), after = clipsBySha(n);
-  for (const [sha, { clip: old, index }] of before) {
-    const now = after.get(sha)?.clip;
-    if (!now) continue; // borttaget klipp: tillåtet
-    const name = `Bild ${index + 1} (i fotografens version)`;
-    if (old.transitionLocked === true && (now.transitionLocked !== true || !jsonNear(old.transitionIn, now.transitionIn))) {
-      out.push(`${name}: fotografen har valt övergången, den kan inte ändras här.`);
+  for (const [sha, olds] of before) {
+    const locked = olds.filter((o) => isLocked(o.clip));
+    if (!locked.length) continue;
+    const nows = (after.get(sha) ?? []).map((x) => x.clip);
+    if (!nows.length) continue; // borttaget klipp: tillåtet
+    const name = (o: Placed) => `Bild ${o.index + 1} (i fotografens version)`;
+    if (nows.length > olds.length) {
+      out.push(`${name(locked[0])}: bilden har fotografens lås och kan inte läggas till en gång till.`);
+      continue;
     }
-    if (old.motionPreset === "custom" &&
-      (now.motionPreset !== "custom" || now.fit !== old.fit || !jsonNear(old.motion, now.motion))) {
-      out.push(`${name}: fotografen har gjort en egen rörelse, den kan inte ändras här.`);
+    if (matchable(olds.map((o) => o.clip), nows)) continue;
+    const before0 = out.length;
+    for (const o of locked) {
+      if (!nows.some((c) => transitionOk(o.clip, c))) out.push(`${name(o)}: fotografen har valt övergången, den kan inte ändras här.`);
+      if (!nows.some((c) => motionOk(o.clip, c))) out.push(`${name(o)}: fotografen har gjort en egen rörelse, den kan inte ändras här.`);
+    }
+    if (out.length === before0) out.push(`${name(locked[0])}: fotografens lås på bilden kan inte ändras här.`);
+  }
+  return out;
+}
+
+const isRec = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const absent = (v: unknown) => v === undefined || v === null;
+
+/**
+ * Typkontroll av redigerarens fält (editor, transitionLocked, durationLocked, motionPreset),
+ * som parseReelSpec inte kontrollerar. Fel typ gör att fotografens app inte kan läsa filmen.
+ * Gäller alla skrivningar. Returnerar svenska meningar (tom lista: inget fel).
+ */
+export function lockFieldErrors(spec: unknown): string[] {
+  const out: string[] = [];
+  if (!isRec(spec)) return out;
+  const ed = spec.editor;
+  if (!absent(ed)) {
+    if (!isRec(ed)) out.push("editor måste vara ett objekt.");
+    else {
+      for (const k of ["pinnedAssets", "excludedAssets"]) {
+        const v = ed[k];
+        if (!absent(v) && !(Array.isArray(v) && v.every((x) => typeof x === "string"))) out.push(`editor.${k} måste vara en lista med sha256-strängar.`);
+      }
+      if (!absent(ed.orderLocked) && typeof ed.orderLocked !== "boolean") out.push("editor.orderLocked måste vara true eller false.");
+      if (!absent(ed.tempo) && typeof ed.tempo !== "string") out.push("editor.tempo måste vara en sträng.");
     }
   }
+  const tl = Array.isArray(spec.timeline) ? spec.timeline : [];
+  tl.forEach((c, i) => {
+    if (!isRec(c)) return;
+    for (const k of ["transitionLocked", "durationLocked"]) {
+      if (!absent(c[k]) && typeof c[k] !== "boolean") out.push(`Klipp ${i + 1}: ${k} måste vara true eller false.`);
+    }
+    if (!absent(c.motionPreset) && typeof c.motionPreset !== "string") out.push(`Klipp ${i + 1}: motionPreset måste vara en sträng.`);
+  });
   return out;
 }

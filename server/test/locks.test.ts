@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { lockViolations } from "../src/locks.ts";
+import { lockFieldErrors, lockViolations } from "../src/locks.ts";
 import { parseReelSpec } from "../../web/reel/src/reelSpec.ts";
 import type { ReelSpec } from "../../web/reel/src/reelSpec.ts";
 import * as regi from "../../web/reel/src/regi.ts";
@@ -156,6 +156,59 @@ test("webbens aktiva byte från egen rörelse till förval vägras av servern (r
   assert.match(lockViolations(prev, wire(s)).join(), /egen rörelse/);
 });
 
+
+test("fynd: en pinnad bild som läggs tillbaka efter sparad borttagning får sin pinning igen", () => {
+  const photographer = load();
+  const pins = photographer.editor!.pinnedAssets!;
+  const s = load();
+  const removed: regi.RemovedClips = new Map();
+  assert.ok(regi.removeClip(s, idx(s, "a3"), ASPECT, removed).includes("unpin"));
+  const saved = wire(s);
+  assert.deepEqual(lockViolations(photographer, saved, { restorablePins: pins }), []);
+  // samma session: webbens `removed` finns kvar, a3 läggs tillbaka med pinningen
+  assert.ok(regi.addClip(s, "a3", ASPECT, { removed }).includes("pin"));
+  assert.deepEqual(lockViolations(saved, wire(s), { restorablePins: pins }), []);
+  // en bild fotografen aldrig pinnade får fortfarande inte pinnas
+  const other = wire(s); other.editor!.pinnedAssets!.push(SHA("a"));
+  assert.match(lockViolations(saved, other, { restorablePins: pins }).join(), /låsa bilder/);
+});
+
+test("fynd: en oförändrad kopia av ett låst klipp skyddar inte en ändrad", () => {
+  // kopia av a2 (custom + låst övergång) först, och det riktiga klippet ändras
+  const decoy = load();
+  const real = decoy.timeline[idx(decoy, "a2")];
+  decoy.timeline.unshift({ ...structuredClone(real), duration: 0.5 });
+  real.transitionIn = { type: "crossfade", duration: 0.5 };
+  real.motionPreset = "zoomIn";
+  const v = lockViolations(load(), decoy);
+  assert.ok(v.length >= 1, v.join());
+  // samma bild via ett andra asset-id med samma sha256
+  const alias = load();
+  alias.assets.push({ ...structuredClone(alias.assets.find((a) => a.id === "a2")!), id: "a2b" });
+  alias.timeline.unshift({ ...structuredClone(alias.timeline[idx(alias, "a2")]), asset: "a2b", duration: 0.5 });
+  alias.timeline[idx(alias, "a2")].motion.to.zoom = 1.4;
+  assert.ok(lockViolations(load(), alias).length >= 1);
+  // en ren kopia (utan ändring) är också ett tillägg av en låst bild
+  const copy = load();
+  copy.timeline.push(structuredClone(copy.timeline[idx(copy, "a2")]));
+  assert.match(lockViolations(load(), copy).join(), /en gång till/);
+  // fotografens version har bilden två gånger, båda låsta: den andra skyddas också
+  const prev2 = load();
+  const second = { ...structuredClone(prev2.timeline[idx(prev2, "a2")]), duration: 1 };
+  second.motion.to.zoom = 1.2;
+  prev2.timeline.push(second);
+  const n2 = structuredClone(prev2);
+  n2.timeline[n2.timeline.length - 1].motion.to.zoom = 1.3;
+  assert.match(lockViolations(prev2, n2).join(), /egen rörelse/);
+  // flytt av dubbletterna och borttagning av den ena är tillåtet
+  const n3 = structuredClone(prev2);
+  n3.timeline.reverse();
+  assert.deepEqual(lockViolations(prev2, n3), []);
+  const n4 = structuredClone(prev2);
+  n4.timeline.splice(idx(n4, "a2"), 1);
+  assert.deepEqual(lockViolations(prev2, n4), []);
+});
+
 // ------------------------------------------------------------ HTTP
 
 let env: TestEnv;
@@ -265,4 +318,79 @@ test("HTTP: utan lås beter sig mäklarens sparning som förut", async () => {
   s.timeline[1].transitionIn = { type: "push", direction: "left", duration: 0.7 };
   const r = await share(token, s, 1);
   assert.equal(r.status, 200, r.text);
+});
+
+test("fynd: inaktuell mäklarsparning ger 412 även när fotografen har lagt till lås", async () => {
+  const { id, token } = await lockedObject();
+  const stale = await current(token); // rev 2
+  // fotografen ändrar tempo och låser övergången på klipp 1
+  const pfSpec = lockedBody() as any;
+  pfSpec.editor.tempo = "fast";
+  Object.assign(pfSpec.timeline[0], { transitionLocked: true });
+  pfSpec.timeline[0].motion.to.zoom = 1.25;
+  assert.equal((await put(id, pfSpec, 2)).status, 200);
+  stale.timeline[0].motion.to.zoom = 1.3;
+  const r = await share(token, stale, 2);
+  assert.equal(r.status, 412, r.text);
+  assert.equal(r.json.error.code, "revision_conflict");
+  // och en inaktuell ändring av utbildsprofilerna ger också 412
+  stale.outputs[0].fps = 25;
+  assert.equal((await share(token, stale, 2)).status, 412);
+});
+
+test("fynd: mäklaren kan lägga tillbaka en pinnad bild efter att borttagningen sparats", async () => {
+  const { id, token } = await lockedObject();
+  let s = await current(token);
+  const kept = structuredClone(s.timeline[1]); // pinnad, custom, låst övergång
+  s.timeline.splice(1, 1);
+  s.editor.pinnedAssets = [];
+  let r = await share(token, s, 2);
+  assert.equal(r.status, 200, r.text);
+  s = await current(token);
+  s.timeline.splice(1, 0, kept);
+  s.editor.pinnedAssets = [SHAS[1]];
+  r = await share(token, s, 3);
+  assert.equal(r.status, 200, r.text);
+  // en bild som fotografen inte har pinnat får inte pinnas
+  s = await current(token);
+  s.editor.pinnedAssets.push(SHAS[0]);
+  assert.equal((await share(token, s, 4)).status, 422);
+  // tar fotografen bort pinningen kan mäklaren inte införa den igen
+  const pfSpec = (await call(env, "GET", `/api/v1/objects/${id}`, { auth: pf(env) })).json.spec;
+  pfSpec.editor.pinnedAssets = [];
+  assert.equal((await put(id, pfSpec, 4)).status, 200);
+  s = await current(token);
+  s.editor.pinnedAssets = [SHAS[1]];
+  r = await share(token, s, 5);
+  assert.equal(r.status, 422, r.text);
+  assert.match(r.json.error.message, /låsa bilder/);
+});
+
+test("fynd: redigerarens fält typkontrolleras för båda rollerna", async () => {
+  const { id, token } = await lockedObject();
+  const cases: Array<(s: any) => void> = [
+    (s) => { s.editor.pinnedAssets = "x"; },
+    (s) => { s.editor.excludedAssets = [1]; },
+    (s) => { s.editor = "foo"; },
+    (s) => { s.editor.orderLocked = "true"; },
+    (s) => { s.editor.tempo = 2; },
+    (s) => { s.timeline[0].transitionLocked = "yes"; },
+    (s) => { s.timeline[0].durationLocked = 1; },
+    (s) => { s.timeline[0].motionPreset = 3; },
+  ];
+  for (const [i, f] of cases.entries()) {
+    const s = await current(token);
+    f(s);
+    const r = await share(token, s, 2);
+    assert.equal(r.status, 422, `mäklare, fall ${i}: ${r.text}`);
+    const p = lockedBody() as any;
+    f(p);
+    const q = await put(id, p, 2);
+    assert.equal(q.status, 422, `fotograf, fall ${i}: ${q.text}`);
+  }
+  // null och saknade fält är tillåtna
+  const ok = lockedBody() as any;
+  ok.timeline[0].transitionLocked = null; ok.editor.tempo = null;
+  assert.equal((await put(id, ok, 2)).status, 200);
+  assert.deepEqual(lockFieldErrors({ editor: null, timeline: [{}] }), []);
 });

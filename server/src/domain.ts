@@ -14,7 +14,7 @@ import { inspectJpeg, JpegError } from "./jpeg.ts";
 import { parseReelSpec, ReelSpecError, CURRENT_VERSION } from "../../web/reel/src/reelSpec.ts";
 import type { ReelSpec } from "../../web/reel/src/reelSpec.ts";
 import { totalDuration } from "../../web/reel/src/reelTimeline.ts";
-import { lockViolations } from "./locks.ts";
+import { lockFieldErrors, lockViolations } from "./locks.ts";
 
 export type Status = "draft" | "proposed" | "approved" | "rendered";
 export type Role = "photographer" | "agent";
@@ -240,11 +240,8 @@ function canonicalize(d: Deps, o: ObjectRow, input: unknown, actor: Actor, prev:
     if (typeof out.id !== "string" || !/^[\w.-]{1,40}$/.test(out.id)) throw bad("Utbildsprofilen saknar giltigt id.");
   }
   if (new Set(spec.outputs.map((x) => x.id)).size !== spec.outputs.length) throw bad("Utbildsprofilernas id måste vara unika.");
-  if (actor.role === "agent" && prev && canonicalJson(prev.outputs) !== canonicalJson(spec.outputs)) throw bad("Mäklaren får inte ändra utbildsprofilerna.");
-  if (actor.role === "agent" && prev) {
-    const v = lockViolations(prev, spec);
-    if (v.length) throw new ApiError(422, "invalid_spec", `Mäklaren får inte ändra fotografens lås. ${v.join(" ")}`, { lockViolations: v });
-  }
+  const typeErrors = lockFieldErrors(spec);
+  if (typeErrors.length) throw bad(typeErrors.join(" "));
 
   const pool = new Map(poolOf(d, o.id).map((p) => [p.sha256, p]));
   for (const a of spec.assets) {
@@ -262,6 +259,22 @@ function canonicalize(d: Deps, o: ObjectRow, input: unknown, actor: Actor, prev:
   spec.updatedBy = name ? { role: actor.role, name } : { role: actor.role };
   if (typeof spec.createdAt !== "string" || Number.isNaN(Date.parse(spec.createdAt))) spec.createdAt = prev?.createdAt ?? iso(d);
   return spec;
+}
+
+/** Det mäklaren inte får ändra: utbildsprofiler och fotografens lås. Kastar ApiError(422). */
+function agentChecks(d: Deps, o: ObjectRow, prev: ReelSpec, spec: ReelSpec): void {
+  if (canonicalJson(prev.outputs) !== canonicalJson(spec.outputs)) throw new ApiError(422, "invalid_spec", "Mäklaren får inte ändra utbildsprofilerna.");
+  const v = lockViolations(prev, spec, { restorablePins: photographerPins(d, o.id) });
+  if (v.length) throw new ApiError(422, "invalid_spec", `Mäklaren får inte ändra fotografens lås. ${v.join(" ")}`, { lockViolations: v });
+}
+
+/** Pinningarna i den senaste revision fotografen sparade (tom om fotografen inte har sparat). */
+function photographerPins(d: Deps, objectId: string): string[] {
+  const row = d.db.prepare("SELECT spec_json FROM spec_revisions WHERE object_id = ? AND author_role = 'photographer' ORDER BY revision DESC LIMIT 1")
+    .get(objectId) as { spec_json: string } | undefined;
+  if (!row) return [];
+  const pins = (JSON.parse(row.spec_json) as ReelSpec).editor?.pinnedAssets;
+  return Array.isArray(pins) ? pins.filter((x): x is string => typeof x === "string") : [];
 }
 
 export interface SaveResult { spec: ReelSpec; revision: number; changed: boolean }
@@ -289,6 +302,9 @@ export function saveSpec(d: Deps, objectId: string, input: unknown, ifMatch: num
       throw new ApiError(412, "revision_conflict", "Specen har ändrats av någon annan. Hämta den senaste versionen.",
         { currentRevision: o.current_revision, spec: storedSpec(d, o) }, { ETag: `"${o.current_revision}"` });
     }
+    // Mäklarens begränsningar jämförs mot revisionen mäklaren utgick från, så kontrollen
+    // görs först när If-Match stämmer: en inaktuell sparning ska få 412, inte ett låsfel.
+    if (actor.role === "agent" && prev) agentChecks(d, o, prev, spec);
     const rev = o.current_revision + 1;
     spec.revision = rev;
     spec.updatedAt = iso(d);
