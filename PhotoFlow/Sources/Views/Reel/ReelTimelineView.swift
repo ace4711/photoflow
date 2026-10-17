@@ -49,6 +49,9 @@ struct ReelTimelineView: View {
     @State private var cursorPushed = false
     /// Var en bild från rutnätet skulle hamna just nu (medan den dras över tidslinjen).
     @State private var externalDrop: ReelTimelineLayout.ExternalDrop?
+    /// Sant från släppet till nästa `dropEntered`: SwiftUI skickar en sista `dropUpdated` efter
+    /// `performDrop` (utan `dropExited`), som annars lämnar släppmarkeringen kvar.
+    @State private var dropDone = false
     @FocusState private var focused: Bool
 
     private static let inset = 12.0
@@ -122,13 +125,14 @@ struct ReelTimelineView: View {
             .contentShape(Rectangle())
             .gesture(dragGesture(layout, spec: committed))
             .onDrop(of: [.plainText], delegate: CandidateDropDelegate(
-                layout: layout, inset: Self.inset, canInsert: canInsertDragged, target: $externalDrop,
+                layout: layout, inset: Self.inset, canInsert: canInsertDragged, target: $externalDrop, done: $dropDone,
                 perform: { [model, preview] id, target in Self.dropCandidate(id, target: target, model: model, preview: preview) }))
             .onContinuousHover { phase in updateCursor(phase, layout: layout) }
         }
         .focusable()
         .focused($focused)
         .focusEffectDisabled()
+        .onChange(of: model.revisionToken) { _, _ in externalDrop = nil }
         .onKeyPress(.delete) { deleteSelected() }
         .onKeyPress(.deleteForward) { deleteSelected() }
         .onDisappear { if cursorPushed { NSCursor.pop(); cursorPushed = false } }
@@ -493,6 +497,7 @@ private struct CandidateDropDelegate: DropDelegate {
     let inset: Double
     let canInsert: Bool
     @Binding var target: ReelTimelineLayout.ExternalDrop?
+    @Binding var done: Bool
     let perform: @MainActor @Sendable (String, ReelTimelineLayout.ExternalDrop) -> Void
 
     private func dropTarget(_ info: DropInfo) -> ReelTimelineLayout.ExternalDrop {
@@ -506,10 +511,11 @@ private struct CandidateDropDelegate: DropDelegate {
 
     func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [.plainText]) }
 
-    func dropEntered(info: DropInfo) { target = dropTarget(info) }
+    func dropEntered(info: DropInfo) { done = false; target = dropTarget(info) }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
         let t = dropTarget(info)
+        if done { return DropProposal(operation: allowed(t) ? .copy : .forbidden) }
         if t != target { target = t }
         return DropProposal(operation: allowed(t) ? .copy : .forbidden)
     }
@@ -519,13 +525,19 @@ private struct CandidateDropDelegate: DropDelegate {
     func performDrop(info: DropInfo) -> Bool {
         let t = dropTarget(info)
         target = nil
+        done = true
         guard allowed(t), let provider = info.itemProviders(for: [.plainText]).first else { return false }
         let perform = self.perform
+        // AppKit kan skicka en sista `dropUpdated` efter släppet, som sätter tillbaka markeringen;
+        // den rensas därför igen när släppet är utfört.
+        let clear = _target
         _ = provider.loadObject(ofClass: NSString.self) { object, _ in
             // Dragdata som inte kommer från rutnätet ignoreras.
-            guard let text = (object as? NSString).map({ String($0) }),
-                  let id = ReelCandidateDrag.candidateID(from: text) else { return }
-            Task { @MainActor in perform(id, t) }
+            let id = (object as? NSString).flatMap { ReelCandidateDrag.candidateID(from: String($0)) }
+            Task { @MainActor in
+                if let id { perform(id, t) }
+                clear.wrappedValue = nil
+            }
         }
         return true
     }
