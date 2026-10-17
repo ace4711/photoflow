@@ -195,7 +195,6 @@
 		77932461C99C00B057428947 /* SessionHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80F4734D27E144D9ED40671F /* SessionHistoryStore.swift */; };
 		7815F46A102D51998D8B4D8C /* SessionManifestStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B778E538EE39AE2387680410 /* SessionManifestStoreTests.swift */; };
 		7989A2940BFFD47970671D95 /* AppServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6FD32CA129606476C3DAB16 /* AppServices.swift */; };
-		79D757DF24D060C686111BDB /* ReelCandidateFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C68E4EFBD3436133A30B1B01 /* ReelCandidateFilter.swift */; };
 		7A6E6A01FDBF10FAFD93B372 /* WatchService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD8B3E2EDBB94C385E77AC28 /* WatchService.swift */; };
 		7A9668ACCF8ECC390EFB1CA5 /* ObjektfilmSettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DA754FEF95ACBF4A0641788 /* ObjektfilmSettingsTab.swift */; };
 		7A9B7AFDDC326932C0A19252 /* ReviewImageAnalysis.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D3B1CB93F141B264F4C4A6D /* ReviewImageAnalysis.swift */; };
@@ -1434,7 +1433,6 @@
 				8D888A2F93B7586DCC33CC3D /* ProcessRunner.swift in Sources */,
 				710CAFE052054BA4E77C6E87 /* RAWRenderer.swift in Sources */,
 				612BD4EC654B02CCC64EC817 /* RadianceMerge.swift in Sources */,
-				79D757DF24D060C686111BDB /* ReelCandidateFilter.swift in Sources */,
 				66756CAF8E82E026249F1C18 /* ReelChoiceSummary.swift in Sources */,
 				82E83A38F86E976ABE2D5983 /* ReelComposer.swift in Sources */,
 				C5051C161F3E050A276E83DF /* ReelFilmStatus.swift in Sources */,

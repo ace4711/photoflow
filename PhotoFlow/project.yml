@@ -214,6 +214,9 @@ targets:
           # PreflightModel.swift är startkontrollens UI-modell (NSOpenPanel,
           # DependencyManager) — den rena kontrollen (Preflight.swift) följer med.
           - "PreflightModel.swift"
+          # ReelCandidateFilter.swift är rutnätsfiltret i redigeraren och bygger på
+          # `ReelEditorModel.CandidateRow` (Views).
+          - "Reel/ReelCandidateFilter.swift"
       - Sources/Models
       - Sources/Shared
       - SourcesCLI
