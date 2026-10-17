@@ -40,7 +40,7 @@ nonisolated enum ReelRenderError: LocalizedError {
 ///
 /// **Bildcache:** varje asset laddas nedskalat med `CGImageSource` (till den
 /// storlek som räcker för utsnittet vid högsta zoom i `maxOutputSize`) och
-/// cachas per asset-id. Klassen är trådsäker (lås kring cachen; `CIContext` är
+/// cachas i `ReelImageCache` (nyckel: sha256 och längsta sida) och per asset-id här. Klassen är trådsäker (lås kring cachen; `CIContext` är
 /// trådsäker) och kan delas mellan en förhandsvisning och en export. En
 /// förhandsvisning i lägre upplösning kan ange `size` per bildruta; bilderna
 /// laddas ändå för `maxOutputSize`, så ange samma `maxOutputSize` som i exporten.
@@ -50,6 +50,8 @@ nonisolated final class ReelRenderer: @unchecked Sendable {
     let specDirectory: URL
     let maxOutputSize: CGSize
     let context: CIContext
+    /// Delad bildcache (förhandsvisningen) eller en egen per renderare (export).
+    let cache: ReelImageCache
 
     private let lock = NSLock()
     private var images: [String: CIImage] = [:]
@@ -57,16 +59,25 @@ nonisolated final class ReelRenderer: @unchecked Sendable {
 
     static let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
 
-    init(spec: ReelSpec, specDirectory: URL, maxOutputSize: CGSize) {
+    /// `cache` kan delas mellan renderare (förhandsvisningen byter renderare vid varje redigering men
+    /// ska inte ladda om bilderna) och `context` likaså; utan dem får renderaren egna.
+    init(spec: ReelSpec, specDirectory: URL, maxOutputSize: CGSize,
+         cache: ReelImageCache? = nil, context: CIContext? = nil) {
         self.spec = spec
+        self.cache = cache ?? ReelImageCache()
         // Alltid en katalog-URL: `URL(fileURLWithPath:relativeTo:)` löser annars en
         // relativ sökväg mot FÖRÄLDERN när basen saknar avslutande snedstreck (t.ex.
         // en FILM-mapp som inte fanns när URL:en byggdes) — bilderna hittades då inte.
         self.specDirectory = URL(fileURLWithPath: specDirectory.path, isDirectory: true)
         self.maxOutputSize = maxOutputSize
-        self.context = CIContext(options: [
-            .workingColorSpace: Self.sRGB,
-            .outputColorSpace: Self.sRGB,
+        self.context = context ?? Self.makeContext()
+    }
+
+    /// `CIContext` för sRGB-blandning (se klassens dokumentation).
+    static func makeContext() -> CIContext {
+        CIContext(options: [
+            .workingColorSpace: sRGB,
+            .outputColorSpace: sRGB,
             .cacheIntermediates: false
         ])
     }
@@ -118,16 +129,10 @@ nonisolated final class ReelRenderer: @unchecked Sendable {
         lock.unlock()
 
         var result: CIImage?
-        if let url = fileURL(for: asset), let src = CGImageSourceCreateWithURL(url as CFURL, nil) {
-            let options: [CFString: Any] = [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceCreateThumbnailWithTransform: true,   // rotera enligt EXIF
-                kCGImageSourceShouldCacheImmediately: true,
-                kCGImageSourceThumbnailMaxPixelSize: requiredLongEdge(for: asset)
-            ]
-            if let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary) {
-                result = CIImage(cgImage: cg)
-            }
+        if let url = fileURL(for: asset),
+           let cg = cache.image(id: asset.sha256, url: url, minLongEdge: requiredLongEdge(for: asset),
+                                originalLongEdge: max(asset.width, asset.height)) {
+            result = CIImage(cgImage: cg)
         }
 
         lock.lock()

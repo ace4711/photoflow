@@ -16,12 +16,20 @@ final class ReelPreviewModel {
     private(set) var aspect: Double = 9.0 / 16.0
 
     @ObservationIgnored private var renderer: ReelRenderer?
+    /// Delas av alla renderare som modellen skapar: bilderna laddas inte om och `CIContext` (dyr att
+    /// skapa) återanvänds när bara rörelse, längd eller övergång ändrats.
+    @ObservationIgnored private let cache: ReelImageCache
+    @ObservationIgnored private let context = ReelRenderer.makeContext()
     @ObservationIgnored private var previewSize = CGSize(width: 360, height: 640)
     @ObservationIgnored private var pendingTime: Double?
     @ObservationIgnored private var worker: Task<Void, Never>?
     @ObservationIgnored private var playTask: Task<Void, Never>?
     /// Där pågående uppspelning stannar (filmens slut om hela filmen spelas).
     @ObservationIgnored private var stopTime: Double?
+
+    init(cache: ReelImageCache = .shared) {
+        self.cache = cache
+    }
 
     /// Längsta sidan i förhandsvisningen (pixlar).
     static let longEdge: CGFloat = 640
@@ -42,12 +50,34 @@ final class ReelPreviewModel {
         }
         // Samma maxOutputSize som exporten (bilderna laddas för slutrenderingens skärpa).
         renderer = ReelRenderer(spec: spec, specDirectory: specDirectory,
-                                maxOutputSize: CGSize(width: output.width, height: output.height))
+                                maxOutputSize: CGSize(width: output.width, height: output.height),
+                                cache: cache, context: context)
         previewSize = Self.previewSize(for: output)
         aspect = Double(output.width) / Double(max(output.height, 1))
         duration = ReelTimeline.totalDuration(spec)
         time = min(time, duration)
         request(time)
+    }
+
+    /// En spec med bara klipp `assetID` (utan övergång), för förhandsvisning under dragning i
+    /// rörelseeditorn: tid 0 är exakt klippets startnyckel och tid `duration` exakt slutnyckeln,
+    /// oberoende av övergångarna till grannklippen. nil om klippet saknas.
+    static func isolatedClipSpec(_ spec: ReelSpec, assetID: String, motion: ReelSpec.Motion) -> ReelSpec? {
+        guard var clip = spec.timeline.first(where: { $0.asset == assetID }) else { return nil }
+        clip.motion = motion
+        clip.transitionIn = nil
+        var isolated = spec
+        isolated.timeline = [clip]
+        return isolated
+    }
+
+    /// Visar ett enskilt klipps start- (`atEnd` = false) eller slutbild med en rörelse som ännu inte
+    /// sparats. Specen i redigeringsmodellen rörs inte; anropa `setSpec` med den riktiga specen när
+    /// dragningen är slut.
+    func showTransient(_ spec: ReelSpec, assetID: String, motion: ReelSpec.Motion, atEnd: Bool, specDirectory: URL?) {
+        guard let isolated = Self.isolatedClipSpec(spec, assetID: assetID, motion: motion) else { return }
+        setSpec(isolated, specDirectory: specDirectory)
+        seek(to: atEnd ? ReelTimeline.totalDuration(isolated) : 0)
     }
 
     func seek(to t: Double) {
