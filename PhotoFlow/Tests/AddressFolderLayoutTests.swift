@@ -48,6 +48,15 @@ struct AddressFolderLayoutTests {
         #expect(AddressFolderLayout.reelDir(forSource: other).path == "/x/Objekt/Export FILM")
         #expect(AddressFolderLayout.addressName(fromFinishedDir: "Lindvägen 12 FÄRDIGA") == "Lindvägen 12")
         #expect(AddressFolderLayout.addressName(fromFinishedDir: "Lindvägen 12") == nil)
+        // Pipelinens förslag görs av FÖRBÄTTRADE: filmen hör hemma i <adress> FILM, inte "… FÖRBÄTTRADE FILM".
+        let enhanced = URL(fileURLWithPath: "/x/Objekt/Lindvägen 12 FÖRBÄTTRADE", isDirectory: true)
+        #expect(AddressFolderLayout.reelDir(forSource: enhanced).path == "/x/Objekt/Lindvägen 12 FILM")
+        #expect(AddressFolderLayout.addressName(fromSourceDir: "Lindvägen 12 FÖRBÄTTRADE") == "Lindvägen 12")
+        #expect(AddressFolderLayout.addressName(fromSourceDir: "Lindvägen 12 TITTBILDER") == "Lindvägen 12")
+        #expect(AddressFolderLayout.addressName(fromSourceDir: "Lindvägen 12 red") == "Lindvägen 12")
+        #expect(AddressFolderLayout.addressName(fromSourceDir: "Export") == nil)
+        // Fotografens färdiga mappar räknas fortfarande inte som FÖRBÄTTRADE.
+        #expect(AddressFolderLayout.addressName(fromFinishedDir: "Lindvägen 12 FÖRBÄTTRADE") == nil)
     }
 
     @Test("<adress> red räknas som färdiga bilder, FÄRDIGA vinner, filmmappen blir <adress> FILM")

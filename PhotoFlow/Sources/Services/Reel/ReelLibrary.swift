@@ -36,8 +36,26 @@ nonisolated struct ReelFilmFolder: Sendable, Equatable, Identifiable {
 
     var id: String { directory.path }
 
-    /// Mappen med de färdiga bilderna: den som `reel-remote.json` pekar på, annars
+    /// Mappen med filmens bilder: den som `reel-remote.json` pekar på, annars den som `reel.json`s
+    /// bildkällor ligger i (t.ex. `<adress> FÖRBÄTTRADE` för pipelinens förslag), annars
     /// `<adress> FÄRDIGA` (eller `<adress> red`) bredvid FILM-mappen. Nil om ingen av dem finns kvar.
+    /// Den mapp som flest av `reel.json`s lokala bildkällor ligger i (relativt FILM-mappen), eller nil.
+    static func sourceDirectoryFromSpec(in directory: URL) -> URL? {
+        let file = directory.appendingPathComponent(ReelLibrary.specFileName)
+        guard let data = try? Data(contentsOf: file), let spec = try? ReelSpec.decode(from: data) else { return nil }
+        let base = URL(fileURLWithPath: directory.path, isDirectory: true)
+        var counts: [String: Int] = [:]
+        for asset in spec.assets {
+            for source in asset.sources where source.kind == .local {
+                guard let path = source.path else { continue }
+                let dir = URL(fileURLWithPath: path, relativeTo: base).standardizedFileURL.deletingLastPathComponent()
+                counts[dir.path, default: 0] += 1
+            }
+        }
+        guard let best = counts.max(by: { $0.value != $1.value ? $0.value < $1.value : $0.key > $1.key }) else { return nil }
+        return URL(fileURLWithPath: best.key, isDirectory: true)
+    }
+
     func sourceDirectory() -> URL? {
         let fm = FileManager.default
         func exists(_ url: URL) -> Bool {
@@ -45,6 +63,9 @@ nonisolated struct ReelFilmFolder: Sendable, Equatable, Identifiable {
             return fm.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
         }
         if let source = remote?.sourceDirectory(relativeTo: directory), exists(source) { return source }
+        // Filmens egna bilder: `reel.json` pekar ut dem (pipelinens förslag använder t.ex.
+        // `<adress> FÖRBÄTTRADE`). Går före FÄRDIGA, eftersom redigeraren annars inte känner igen filmen.
+        if let source = Self.sourceDirectoryFromSpec(in: directory), exists(source) { return source }
         let parent = directory.deletingLastPathComponent()
         let folderName = directory.lastPathComponent
         var bases: [String] = []

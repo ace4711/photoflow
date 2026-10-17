@@ -457,7 +457,7 @@ final class ReelEditorModel {
         reset()
         sourceDirectory = source
         reelDirectory = reelDir
-        self.address = address ?? AddressFolderLayout.addressName(fromFinishedDir: source.lastPathComponent) ?? source.lastPathComponent
+        self.address = address ?? AddressFolderLayout.addressName(fromSourceDir: source.lastPathComponent) ?? source.lastPathComponent
         self.sessionID = sessionID
         phase = .analyzing(done: 0, total: files.count)
         let ownerDir = reelDir

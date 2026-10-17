@@ -165,6 +165,29 @@ struct ReelLibraryTests {
         #expect(request.outputPath == root.path && request.address == "Lindvägen 12")
     }
 
+    @Test("Källmappen: reel.json:s bildkällor (t.ex. pipelinens FÖRBÄTTRADE) går före FÄRDIGA")
+    func sourceDirectoryFromSpec() throws {
+        let root = try session()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let film = root.appendingPathComponent("Lindvägen 12 FILM")
+        let enhanced = root.appendingPathComponent("Lindvägen 12 FÖRBÄTTRADE")
+        let finished = root.appendingPathComponent("Lindvägen 12 FÄRDIGA")
+        for dir in [film, enhanced, finished] {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        var spec = try ReelSpec.decode(from: Data(contentsOf: ReelSpecCodingTests.fixturesDir.appendingPathComponent("example-v1.json")))
+        for i in spec.assets.indices {
+            spec.assets[i].sources = [.init(kind: .local, path: "../Lindvägen 12 FÖRBÄTTRADE/DSC_\(i)_enh.jpg")]
+        }
+        try spec.jsonData().write(to: film.appendingPathComponent("reel.json"))
+        let folder = ReelFilmFolder(directory: film, address: "Lindvägen 12", clipCount: nil, revision: nil,
+                                    specDuration: nil, remote: nil, films: [], updatedAt: .distantPast)
+        #expect(folder.sourceDirectory()?.standardizedFileURL.path == enhanced.standardizedFileURL.path)
+        // Finns inte bildernas mapp kvar faller den tillbaka på FÄRDIGA.
+        try FileManager.default.removeItem(at: enhanced)
+        #expect(folder.sourceDirectory()?.standardizedFileURL.path == finished.standardizedFileURL.path)
+    }
+
     // MARK: Miniatyr
 
     @Test("Miniatyrgenerering ger en bild i filmens proportioner (och cachar)")

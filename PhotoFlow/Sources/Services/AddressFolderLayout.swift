@@ -78,6 +78,17 @@ nonisolated enum AddressFolderLayout {
         return nil
     }
 
+    /// Adressen ur en källmapp för ett bildspel: fotografens `<adress> FÄRDIGA`/`<adress> red` eller
+    /// pipelinens `<adress> FÖRBÄTTRADE`/`<adress> TITTBILDER` (skiftlägesokänsligt). Nil annars.
+    static func addressName(fromSourceDir name: String) -> String? {
+        if let address = addressName(fromFinishedDir: name) { return address }
+        for suffix in [enhancedSuffix, " TITTBILDER"] where name.lowercased().hasSuffix(suffix.lowercased()) {
+            let address = String(name.dropLast(suffix.count)).trimmingCharacters(in: .whitespaces)
+            return address.isEmpty ? nil : address
+        }
+        return nil
+    }
+
     /// Är bilderna i källmappen fotografens egna, redigerade (`<adress> FÄRDIGA`, `<adress> red`, en mapp
     /// som användaren valt)? Allt utom pipelinens egna mappar `<adress> FÖRBÄTTRADE` (automatiskt
     /// förbättrat) och `<adress> TITTBILDER` (råa previews), där skärpefiltret i `ReelSelector.select`
@@ -91,7 +102,8 @@ nonisolated enum AddressFolderLayout {
     /// `<adress> FÄRDIGA` eller `<adress> red`, annars `<källmappens namn> FILM` bredvid källmappen.
     static func reelDir(forSource source: URL) -> URL {
         let name = source.lastPathComponent
-        let base = addressName(fromFinishedDir: name) ?? name
+        // Pipelinens filmförslag görs av `<adress> FÖRBÄTTRADE`: filmen hör ändå hemma i `<adress> FILM`.
+        let base = addressName(fromSourceDir: name) ?? name
         return source.deletingLastPathComponent().appendingPathComponent(reelDirName(base), isDirectory: true)
     }
 
