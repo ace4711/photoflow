@@ -93,12 +93,15 @@ final class ReelEditorModel {
     private(set) var format: ReelFormat = .vertical
     private(set) var count = 5
     private(set) var saveError: String?
+    /// Antal klipp med egen rörelse som den senaste ändringen klampade om (t.ex. vid formatbyte).
+    /// UI:t kan visa "Egna rörelser har anpassats" när det är > 0.
+    private(set) var adaptedCustomMotions = 0
     var selectedAssetID: String?
 
     static let specFileName = "reel.json"
     static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "tif", "tiff", "heic"]
     static let durationRange = 1.0...10.0
-    static let countRange = 3...8
+    static let countRange = 3...ReelSelector.maxCount
 
     @ObservationIgnored private var analysisTask: Task<Void, Never>?
     @ObservationIgnored private var renderTask: Task<Void, Never>?
@@ -146,9 +149,12 @@ final class ReelEditorModel {
         let placed = Dictionary(uniqueKeysWithValues: (spec?.timeline ?? []).enumerated().compactMap { i, clip in
             spec?.assets.first { $0.id == clip.asset }.map { ($0.sha256, i) }
         })
+        let userExcluded = Set(spec?.editor?.excludedAssets ?? [])
         let rows = candidates.map { c in
             CandidateRow(id: c.id, url: urls[c.id], filename: c.filename, room: c.room, category: c.category,
-                         score: scores[c.id] ?? 0, excludedReason: excluded[c.id], clipIndex: placed[c.id])
+                         score: scores[c.id] ?? 0,
+                         excludedReason: userExcluded.contains(c.id) ? "Utesluten av dig" : excluded[c.id],
+                         clipIndex: placed[c.id])
         }
         return rows.sorted {
             if ($0.excludedReason == nil) != ($1.excludedReason == nil) { return $0.excludedReason == nil }
@@ -278,11 +284,20 @@ final class ReelEditorModel {
 
     private var order: [String] { spec?.timeline.map(\.asset) ?? [] }
 
+    /// `editor` ändrar redigerarens val (`spec.editor`) i samma steg; tomma val tas bort.
     private func apply(order: [String], newAssets: [ReelSpec.Asset] = [], format: ReelFormat? = nil,
-                       overrides: [String: ReelMotionPlanner.ClipOverride]? = nil, op: String) {
-        guard let current = spec else { return }
-        spec = ReelComposer.rebuild(current, order: order, newAssets: newAssets, format: format,
-                                    overrides: overrides, op: op, now: now())
+                       overrides: [String: ReelMotionPlanner.ClipOverride]? = nil,
+                       editor: ((inout ReelSpec.EditorState) -> Void)? = nil, op: String) {
+        guard var current = spec else { return }
+        if let editor {
+            var e = current.editor ?? .init()
+            editor(&e)
+            current.editor = e.normalized
+        }
+        let rebuilt = ReelComposer.rebuild(current, order: order, newAssets: newAssets, format: format,
+                                           overrides: overrides, op: op, now: now())
+        adaptedCustomMotions = ReelComposer.adaptedCustomMotions(from: current, to: rebuilt)
+        spec = rebuilt
         if let format { self.format = format }
         revisionToken += 1
         if case .rendered = phase { phase = .ready }
@@ -327,7 +342,7 @@ final class ReelEditorModel {
         apply(order: o, op: "remove")
     }
 
-    /// Lägger bilden sist i filmen (högst 8 klipp).
+    /// Lägger bilden sist i filmen (högst `countRange.upperBound` klipp).
     func addCandidate(_ id: String) {
         guard order.count < Self.countRange.upperBound, let asset = newAsset(forCandidate: id) else { return }
         apply(order: order + [asset.id], newAssets: [asset], op: "add")
@@ -372,12 +387,91 @@ final class ReelEditorModel {
         apply(order: order, overrides: o, op: "duration")
     }
 
+    /// Förval av rörelse. `.custom` utan egen rörelse sedan tidigare utgår från klippets nuvarande
+    /// fit och rörelse; vilket annat förval som helst släpper en egen rörelse.
     func setPreset(_ assetID: String, _ preset: ReelMotionPlanner.Preset) {
         var o = currentOverrides()
         var entry = o[assetID] ?? .init()
         entry.preset = preset
+        if preset == .custom {
+            if entry.custom == nil, let clip = spec?.timeline.first(where: { $0.asset == assetID }) {
+                entry.custom = .init(fit: clip.fit, motion: clip.motion)
+            }
+        } else {
+            entry.custom = nil
+        }
         o[assetID] = entry.isDefault ? nil : entry
         apply(order: order, overrides: o, op: "motion")
+    }
+
+    /// Egen rörelse (dragna start/slut): låser klippets rörelse som `custom`.
+    func setCustomMotion(_ assetID: String, fit: ReelSpec.Fit, motion: ReelSpec.Motion) {
+        var o = currentOverrides()
+        var entry = o[assetID] ?? .init()
+        entry.preset = .custom
+        entry.custom = .init(fit: fit, motion: motion)
+        o[assetID] = entry
+        apply(order: order, overrides: o, op: "motion")
+    }
+
+    /// Låser klippets övergång in. `nil` = låst på filmens standardövergång; `{type: cut}` ger hårt klipp.
+    func setTransition(_ assetID: String, _ transition: ReelSpec.Transition?) {
+        var o = currentOverrides()
+        var entry = o[assetID] ?? .init()
+        entry.transitionLocked = true
+        entry.transition = transition
+        o[assetID] = entry
+        apply(order: order, overrides: o, op: "transition")
+    }
+
+    /// Tillbaka till automatisk övergång för klippet.
+    func clearTransition(_ assetID: String) {
+        var o = currentOverrides()
+        var entry = o[assetID] ?? .init()
+        entry.transitionLocked = false
+        entry.transition = nil
+        o[assetID] = entry.isDefault ? nil : entry
+        apply(order: order, overrides: o, op: "transition")
+    }
+
+    func setTempo(_ tempo: ReelMotionPlanner.Tempo) {
+        apply(order: order, editor: { $0.tempo = tempo.rawValue }, op: "tempo")
+    }
+
+    func setOrderLocked(_ locked: Bool) {
+        apply(order: order, editor: { $0.orderLocked = locked }, op: "orderLock")
+    }
+
+    /// Låser/släpper en bild (sha256) som "ska vara med" vid nästa förslag. Låsning släpper en uteslutning.
+    func togglePinned(_ candidateID: String) {
+        apply(order: order, editor: { e in
+            var pinned = e.pinnedAssets ?? []
+            if let i = pinned.firstIndex(of: candidateID) { pinned.remove(at: i) } else {
+                pinned.append(candidateID)
+                e.excludedAssets?.removeAll { $0 == candidateID }
+            }
+            e.pinnedAssets = pinned
+        }, op: "pin")
+    }
+
+    /// Utesluter/återtar en bild (sha256). Uteslutning släpper en låsning, och en bild som är med i
+    /// filmen tas bort ur den om filmen har fler än ett klipp.
+    func toggleExcluded(_ candidateID: String) {
+        let excluding = !(spec?.editor?.excludedAssets ?? []).contains(candidateID)
+        var o = order
+        if excluding, o.count > 1,
+           let asset = spec?.assets.first(where: { $0.sha256 == candidateID && o.contains($0.id) }) {
+            o.removeAll { $0 == asset.id }
+            if selectedAssetID == asset.id { selectedAssetID = nil }
+        }
+        apply(order: o, editor: { e in
+            var excluded = e.excludedAssets ?? []
+            if let i = excluded.firstIndex(of: candidateID) { excluded.remove(at: i) } else {
+                excluded.append(candidateID)
+                e.pinnedAssets?.removeAll { $0 == candidateID }
+            }
+            e.excludedAssets = excluded
+        }, op: "exclude")
     }
 
     func setFormat(_ newFormat: ReelFormat) {
@@ -385,7 +479,7 @@ final class ReelEditorModel {
         apply(order: order, format: newFormat, op: "format")
     }
 
-    /// Nytt automatiskt förslag med `n` bilder. Ersätter manuella ändringar.
+    /// Nytt förslag med `n` bilder. Låsta val behålls (se `suggestAgain`).
     func setCount(_ n: Int) {
         let clamped = min(max(n, Self.countRange.lowerBound), Self.countRange.upperBound)
         guard clamped != count || spec == nil else { return }
@@ -393,15 +487,29 @@ final class ReelEditorModel {
         suggestAgain()
     }
 
-    /// Kastar manuella ändringar och föreslår filmen på nytt (nuvarande antal och format).
+    /// Föreslår filmen på nytt (nuvarande antal och format) men behåller låsen: pinnade och
+    /// uteslutna bilder, per-bild-lås (förval, längd, övergång, egen rörelse) för bilder som väljs
+    /// igen, tempo och ordningslås (se `ReelComposer.compose(preserving:)`).
     func suggestAgain() {
+        recompose(preserving: spec)
+    }
+
+    /// Som `suggestAgain` men kastar alla lås, inklusive redigerarens val (`editor`).
+    func startOver() {
+        recompose(preserving: nil)
+    }
+
+    private func recompose(preserving previous: ReelSpec?) {
         guard !items.isEmpty else { return }
         let specDir = reelDirectory ?? FileManager.default.temporaryDirectory
-        let result = ReelComposer.compose(items: items, specDirectory: specDir, options: options())
+        let result = ReelComposer.compose(items: items, specDirectory: specDir, options: options(), preserving: previous)
         candidates = result.candidates
         urls = result.urls
         selection = result.selection
         spec = result.spec
+        // Låsta bilder kan göra filmen längre än begärt antal.
+        count = min(max(count, result.spec.assets.count), Self.countRange.upperBound)
+        adaptedCustomMotions = 0
         selectedAssetID = nil
         revisionToken += 1
         if case .rendered = phase { phase = .ready }

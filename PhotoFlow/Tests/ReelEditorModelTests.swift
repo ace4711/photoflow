@@ -182,7 +182,8 @@ struct ReelEditorModelTests {
         model.setCount(7)
         #expect(model.clipRows.count == 7)
         model.setCount(20)
-        #expect(model.count == 8)
+        #expect(model.count == ReelEditorModel.countRange.upperBound)
+        #expect(ReelEditorModel.countRange.upperBound == 12)
         #expect(model.clipRows.count == 7)   // bara sju bilder finns
     }
 

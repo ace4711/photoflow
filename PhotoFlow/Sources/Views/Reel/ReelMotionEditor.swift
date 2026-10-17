@@ -28,9 +28,11 @@ struct ReelMotionEditor: View {
             }
 
             Picker("Rörelse", selection: Binding(get: { row.preset }, set: { onPreset($0) })) {
-                ForEach(ReelMotionPlanner.Preset.allCases, id: \.self) { preset in
+                ForEach(ReelMotionPlanner.Preset.selectableCases, id: \.self) { preset in
                     Text(preset.label).tag(preset)
                 }
+                // Egen rörelse väljs inte i menyn, men visas när klippet har en.
+                if row.preset == .custom { Text(ReelMotionPlanner.Preset.custom.label).tag(ReelMotionPlanner.Preset.custom) }
             }
             .pickerStyle(.menu)
 
