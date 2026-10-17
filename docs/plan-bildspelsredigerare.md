@@ -1,6 +1,13 @@
 # Plan: Interaktiv bildspelsredigerare ("Regi")
 
-*Version 1, 17 oktober 2026. Bara plan, ingen kod är skriven. Bygger vidare på `plan-bildspelsmodul.md` (Fas 1–2 genomförda) och `reel-spec-v1.md`.*
+*Version 1, 17 oktober 2026. Bygger vidare på `plan-bildspelsmodul.md` (Fas 1–2 genomförda) och `reel-spec-v1.md`.*
+
+**Status 17 oktober 2026:** R0–R5 är genomförda på grenen `forbattringar`. Besluten i avsnitt 7 följer rekommendationerna. Swift: 288 Reel-tester gröna, bygget utan varningar. Webben: 40 tester. Servern: 62 tester. Efter R4 gjordes en adversariell granskning av R0–R4 (fyra perspektiv, två skeptiker per fynd), och 18 bekräftade fel rättades. R5 granskades på samma sätt. Avvikelser och tillägg mot planen:
+
+- `Clip.customMotion` (fotografens oklampade nycklar) infördes så att ett formatbyte fram och tillbaka inte ändrar en egen rörelse för gott (reel-spec 2.3).
+- "Föreslå igen", antal och "Börja om helt" behåller filmens id och höjer revisionen, så att synken mot mäklaren inte ser en ny film. Bilder med per-bild-lås räknas som pinnade vid nytt förslag.
+- Mäklaren kan inte byta bort en egen rörelse (menyn är låst), och servern (`server/src/locks.ts`) vägrar mäklarskrivningar som ändrar stil, tempo, ordningslås, låsta övergångar eller egna rörelser, eller som lägger till låsningar och uteslutningar. Ändringen i servern är inte driftsatt.
+- Kvar att verifiera i appen: dragningar i tidslinjen och på ramarna, dra från rutnätet, ⌘Z/⇧⌘Z i menyn Redigera, och hur flytande förhandsvisningen är med riktiga bilder.
 
 ---
 
