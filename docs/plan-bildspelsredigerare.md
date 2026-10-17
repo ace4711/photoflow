@@ -249,5 +249,7 @@ Nya fält på klipp (`timeline[]`):
 | **R6d** Redigeraren | Tidslinjeblock, rörelseeditor, Dela ruta med…/Dela upp, rutnät, varför | Manuellt i appen |
 | **R6e** Webb + server | Mäklarens webb ritar och bevarar rutor (inga redigeringskontroller för rutor), servern godtar v2 och låskontrollen skyddar rutor som fotografens val | `npm test`, rundtur Swift ↔ TS |
 
+**R6a är klar (17 oktober 2026):** spec i `reel-spec-v2.md`, tidslinje och båda renderarna, 8 nya testvektorer, datamodellen tål rutklipp. Servern är kvar på version 1 och vägrar en v2-spec tydligt (R6e öppnar den).
+
 R6a först (allt annat bygger på den). R6b och R6c kan sedan gå parallellt. Ingen v2-film skickas till mäklaren förrän R6e är driftsatt.
 
