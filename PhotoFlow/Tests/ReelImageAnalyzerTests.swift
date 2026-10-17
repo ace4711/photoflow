@@ -258,4 +258,45 @@ struct ReelImageAnalyzerTests {
         #expect(c.year == 2026 && c.month == 10 && c.day == 3 && c.hour == 19)
         #expect(ReelImageAnalyzer.parseExifDate("skräp") == nil)
     }
+
+    @Test("Pipelinens analys (lätt, med pipelinedata) ger en komplett cache: kvalitet, feature print och montageundersökning")
+    func pipelineAnalysisIsComplete() async throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("motiv.jpg")
+        try writeTestImage(to: file)
+        let cacheDir = dir.appendingPathComponent("FILM")
+        var pre = ReelImageAnalyzer.Precomputed()
+        pre.room = "Kök"                       // pipelinen har rum men varken poäng eller feature print
+        let items = try await ReelImageAnalyzer.analyze(
+            urls: [file], cacheDirectory: cacheDir, describe: false, precomputed: [file: pre],
+            qualityMeasurer: { _ in .init(score: 0.5, isUtility: false) },
+            featurePrintMeasurer: { _ in Data([0, 0, 128, 63]) })
+        let analysis = try #require(items.first?.analysis)
+        #expect(ReelImageAnalyzer.isComplete(analysis))
+        #expect(analysis.describedBy == "pipeline")
+        // Och den cachade filen är lika komplett.
+        let cached = try #require(ReelImageAnalyzer.loadCache(from: cacheDir)[analysis.sha256])
+        #expect(ReelImageAnalyzer.isComplete(cached))
+        // Ett äldre cacheinlägg utan fälten är inte komplett.
+        var old = cached
+        old.featurePrint = nil; old.panels = nil
+        #expect(!ReelImageAnalyzer.isComplete(old))
+    }
+
+    @Test("Modellbeskrivning: inte när pipelinen gett rum (nu eller i cachen)")
+    func modelDescriptionSkippedForPipelineRooms() async throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("motiv.jpg")
+        try writeTestImage(to: file)
+        var a = try #require(try await ReelImageAnalyzer.analyze(urls: [file], cacheDirectory: nil, describe: false).first?.analysis)
+        #expect(ReelImageAnalyzer.wantsModelDescription(describe: true, pipelineRoom: nil, analysis: a))
+        #expect(!ReelImageAnalyzer.wantsModelDescription(describe: false, pipelineRoom: nil, analysis: a))
+        #expect(!ReelImageAnalyzer.wantsModelDescription(describe: true, pipelineRoom: "Kök", analysis: a))
+        a.room = "Kök"; a.describedBy = "pipeline"
+        #expect(!ReelImageAnalyzer.wantsModelDescription(describe: true, pipelineRoom: nil, analysis: a))
+        a.describedBy = "aiTags"
+        #expect(ReelImageAnalyzer.wantsModelDescription(describe: true, pipelineRoom: nil, analysis: a))
+    }
 }

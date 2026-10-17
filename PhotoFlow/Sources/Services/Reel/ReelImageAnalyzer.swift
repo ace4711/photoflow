@@ -284,7 +284,6 @@ nonisolated enum ReelImageAnalyzer {
 
         // Pipelinens data ersätter modellfrågan bara när den faktiskt ger ett rum.
         let pipelineData = precomputed.flatMap { $0.hasData ? $0 : nil }
-        let wantsModel = describe && PhotoDescriptionService.isAvailable && pipelineData?.room == nil
         var analysis: ReelImageAnalysis
         if let cached = cache[sha] {
             analysis = cached          // mätningarna återanvänds; bara beskrivningen kan saknas
@@ -297,6 +296,10 @@ nonisolated enum ReelImageAnalyzer {
         }
         if Task.isCancelled { return nil }
         if let pipelineData { apply(pipelineData, to: &analysis) }
+        // En cachad analys som pipelinen redan beskrivit (rum från pipelinens taggar) frågar inte modellen
+        // igen: det kostade 1-2 s per bild vid första öppningen i redigeraren.
+        let wantsModel = wantsModelDescription(describe: describe && PhotoDescriptionService.isAvailable,
+                                               pipelineRoom: pipelineData?.room, analysis: analysis)
 
         // Montage: skarvdetektering (billig, räknas i efterhand för äldre cachade analyser).
         if analysis.panels == nil, let found = ReelPanelDetector.panels(url: url) { analysis.panels = found }
@@ -349,6 +352,18 @@ nonisolated enum ReelImageAnalyzer {
             if analysis.describedBy == nil { analysis.describedBy = "aiTags" }
         }
         return analysis
+    }
+
+    /// Har analysen allt redigeraren förväntar sig av en cachad bild (kvalitet, feature print, montageundersökning)?
+    /// Pipelinens filmförslag ska skriva en sådan cache, så att redigeraren inte räknar om något.
+    static func isComplete(_ analysis: ReelImageAnalysis) -> Bool {
+        analysis.qualityScore != nil && analysis.featurePrint?.isEmpty == false && analysis.panels != nil
+    }
+
+    /// Ska Foundation Models beskriva bilden? Inte när pipelinen gett ett rum nu, eller redan gjort det
+    /// i en cachad analys (`describedBy == "pipeline"` med rum).
+    static func wantsModelDescription(describe: Bool, pipelineRoom: String?, analysis: ReelImageAnalysis) -> Bool {
+        describe && pipelineRoom == nil && !(analysis.describedBy == "pipeline" && analysis.room != nil)
     }
 
     /// Montagets rum, kategori och bildtext = den viktigaste halvans (`ReelSelector.primaryPanelIndex`),
