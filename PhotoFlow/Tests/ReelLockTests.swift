@@ -289,6 +289,45 @@ struct ReelLockTests {
         #expect(model.spec!.provenance.edits!.count == edits + 3)
     }
 
+    @Test("Egen rörelse överlever formatbyte fram och tillbaka med fotografens oklampade nycklar")
+    func customMotionSurvivesFormatRoundTrip() throws {
+        let (model, root) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = model.clipRows[2].id
+        // 3:2-bild i 9:16: cx 0,2 och 0,7 ryms vid zoom 1; i 16:9 täcker utsnittet hela bredden.
+        let mine = ReelSpec.Motion(from: .init(cx: 0.2, cy: 0.5, zoom: 1), to: .init(cx: 0.7, cy: 0.5, zoom: 1))
+        model.setCustomMotion(id, fit: .cover, motion: mine)
+        #expect(clip(model, id)?.motion == mine)
+        #expect(clip(model, id)?.customMotion == nil)
+
+        model.setFormat(.landscape)
+        #expect(clip(model, id)?.motion.from.cx == 0.5)
+        #expect(clip(model, id)?.customMotion == mine)
+        model.setDuration(model.clipRows[0].id, seconds: 4)   // en ombyggnad till i 16:9
+        model.setFormat(.vertical)
+        #expect(clip(model, id)?.motion == mine)
+        #expect(clip(model, id)?.customMotion == nil)
+        #expect(clip(model, id)?.motionPreset == "custom")
+    }
+
+    @Test("Ändrad rörelse (t.ex. av mäklaren) vinner över gamla oklampade nycklar")
+    func staleCustomMotionIgnored() throws {
+        let (model, root) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = model.clipRows[2].id
+        let mine = ReelSpec.Motion(from: .init(cx: 0.2, cy: 0.5, zoom: 1), to: .init(cx: 0.7, cy: 0.5, zoom: 1))
+        model.setCustomMotion(id, fit: .cover, motion: mine)
+        model.setFormat(.landscape)
+        var remote = try #require(model.spec)
+        let i = try #require(remote.timeline.firstIndex { $0.asset == id })
+        let theirs = ReelSpec.Motion(from: .init(cx: 0.5, cy: 0.5, zoom: 1.4), to: .init(cx: 0.5, cy: 0.5, zoom: 1))
+        remote.timeline[i].motion = theirs
+        model.adoptRemoteSpec(remote)
+        model.setFormat(.vertical)
+        #expect(clip(model, id)?.motion.from.zoom == 1.4)
+        #expect(clip(model, id)?.customMotion == nil)
+    }
+
     @Test("setCount behåller lås och pinnad bild kommer med")
     func setCountKeepsPins() throws {
         let (model, root) = try makeModel()

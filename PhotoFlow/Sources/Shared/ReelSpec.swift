@@ -177,6 +177,11 @@ nonisolated struct ReelSpec: Codable, Sendable, Equatable {
         /// `{"type":"cut"}`). Låst och `transitionIn == nil` betyder "använd `style.defaultTransition`".
         /// Tillägg inom v1.
         var transitionLocked: Bool?
+        /// Fotografens egna nycklar (`motionPreset == "custom"`) före klampning mot formatet, satt
+        /// bara när `motion` fick klampas och därför skiljer sig. En ombyggnad klampar om från dem, så
+        /// att ett formatbyte fram och tillbaka inte ändrar den egna rörelsen för gott. Bara metadata
+        /// för redigeraren; renderare läser `motion`. Tillägg inom v1.
+        var customMotion: Motion?
     }
 
     /// Redigerarens val som gäller hela filmen. Bara metadata (se `ReelComposer`).

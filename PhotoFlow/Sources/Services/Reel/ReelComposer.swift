@@ -269,16 +269,27 @@ nonisolated enum ReelComposer {
     }
 
     /// Fotografens val per asset-id, avlästa ur specens klipp (`motionPreset`, `durationLocked`,
-    /// `transitionLocked`; för `custom` även `fit` och `motion`).
+    /// `transitionLocked`; för `custom` även `fit` och `motion`). En egen rörelse läses ur de
+    /// oklampade nycklarna (`customMotion`) när `motion` fortfarande är just dem klampade mot nuvarande
+    /// format; har `motion` ändrats på annat sätt (t.ex. i mäklarens redigerare) gäller `motion`.
     static func overrides(in spec: ReelSpec) -> [String: ReelMotionPlanner.ClipOverride] {
         var result: [String: ReelMotionPlanner.ClipOverride] = [:]
+        let images = Dictionary(plannerImages(spec.assets).map { ($0.assetID, $0) }, uniquingKeysWith: { a, _ in a })
+        let aspect = ReelMotionPlanner.frameAspect(spec.outputs.first ?? ReelFormat.vertical.output)
         for clip in spec.timeline {
             let preset = clip.motionPreset.flatMap(ReelMotionPlanner.Preset.init(rawValue:)) ?? .auto
             let locked = clip.transitionLocked == true
+            var custom: ReelMotionPlanner.CustomMotion?
+            if preset == .custom {
+                custom = .init(fit: clip.fit, motion: clip.motion)
+                if let source = clip.customMotion, let image = images[clip.asset] {
+                    let mine = ReelMotionPlanner.CustomMotion(fit: clip.fit, motion: source)
+                    if ReelMotionPlanner.clampedCustomMotion(image, frameAspect: aspect, custom: mine) == clip.motion { custom = mine }
+                }
+            }
             let o = ReelMotionPlanner.ClipOverride(
                 preset: preset, duration: clip.durationLocked == true ? clip.duration : nil,
-                transitionLocked: locked, transition: locked ? clip.transitionIn : nil,
-                custom: preset == .custom ? .init(fit: clip.fit, motion: clip.motion) : nil)
+                transitionLocked: locked, transition: locked ? clip.transitionIn : nil, custom: custom)
             if !o.isDefault { result[clip.asset] = o }
         }
         return result

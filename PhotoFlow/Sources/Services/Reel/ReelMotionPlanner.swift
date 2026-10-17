@@ -293,13 +293,14 @@ nonisolated enum ReelMotionPlanner {
 
             var fit = ReelSpec.Fit.cover
             var motion: ReelSpec.Motion
+            var unclamped: ReelSpec.Motion?
             var panSign = 0.0
 
             if override.preset == .custom, let custom = override.custom {
                 // Egen rörelse: behåll fit och nycklar, klampa mittpunkt (och zoom ≥ 1) mot formatet.
                 fit = custom.fit
-                motion = .init(from: customKey(image, frameAspect, fit, custom.motion.from),
-                               to: customKey(image, frameAspect, fit, custom.motion.to))
+                motion = clampedCustomMotion(image, frameAspect: frameAspect, custom: custom)
+                if motion != custom.motion { unclamped = custom.motion }
                 let dx = motion.to.cx - motion.from.cx
                 panSign = abs(dx) > 0.02 ? (dx > 0 ? 1 : -1) : 0
                 if customKind(custom) == .pan { panRight = dx < 0 }
@@ -353,9 +354,17 @@ nonisolated enum ReelMotionPlanner {
             clips.append(.init(asset: image.assetID, duration: duration, fit: fit, motion: motion, transitionIn: transition,
                                motionPreset: override.preset == .auto ? nil : override.preset.rawValue,
                                durationLocked: override.duration == nil ? nil : true,
-                               transitionLocked: override.transitionLocked ? true : nil))
+                               transitionLocked: override.transitionLocked ? true : nil,
+                               customMotion: unclamped))
         }
         return clips
+    }
+
+    /// En egen rörelse klampad mot formatet som i `plan`: mittpunkterna inom bilden (oförändrade
+    /// bit för bit när de redan ryms) och zoom minst 1.
+    static func clampedCustomMotion(_ image: Image, frameAspect: Double, custom: CustomMotion) -> ReelSpec.Motion {
+        .init(from: customKey(image, frameAspect, custom.fit, custom.motion.from),
+              to: customKey(image, frameAspect, custom.fit, custom.motion.to))
     }
 
     // MARK: - Automatiska övergångar
