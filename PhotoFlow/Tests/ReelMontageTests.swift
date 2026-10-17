@@ -163,53 +163,52 @@ struct ReelMontageTests {
     func montageHelpers() {
         let m = cand("m", room: "Uteplats", axis: 9, panelRooms: ["Hall", "Uteplats"])
         #expect(ReelSelector.isMontage(m) && !ReelSelector.isMontage(villa()[0]))
-        #expect(ReelSelector.coveredTypes(of: m) == ["hall"])
-        #expect(ReelSelector.coveredTypes(of: villa()[0]).isEmpty)
         #expect(ReelSelector.montageRooms(m) == "Hall och Uteplats")
         let same = cand("s", room: "Badrum", axis: 9, panelRooms: ["Badrum", "badrum"])
         #expect(ReelSelector.montageRooms(same) == "Badrum (två bilder)")
-        #expect(ReelSelector.coveredTypes(of: same).isEmpty)
     }
 
-    @Test("Montaget räknas som en plats och täcker båda rumstyperna: de enskilda köks- och sovrumsbilderna behövs inte")
-    func montageCoversBothTypes() throws {
+    @Test("Ett montage täcker ingen rumstyp: den fristående köks- och sovrumsbilden går före, montaget är extra")
+    func montageIsExtraNotCoverage() throws {
         var list = villa()
-        list.append(cand("m", room: "Kök", q: 0.95, axis: 9, panelRooms: ["Kök", "Sovrum"]))
-        // Fem viktiga typer (fasad, trädgård, vardagsrum, kök, sovrum); montaget täcker kök och sovrum, så
-        // filmen blir en plats kortare. Golvet autoMinCount (5) sänks här för att se det.
-        var weights = ReelSelector.Weights()
-        weights.autoMinCount = 4
-        let sel = ReelSelector.select(list, weights: weights)
-        let ids = sel.picks.map(\.candidateID)
-        #expect(Set(ids) == ["fasad", "trad", "vard", "m"], "kök och sovrum täcks av montaget: \(ids)")
-        // Med standardgolvet (5 bilder) fyller en andra bild på, men aldrig ett sovrum: montaget täcker det.
-        let floor = ReelSelector.select(list).picks.map(\.candidateID)
-        #expect(floor.count == 5 && floor.contains("m") && !floor.contains("sov"))
-        let pick = try #require(sel.picks.first { $0.candidateID == "m" })
-        #expect(pick.roomType == "kök" && pick.slotKey == "kök")
-        #expect(pick.reason.hasPrefix("Montage: Kök och Sovrum, poäng "), "\(pick.reason)")
-        // Utan montaget: båda enskilda bilderna med.
-        let without = ReelSelector.select(villa()).picks.map(\.candidateID)
-        #expect(without.contains("kok") && without.contains("sov"))
-        #expect(ReelSelector.select(villa(), weights: weights).picks.count == 5)
-    }
-
-    @Test("Montaget kan väljas för den andra halvans typ, och täcker då den första")
-    func montageChosenForCoveredType() {
-        // Montage Hall | Sovrum: primärt sovrum (hall är nyttorum). Den enskilda sovrumsbilden är svagare.
-        var list = villa().filter { $0.id != "sov" }
-        list.append(cand("sov2", room: "Sovrum", q: 0.5, axis: 20))
-        list.append(cand("m", room: "Sovrum", q: 0.9, axis: 9, panelRooms: ["Hall", "Sovrum"]))
+        list.append(cand("m", room: "Kök", q: 0.95, axis: 9, panelRooms: ["Hall", "Kök"]))
+        // Automatiskt: fem viktiga typer, alla får en fristående bild; montaget (högst poäng) tas inte i runda 0.
         let ids = ReelSelector.select(list).picks.map(\.candidateID)
-        #expect(ids.contains("m") && !ids.contains("sov2") && !ids.contains("hall"))
+        #expect(ids.contains("kok") && ids.contains("sov") && ids.contains("vard") && ids.contains("fasad"))
+        #expect(!ids.contains("m"), "montaget ska inte ta ett kökets plats: \(ids)")
+        // Med plats över (exakt antal 7 av 8 kandidater) kommer montaget med som extra, efter de fristående.
+        let seven = ReelSelector.select(list, count: 7).picks
+        #expect(seven.count == 7 && seven.contains { $0.candidateID == "m" } && seven.contains { $0.candidateID == "kok" })
+        let pick = try #require(seven.first { $0.candidateID == "m" })
+        #expect(pick.reason.hasPrefix("Montage: Hall och Kök, poäng "), "\(pick.reason)")
     }
 
-    @Test("Exakt antal: montaget är en plats, och täckningen krymper inte filmen")
+    @Test("Saknas en fristående bild av montagets rumstyp tar montaget typens plats")
+    func montageWhenNoStandalone() {
+        var list = villa().filter { $0.id != "kok" }
+        list.append(cand("m", room: "Kök", q: 0.8, axis: 9, panelRooms: ["Kök", "Sovrum"]))
+        let ids = ReelSelector.select(list).picks.map(\.candidateID)
+        #expect(ids.contains("m") && ids.contains("sov"))        // sovrummet är fortfarande en egen plats
+    }
+
+    @Test("Dubblett: en fristående bild vinner över ett montage och montaget förklaras")
+    func standaloneBeatsMontageDuplicate() throws {
+        var list = villa()
+        var m = cand("m", room: "Uteplats", q: 0.99, axis: 3, panelRooms: ["Kök", "Uteplats"])   // samma feature print som "kok"
+        m.filename = "1.jpg"
+        list.append(m)
+        let sel = ReelSelector.select(list)
+        #expect(!sel.picks.contains { $0.candidateID == "m" })
+        let ex = try #require(sel.excluded.first { $0.candidateID == "m" })
+        #expect(ex.kind == .duplicate && ex.reason == "Visar samma som kok.jpg")
+    }
+
+    @Test("Exakt antal: montaget är en plats")
     func montageWithFixedCount() {
         var list = villa()
         list.append(cand("m", room: "Kök", q: 0.95, axis: 9, panelRooms: ["Kök", "Sovrum"]))
-        let sel = ReelSelector.select(list, count: 6)
-        #expect(sel.picks.count == 6 && sel.picks.contains { $0.candidateID == "m" })
+        let sel = ReelSelector.select(list, count: 8)
+        #expect(sel.picks.count == 8 && sel.picks.contains { $0.candidateID == "m" })
     }
 
     @Test("Ett montage öppnar inte filmen när en enskild hjältebild finns, och horisonten räknas inte för det")

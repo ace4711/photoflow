@@ -25,7 +25,7 @@ nonisolated struct ReelCandidate: Sendable, Equatable, Identifiable {
     var caption: String?
     /// Montage (R6b): rummet per halva (samma ordning som halvorna, tom sträng = okänt). Tom för vanliga
     /// bilder. `room` är då den viktigaste av halvornas typer (`ReelSelector.primaryPanelIndex`), och
-    /// montaget räknas som en plats i urvalet men täcker även den andra halvans rumstyp.
+    /// montaget räknas som en plats i urvalet men täcker ingen rumstyp (en extra bild, se `select`).
     var panelRooms: [String] = []
 }
 
@@ -307,20 +307,6 @@ nonisolated enum ReelSelector {
         }
     }
 
-    /// Rumstyperna ett montage täcker utöver sin egen (`roomType(c.room)`): den andra halvans typ. Tom för
-    /// vanliga bilder. Urvalet räknar dem som valda i "en av varje", så att samma rum inte tas en gång
-    /// till i onödan.
-    static func coveredTypes(of c: ReelCandidate) -> [String] {
-        guard isMontage(c) else { return [] }
-        let own = roomType(c.room)
-        var out: [String] = []
-        for r in c.panelRooms {
-            guard let t = roomType(r), t != "okänt", t != own, !out.contains(t) else { continue }
-            out.append(t)
-        }
-        return out
-    }
-
     /// "Hall och Uteplats" (de olika halvornas rum med stor begynnelsebokstav); nil för vanliga bilder.
     static func montageRooms(_ c: ReelCandidate) -> String? {
         guard isMontage(c) else { return nil }
@@ -453,11 +439,14 @@ nonisolated enum ReelSelector {
         var members: [Int: [Int]] = [:]
         for (i, g) in groups.enumerated() { if let g { members[g, default: []].append(i) } }
         for (_, idxs) in members {
-            guard let best = PhotoQualityService.bestIndex(in: idxs,
+            // En fristående bild vinner alltid över ett montage som visar samma sak.
+            let singles = idxs.filter { !isMontage(alive[$0]) }
+            guard let best = PhotoQualityService.bestIndex(in: singles.isEmpty ? idxs : singles,
                                                           qualityScore: { alive[$0].quality },
                                                           sharpness: { alive[$0].sharpness }) else { continue }
             for i in idxs where i != best {
-                exclude(alive[i], .duplicate, "Dubblett av \(alive[best].filename)")
+                exclude(alive[i], .duplicate, isMontage(alive[i]) && !isMontage(alive[best])
+                        ? "Visar samma som \(alive[best].filename)" : "Dubblett av \(alive[best].filename)")
             }
         }
 
@@ -509,11 +498,7 @@ nonisolated enum ReelSelector {
         func typeOf(_ c: ReelCandidate) -> String? { roomType(c.room) }
         func typeKey(_ c: ReelCandidate) -> String { typeOf(c) ?? "okänt" }
         var byType: [String: [ReelCandidate]] = [:]
-        for c in survivors {
-            byType[typeKey(c), default: []].append(c)
-            // Ett montage kan också väljas för den andra halvans rumstyp (och täcker då den första).
-            for t in coveredTypes(of: c) { byType[t, default: []].append(c) }
-        }
+        for c in survivors { byType[typeKey(c), default: []].append(c) }
         for k in byType.keys { byType[k]?.sort { score($0) > score($1) } }
         func isHero(_ c: ReelCandidate) -> Bool { typeOf(c).map(weights.heroRooms.contains) ?? false }
         func lowestClass(_ pool: [ReelCandidate]) -> [ReelCandidate] {
@@ -596,15 +581,6 @@ nonisolated enum ReelSelector {
         func add(_ c: ReelCandidate) {
             pickedIDs.append(c.id); picked.append(c)
             typeCounts[typeKey(c), default: 0] += 1
-            // Ett montage täcker även den andra halvans rumstyp ("en av varje"). I automatiskt läge blir
-            // filmen en plats kortare för varje viktig typ som därmed redan var täckt (men aldrig kortare
-            // än `autoMinCount`), så att platsen inte går till en andra bild av ett rum som redan syns.
-            for t in coveredTypes(of: c) {
-                if fixedCount == nil, (typeCounts[t] ?? 0) == 0, isImportant(t) {
-                    target = max(target - 1, weights.autoMinCount, pinned.count)
-                }
-                typeCounts[t, default: 0] += 1
-            }
         }
         for id in pinnedList { if let c = byID[id] { add(c) } }
 
@@ -614,12 +590,10 @@ nonisolated enum ReelSelector {
             add(c.candidate)
         }
 
-        // `type`: rumstypen bilden väljs för i "en av varje" (ett montage kan väljas för båda sina typer;
-        // avdraget räknas då på den typen, inte alltid på montagets primära).
-        func mmr(_ c: ReelCandidate, for type: String? = nil) -> Double {
+        func mmr(_ c: ReelCandidate) -> Double {
             var rel = score(c)
             // Rumsdiversitet: samma rumstyp en gång till får ett avdrag som växer med antalet gånger.
-            if let n = typeCounts[type ?? typeKey(c)], n > 0 { rel -= Double(n) * weights.roomRepeatPenalty / weights.lambda }
+            if let n = typeCounts[typeKey(c)], n > 0 { rel -= Double(n) * weights.roomRepeatPenalty / weights.lambda }
             return weights.lambda * rel - (1 - weights.lambda) * maxSimilarity(c, to: pickedIDs)
         }
         func remaining(_ type: String) -> [ReelCandidate] { (byType[type] ?? []).filter { !pickedIDs.contains($0.id) } }
@@ -633,9 +607,12 @@ nonisolated enum ReelSelector {
                 if picked.count >= target { break rounds }
                 let cls = roomClass(type, weights)
                 guard cls.tier <= 2, (typeCounts[type] ?? 0) == round else { continue }
-                let pool = remaining(type)
+                // Ett montage täcker ingen rumstyp: det är en extra bild som tas först när varje typ har en
+                // fristående (runda 1 och framåt), eller om typen inte har någon fristående bild alls.
+                let standalone = (byType[type] ?? []).contains { !isMontage($0) }
+                let pool = remaining(type).filter { round > 0 || !standalone || !isMontage($0) }
                 if cls.tier == 2, (pool.map(score).max() ?? 0) < weights.bathroomMinScore { continue }
-                guard let best = pool.max(by: { mmr($0, for: type) < mmr($1, for: type) }) else { continue }
+                guard let best = pool.max(by: { mmr($0) < mmr($1) }) else { continue }
                 add(best)
             }
         }
@@ -730,7 +707,7 @@ nonisolated enum ReelSelector {
 
     private static func roomReason(_ c: ReelCandidate, score: Double, siblings: [ReelCandidate]) -> String {
         if let rooms = montageRooms(c) {
-            // "Montage: Hall och Uteplats, poäng 0,72"; räknas som en plats och täcker båda rumstyperna.
+            // "Montage: Hall och Uteplats, poäng 0,72"; räknas som en plats (en extra bild, täcker ingen rumstyp).
             return "Montage: \(rooms), poäng \(fmt(score))"
         }
         let n = siblings.count
