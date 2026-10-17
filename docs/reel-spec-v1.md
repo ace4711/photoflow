@@ -36,6 +36,7 @@ Läsare **ska** ignorera okända fält på alla nivåer. Skrivare **bör** skriv
 | `brand` | objekt eller `null` | Reserverad. |
 | `outputs[]` | lista | Exportprofiler: `{id, aspect, width, height, fps, encoding?{codec, bitrateMbps?, audio?}}`. `width`/`height`/`fps` styr renderingen; `encoding` får ignoreras av en webbförhandsvisning. |
 | `provenance` | objekt | `{generator, autoSelection?[{asset, slot, reason}], edits?[{at, by, op}]}`. Påverkar inte rendering. |
+| `editor?` | objekt | Redigerarens val: `{pinnedAssets?[sha256], excludedAssets?[sha256], orderLocked?, tempo?}`. `pinnedAssets` ska alltid vara med och `excludedAssets` aldrig vid ett nytt förslag, `orderLocked` hindrar förslaget från att flytta låsta klipp, `tempo` är `calm`/`normal`/`fast` (längdfaktor 1,2 / 1,0 / 0,85 på automatiska längder). Utelämnas när inget är satt. Bara metadata; renderare ignorerar det. Tillägg inom v1. |
 
 ### 2.1 `assets[]`
 
@@ -54,13 +55,15 @@ Läsare **ska** ignorera okända fält på alla nivåer. Skrivare **bör** skriv
 
 ### 2.3 `timeline[]`
 
-`{asset, duration, fit, motion, transitionIn?, motionPreset?, durationLocked?}`
+`{asset, duration, fit, motion, transitionIn?, motionPreset?, durationLocked?, transitionLocked?}`
 
 - `duration`: sekunder, > 0.
 - `fit`: `"cover"` eller `"contain-blur"`.
 - `motion`: `{from, to}` där varje nyckel är `{cx, cy, zoom}`. `cx`, `cy` är mittpunkten i bildkoordinater, `zoom` ≥ 1 är relativt basutsnittet (1 = hela cover-utsnittet).
 - `transitionIn`: `{type, direction?, duration}` med `type` ∈ `crossfade`, `cut`, `fadeThroughBlack`, `push`. `direction` ∈ `left`, `right`, `up`, `down` (bara `push`; saknas den används `left`). Ignoreras för klipp 0.
 - `motionPreset?`, `durationLocked?`: fotografens val i redigeraren (`zoomIn`, `zoomOut`, `panRight`, `panLeft`, `contain`; `true` när längden satts för hand). Bara metadata så att en ombyggnad bevarar valen; renderare läser `motion` och `duration`. Tillägg inom v1.
+- `motionPreset: "custom"`: start och slut har satts för hand (`fit` och `motion` är då fotografens). En ombyggnad behåller `fit` och `motion` men klampar om mittpunkterna mot aktuellt format (avsnitt 5) och `zoom` till minst 1.
+- `transitionLocked?`: `true` när övergången satts för hand; en ombyggnad behåller då `transitionIn`, även `{"type":"cut"}`. Låst och `transitionIn` saknas betyder "använd `style.defaultTransition`". Tillägg inom v1.
 
 ## 3. Tid
 

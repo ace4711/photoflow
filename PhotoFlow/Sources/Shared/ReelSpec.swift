@@ -43,6 +43,9 @@ nonisolated struct ReelSpec: Codable, Sendable, Equatable {
     var brand: Brand?
     var outputs: [Output]
     var provenance: Provenance
+    /// Redigerarens val (lås, tempo). Bara metadata; renderare ignorerar det. Nil = utelämnas
+    /// vid kodning, så att filmer utan lås kodas exakt som förut. Tillägg inom v1.
+    var editor: EditorState?
 
     /// Kan den här koden läsa filen? (`schema` rätt och inget brytande krav.)
     var isReadable: Bool {
@@ -170,6 +173,38 @@ nonisolated struct ReelSpec: Codable, Sendable, Equatable {
         var motionPreset: String?
         /// true när fotografen satt längden själv, så att en ombyggnad inte räknar om den.
         var durationLocked: Bool?
+        /// true när övergången satts för hand: en ombyggnad behåller då `transitionIn` (även
+        /// `{"type":"cut"}`). Låst och `transitionIn == nil` betyder "använd `style.defaultTransition`".
+        /// Tillägg inom v1.
+        var transitionLocked: Bool?
+    }
+
+    /// Redigerarens val som gäller hela filmen. Bara metadata (se `ReelComposer`).
+    /// Alla fält är valfria; ett tomt objekt skrivs aldrig (se `isEmpty`). Tillägg inom v1.
+    nonisolated struct EditorState: Codable, Sendable, Equatable {
+        /// Bilder (sha256) som alltid ska vara med vid "Föreslå igen".
+        var pinnedAssets: [String]?
+        /// Bilder (sha256) som aldrig ska föreslås.
+        var excludedAssets: [String]?
+        /// true = "Föreslå igen" flyttar inte låsta klipp.
+        var orderLocked: Bool?
+        /// "calm", "normal" eller "fast": faktor på planerarens längder.
+        var tempo: String?
+
+        var isEmpty: Bool {
+            (pinnedAssets ?? []).isEmpty && (excludedAssets ?? []).isEmpty
+                && orderLocked != true && (tempo ?? "normal") == "normal"
+        }
+
+        /// Samma värde med tomma fält borttagna, eller nil om inget är satt.
+        var normalized: EditorState? {
+            var e = self
+            if e.pinnedAssets?.isEmpty == true { e.pinnedAssets = nil }
+            if e.excludedAssets?.isEmpty == true { e.excludedAssets = nil }
+            if e.orderLocked != true { e.orderLocked = nil }
+            if e.tempo == "normal" { e.tempo = nil }
+            return isEmpty ? nil : e
+        }
     }
 
     /// Reserverad ljudbeskrivning. `audio` är `null` i v1.
