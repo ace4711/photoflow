@@ -27,9 +27,16 @@ struct ReelMotionEditor: View {
     private var analysis: ReelImageAnalysis? { model.analysis(forAsset: row.id) }
     private var shownMotion: ReelSpec.Motion? { draft ?? clip?.motion }
 
+    /// Rummen i klippet: "Kök + Matplats" för ett kollage, annars klippets rum.
+    private var roomsText: String? {
+        guard let clip, ReelPanelEdit.kind(of: clip) == .collage else { return row.room }
+        let rooms = model.panelInfos(forAsset: row.id).compactMap(\.room)
+        return rooms.isEmpty ? row.room : rooms.joined(separator: " + ")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Klipp \(row.index + 1)\(row.room.map { " · \($0)" } ?? "")")
+            Text("Klipp \(row.index + 1)\(roomsText.map { " · \($0)" } ?? "")")
                 .font(.headline)
             Text(row.filename)
                 .font(.caption)
@@ -38,11 +45,8 @@ struct ReelMotionEditor: View {
                 .truncationMode(.middle)
 
             if let clip, clip.fit == .panels {
-                // Rutklipp (spec v2) har ingen rörelseeditor än: layout, rutor och ingång redigeras i R6d.
-                Label("\(Self.panelsDescription(clip)). Rutklipp redigeras i R6d; här går det bara att ändra längden.",
-                      systemImage: "rectangle.split.2x1")
-                    .font(.callout)
-                    .fixedSize(horizontal: false, vertical: true)
+                // Rutklipp (spec v2): rutor, layout, ingång och inramning (R6d).
+                ReelPanelsEditor(model: model, row: row, clip: clip)
             } else {
                 Picker("Rörelse", selection: Binding(get: { row.preset }, set: { p in act { model.setPreset(row.id, p) } })) {
                     ForEach(ReelMotionPlanner.Preset.selectableCases, id: \.self) { preset in
@@ -56,6 +60,7 @@ struct ReelMotionEditor: View {
                 if let clip, let g = geometry, let motion = shownMotion {
                     canvasSection(clip: clip, g: g, motion: motion)
                 }
+                pairSection
             }
 
             HStack {
@@ -75,7 +80,13 @@ struct ReelMotionEditor: View {
                 if let reason = model.motionReason(forAsset: row.id) {
                     Label("Rörelse: \(reason.text)", systemImage: reason == .chosenByUser ? "lock.fill" : "wand.and.stars")
                 }
-                Label("Urval: \(row.reason)", systemImage: row.reason == "Vald av dig" ? "lock.fill" : "wand.and.stars")
+                if let clip, clip.fit == .panels {
+                    ForEach(model.panelInfos(forAsset: row.id)) { info in
+                        Label("Urval, ruta \(info.index + 1): \(info.reason)", systemImage: info.reason == "Vald av dig" ? "lock.fill" : "wand.and.stars")
+                    }
+                } else {
+                    Label("Urval: \(row.reason)", systemImage: row.reason == "Vald av dig" ? "lock.fill" : "wand.and.stars")
+                }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -83,6 +94,52 @@ struct ReelMotionEditor: View {
         }
         .task(id: asset?.sha256) { await loadImage() }
         .onDisappear { nudgeTask?.cancel(); endNudge() }
+    }
+
+    // MARK: Dela ruta med…
+
+    /// Dela ruta med… för ett vanligt klipp (läge: nästa klick i rutnätet väljer partner; en bild kan också dras
+    /// hit från rutnätet), och för ett montage valet mellan sekvens och hela bilden.
+    @ViewBuilder
+    private var pairSection: some View {
+        let picking = model.partnerPickAssetID == row.id
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Button {
+                    if picking { model.cancelPickingPartner() } else { model.beginPickingPartner(for: row.id) }
+                } label: {
+                    Label(picking ? "Avbryt" : "Dela ruta med…", systemImage: "rectangle.split.1x2")
+                }
+                .controlSize(.small)
+                .help("Visa två bilder i samma filmruta: klicka sedan på den andra bilden i rutnätet, eller dra hit den")
+                if picking {
+                    Text("Klicka på den andra bilden i rutnätet.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.secondary.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+            .onDrop(of: [.plainText], isTargeted: nil) { providers in
+                guard let provider = providers.first else { return false }
+                let model = self.model, id = row.id
+                _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+                    guard let candidate = (object as? NSString).flatMap({ ReelCandidateDrag.candidateID(from: String($0)) }) else { return }
+                    Task { @MainActor in model.pairClip(id, withCandidate: candidate) }
+                }
+                return true
+            }
+            if model.isMontageClip(row.id) {
+                HStack {
+                    Text("Montage")
+                    Picker("Montage", selection: Binding(get: { model.montageLayout(forAsset: row.id) ?? .whole },
+                                                         set: { model.setMontageLayout(row.id, $0) })) {
+                        Text("Som två klipp (sekvens)").tag(ReelEditorModel.MontageLayout.sequence)
+                        Text("Som montage (hela bilden)").tag(ReelEditorModel.MontageLayout.whole)
+                    }
+                    .pickerStyle(.menu).labelsHidden().fixedSize()
+                }
+            }
+        }
     }
 
     /// "Stapel, 2 rutor" och liknande, för rutklipp.

@@ -169,6 +169,21 @@ struct ReelTimelineView: View {
                 .disabled(model.clipRows.count <= 1)
         }
         Divider()
+        // Rutor (R6d): Dela ruta med… för ett vanligt klipp, Dela upp och Byt plats för ett rutklipp.
+        if row.panelKind == .none {
+            Button("Dela ruta med…", systemImage: "rectangle.split.1x2") {
+                selectClip(block)
+                model.beginPickingPartner(for: id)
+            }
+        } else {
+            Button(row.panelKind == .montage ? "Dela upp (hela bilden)" : "Dela upp", systemImage: "rectangle.split.2x1.slash") {
+                model.splitPanels(id)
+            }
+            Button("Byt plats på rutorna", systemImage: "arrow.left.arrow.right") { model.swapPanels(id) }
+            if row.panelsLocked {
+                Button("Automatiska rutor") { model.restorePanelsAuto(id) }
+            }
+        }
         Button("Visa klippet", systemImage: "slider.horizontal.3") { selectClip(block) }
         if block.index > 0 {
             Button("Ändra övergången in…", systemImage: "rectangle.righthalf.inset.filled") {
@@ -322,7 +337,12 @@ struct ReelTimelineView: View {
             model.insertCandidate(id, at: index)
         case .replace(let index):
             guard let spec = model.spec, spec.timeline.indices.contains(index) else { return }
-            model.replaceClip(spec.timeline[index].asset, withCandidate: id)
+            // Alt (⌥) vid släppet: bilden blir andra ruta i klippet (Dela ruta med…) i stället för att byta klippets bild.
+            if NSEvent.modifierFlags.contains(.option), spec.timeline[index].fit != .panels {
+                model.pairClip(spec.timeline[index].asset, withCandidate: id)
+            } else {
+                model.replaceClip(spec.timeline[index].asset, withCandidate: id)
+            }
         }
         if let spec = model.spec, let selected = model.selectedAssetID,
            let i = spec.timeline.firstIndex(where: { $0.asset == selected }) {
@@ -590,11 +610,31 @@ private struct ClipBlock: View {
     let isLocked: Bool
     let lockHelp: String
 
-    var body: some View {
-        ZStack(alignment: .topLeading) {
+    /// En bild, eller för ett rutklipp två tumnaglar delade på längden (sida vid sida, efter varandra) eller på
+    /// höjden (stapel).
+    @ViewBuilder private var thumbnails: some View {
+        if row.layout == nil {
             LocalThumbnailView(url: row.url)
                 .frame(width: width, height: height)
                 .clipped()
+        } else if row.layout == .stack {
+            VStack(spacing: 1) {
+                LocalThumbnailView(url: row.url).frame(width: width, height: (height - 1) / 2).clipped()
+                LocalThumbnailView(url: row.secondURL).frame(width: width, height: (height - 1) / 2).clipped()
+            }
+            .frame(width: width, height: height)
+        } else {
+            HStack(spacing: 1) {
+                LocalThumbnailView(url: row.url).frame(width: (width - 1) / 2, height: height).clipped()
+                LocalThumbnailView(url: row.secondURL).frame(width: (width - 1) / 2, height: height).clipped()
+            }
+            .frame(width: width, height: height)
+        }
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            thumbnails
             LinearGradient(colors: [.black.opacity(0.55), .clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom)
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 4) {
@@ -607,6 +647,13 @@ private struct ClipBlock: View {
                         Image(systemName: "lock.fill").font(.caption2).help(lockHelp)
                     }
                     Spacer(minLength: 0)
+                    if let layout = row.layout, width > 40 {
+                        Image(systemName: ReelPanelEdit.symbol(layout))
+                            .font(.caption2.weight(.bold))
+                            .padding(3)
+                            .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 4))
+                            .help("\(row.panelKind == .montage ? "Montage" : "Kollage"): \(ReelPanelEdit.label(layout).lowercased())")
+                    }
                 }
                 Spacer(minLength: 0)
                 if width > 70 {

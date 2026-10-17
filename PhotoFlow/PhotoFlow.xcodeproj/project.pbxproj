@@ -25,6 +25,7 @@
 		0B982544AC07E2C9EB008100 /* ReelWebVariantTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A3FC2DB9406841FF32D7631 /* ReelWebVariantTests.swift */; };
 		0BC4E6F7B5881C02478E834F /* TranslationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 946EF029FC6B8E82370D3CED /* TranslationService.swift */; };
 		0C9123D0C252617FCAA8388B /* ReelWebVariant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 395F9C90A632FE40FB1E4F83 /* ReelWebVariant.swift */; };
+		0CFEEE08F26793AE71AB76C4 /* ReelPanelsEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7D7A134163A5D15D38DA82 /* ReelPanelsEditor.swift */; };
 		0D48002A6E2A57144C384E9A /* CalendarService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CFA4B712D2C1C7EB5465997 /* CalendarService.swift */; };
 		0D63A2BADE4D863296059458 /* ReelPanelDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7658151C1CB1E97D2B8366F9 /* ReelPanelDetectorTests.swift */; };
 		0DA02DBD56174A0784297599 /* PipelineRunner+Culling.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E415E22A558BC52CAA2A98E /* PipelineRunner+Culling.swift */; };
@@ -652,6 +653,7 @@
 		B778E538EE39AE2387680410 /* SessionManifestStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionManifestStoreTests.swift; sourceTree = "<group>"; };
 		B7CBAC052E63A0845336EE11 /* PipelineRunnerAddressCorrectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineRunnerAddressCorrectionTests.swift; sourceTree = "<group>"; };
 		B98781CC984CC24BFB845B28 /* ReelPreviewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelPreviewModel.swift; sourceTree = "<group>"; };
+		BA7D7A134163A5D15D38DA82 /* ReelPanelsEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelPanelsEditor.swift; sourceTree = "<group>"; };
 		BC1A3A81863588A1CC6D8A48 /* EditSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditSelection.swift; sourceTree = "<group>"; };
 		BC50553079593BFD753FCA7A /* PipelineRunner+Relocate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+Relocate.swift"; sourceTree = "<group>"; };
 		BDF1F493959BE53E660FB778 /* PhotoNote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoNote.swift; sourceTree = "<group>"; };
@@ -895,6 +897,7 @@
 				9AA78C5668CD04C90B856025 /* ReelFilmListView.swift */,
 				212C2D18912F8D06D56D3F62 /* ReelKeyframeCanvas.swift */,
 				CC631062CE2777F4AB6250A5 /* ReelMotionEditor.swift */,
+				BA7D7A134163A5D15D38DA82 /* ReelPanelsEditor.swift */,
 				4A06835453C8AF2B1D27AD7D /* ReelPlayerModel.swift */,
 				3CA9EA4AF603AA55B99241EB /* ReelPlayerView.swift */,
 				B98781CC984CC24BFB845B28 /* ReelPreviewModel.swift */,
@@ -1737,6 +1740,7 @@
 				3D1A836DA889D5344D1E41FD /* ReelMotionPlanner.swift in Sources */,
 				946CBDABB61BB15439F054DA /* ReelPanelDetector.swift in Sources */,
 				4E8D391B821789011A355016 /* ReelPanelEdit.swift in Sources */,
+				0CFEEE08F26793AE71AB76C4 /* ReelPanelsEditor.swift in Sources */,
 				3A7EECA578355D1C038CEBFA /* ReelPlayerModel.swift in Sources */,
 				77132B4D6B5F0CBD50CED9E5 /* ReelPlayerView.swift in Sources */,
 				41CF600422745ECD811F472C /* ReelPreviewModel.swift in Sources */,

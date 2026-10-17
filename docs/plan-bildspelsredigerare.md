@@ -255,5 +255,7 @@ Nya fält på klipp (`timeline[]`):
 
 **R6c är klar (17 oktober 2026):** `ReelCollage` (partnerregler), urvalet räknar kollage som en plats och ger nästa rumstyp den lediga platsen, planeraren gör `stack` (9:16) och `side` (16:9) med svag zoom 1,00 → 1,04 och inglidning, kollage upplöses vid formatbyte, stående bild i 9:16 blir aldrig contain-blur. Öppning och avslut är aldrig kollage; inget automatiskt kollage i 1:1. Beslut "panorering + kollage": breda utomhusbilder i 9:16/1:1 som inte hamnar i kollage får cover med panorering över 0,5 av bredden på 3,8–4,0 s (toppfart 0,19 bildbredder/s); contain-blur väljs bara av fotografen. Utomhusbilder kan stå i kollage (fasad–fasad, fasad–trädgård, uteplats–trädgård, uteplats–utsikt).
 
+**R6d är klar (17 oktober 2026):** `ReelPanelEdit` + `ReelEditorModel+Panels` (Dela ruta med…, Dela upp, Byt plats, layout, ingång, inramning per ruta, byte av ruta, Tillbaka till automatiskt, alla som ångringssteg och låsta som `custom`), tidslinjeblock med två tumnaglar och layoutikon, rutredigerare i rörelseeditorn, rutnätet märker "klipp N · ruta 1/2", feature print räknas i efterhand. Beslut: automatiska kollage kommer tillbaka efter formatbyte (märkta upplösta klipp slås ihop igen), att låsa en bild i ett automatiskt kollage låser kollaget. Regler i `reel-spec-v2.md` avsnitt 11. Kvar att prova manuellt i appen.
+
 R6a först (allt annat bygger på den). R6b och R6c kan sedan gå parallellt. Ingen v2-film skickas till mäklaren förrän R6e är driftsatt.
 

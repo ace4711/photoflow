@@ -30,6 +30,31 @@ nonisolated enum ReelPanelEdit {
 
     // MARK: - Layouter
 
+    /// Layoutens namn och SF-symbol i menyer och tidslinjen.
+    static func label(_ layout: ReelSpec.PanelLayout) -> String {
+        switch layout {
+        case .stack: return "Stapel"
+        case .side: return "Sida vid sida"
+        case .sequence: return "Efter varandra"
+        }
+    }
+
+    static func symbol(_ layout: ReelSpec.PanelLayout) -> String {
+        switch layout {
+        case .stack: return "rectangle.split.1x2"
+        case .side: return "rectangle.split.2x1"
+        case .sequence: return "arrow.right.square"
+        }
+    }
+
+    static func label(_ type: ReelSpec.EntranceType) -> String {
+        switch type {
+        case .slide: return "Glid in"
+        case .fade: return "Tona in"
+        case .none: return "Ingen"
+        }
+    }
+
     /// Bildförhållande för en ruta i layouten. `sequence` fyller hela ramen.
     static func paneAspect(layout: ReelSpec.PanelLayout, frameAspect: Double, gutter: Double?) -> Double {
         if layout == .sequence { return frameAspect }

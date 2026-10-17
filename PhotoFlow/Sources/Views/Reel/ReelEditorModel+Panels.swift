@@ -13,6 +13,11 @@ extension ReelEditorModel {
     struct PanelInfo: Identifiable, Equatable {
         var index: Int
         var assetID: String
+        var sha256: String
+        /// Bildens längsta sida i pixlar (för att ladda en lagom stor kopia).
+        var originalLongEdge: Int
+        /// Urvalsskälet för bilden ("Vald av dig" för en bild fotografen lagt in själv).
+        var reason: String
         var url: URL?
         var filename: String
         var room: String?
@@ -65,11 +70,13 @@ extension ReelEditorModel {
         guard let spec, let clip = clip(forAsset: id), let panels = clip.panels, let aspect = frameAspect,
               ReelPanelEdit.kind(of: clip) != .none else { return [] }
         let pane = ReelPanelEdit.paneAspect(layout: clip.layout ?? .stack, frameAspect: aspect, gutter: clip.gutter)
+        let reasons = Dictionary((spec.provenance.autoSelection ?? []).map { ($0.asset, $0.reason) }, uniquingKeysWith: { a, _ in a })
         return panels.enumerated().compactMap { k, panel in
             guard let asset = spec.assets.first(where: { $0.id == panel.asset }) else { return nil }
             let candidate = candidates.first { $0.id == asset.sha256 }
             return PanelInfo(
-                index: k, assetID: asset.id, url: urls[asset.sha256],
+                index: k, assetID: asset.id, sha256: asset.sha256, originalLongEdge: max(asset.width, asset.height),
+                reason: reasons[asset.id] ?? "Vald av dig", url: urls[asset.sha256],
                 filename: candidate?.filename ?? asset.sources.first?.path ?? asset.id,
                 room: asset.analysis?.room, source: panel.source,
                 imageSize: CGSize(width: asset.width, height: asset.height), paneAspect: pane, key: panel.motion.from)

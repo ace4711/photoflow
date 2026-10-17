@@ -698,6 +698,11 @@ final class ReelEditorModel {
     /// redan med i filmen byter de två klippen plats i stället (ingen dubblett). En utesluten bild
     /// blir inte längre utesluten.
     func replaceClip(_ assetID: String, withCandidate id: String) {
+        // Ett kollage behåller sina rutor: bilden byter markerad ruta (första om ingen) i stället för att ta bort kollaget.
+        if panelKind(forAsset: assetID) == .collage, self.assetID(forCandidate: id) == nil {
+            replacePanel(assetID, panel: selectedAssetID == assetID ? selectedPanelIndex : 0, withCandidate: id)
+            return
+        }
         guard let pos = order.firstIndex(of: assetID) else { return }
         if let existing = self.assetID(forCandidate: id) {
             guard existing != assetID, let other = order.firstIndex(of: existing) else { return }

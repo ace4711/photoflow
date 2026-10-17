@@ -559,6 +559,21 @@ struct ReelPanelEditTests {
         #expect(model.clip(forAsset: id)?.fit == .panels && model.clip(forAsset: id)?.motionPreset == nil)
     }
 
+    @Test("Tidslinjens rad för ett rutklipp: layout och två bilder; Byt bild på ett kollage byter markerad ruta, ingen tappar kollaget")
+    func clipRowAndReplaceClip() throws {
+        let (model, root) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (clipID, partnerSha) = try lockedCollage(model)
+        let row = try #require(model.clipRows.first { $0.id == clipID })
+        #expect(row.layout == .stack && row.panelKind == .collage && row.panelsLocked && row.secondURL != nil && row.url != row.secondURL)
+        if !model.candidateRows.contains(where: { $0.clipIndex == nil && $0.excludedReason == nil }) { model.setCount(3) }
+        let fresh = try #require(model.candidateRows.first { $0.clipIndex == nil && $0.excludedReason == nil })
+        model.selectedAssetID = clipID
+        model.replaceClip(clipID, withCandidate: fresh.id)   // t.ex. släpp på klippet i tidslinjen
+        let clip = try #require(model.spec?.timeline.first { ReelPanelEdit.kind(of: $0) == .collage })
+        #expect(sha(model.spec!, clip.panels![0].asset) == fresh.id && sha(model.spec!, clip.panels![1].asset) == partnerSha)
+    }
+
     @Test("Sammandraget och varför: ett låst kollage nämner båda rummen och att du valt det")
     func explanations() throws {
         let (model, root) = try makeModel()

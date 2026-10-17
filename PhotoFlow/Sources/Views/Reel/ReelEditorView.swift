@@ -431,7 +431,7 @@ struct ReelEditorView: View {
                 .fixedSize()
                 .help("Visa bara bilder från ett rum")
                 Spacer()
-                Text("Dra en bild till tidslinjen: mellan två klipp infogas den, på ett klipp byter den bild.")
+                Text("Dra en bild till tidslinjen: mellan två klipp infogas den, på ett klipp byter den bild (med ⌥ delar den ruta).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -439,6 +439,19 @@ struct ReelEditorView: View {
             }
             .padding(.horizontal, 10)
             .padding(.top, 8)
+
+            if let anchor = model.partnerPickAssetID, let index = model.clipRows.firstIndex(where: { $0.id == anchor }) {
+                HStack(spacing: 8) {
+                    Image(systemName: "rectangle.split.1x2")
+                    Text("Dela ruta med…: klicka på den bild som ska dela filmruta med klipp \(index + 1).")
+                    Spacer()
+                    Button("Avbryt") { model.cancelPickingPartner() }
+                        .controlSize(.small)
+                }
+                .font(.callout)
+                .padding(8)
+                .background(Color.accentColor.opacity(0.15))
+            }
 
             ScrollView {
                 if shown.isEmpty {
@@ -480,7 +493,19 @@ struct ReelEditorView: View {
             Button("Lägg till sist") { model.addCandidate(row.id) }
                 .disabled(!model.canAddClip)
             if let selected = model.selectedAssetID, let index = model.clipRows.firstIndex(where: { $0.id == selected }) {
-                Button("Byt bild i klipp \(index + 1)") { model.replaceClip(selected, withCandidate: row.id) }
+                if model.panelKind(forAsset: selected) == .collage {
+                    Button("Byt ruta \(model.selectedPanelIndex + 1) i klipp \(index + 1)") {
+                        model.replacePanel(selected, panel: model.selectedPanelIndex, withCandidate: row.id)
+                    }
+                } else {
+                    Button("Byt bild i klipp \(index + 1)") { model.replaceClip(selected, withCandidate: row.id) }
+                }
+            }
+        }
+        if let selected = model.selectedAssetID, let index = model.clipRows.firstIndex(where: { $0.id == selected }),
+           model.canPair(selected, withCandidate: row.id) {
+            Button("Dela ruta med klipp \(index + 1)", systemImage: "rectangle.split.1x2") {
+                model.pairClip(selected, withCandidate: row.id)
             }
         }
     }
@@ -510,7 +535,7 @@ private struct CandidateCell: View {
                 .saturation(row.isUserExcluded ? 0 : 1)
                 .overlay(alignment: .topLeading) {
                     if let i = row.clipIndex {
-                        Text("\(i + 1)")
+                        Text(row.panelIndex.map { "\(i + 1)·\($0 + 1)" } ?? "\(i + 1)")
                             .font(.caption.bold())
                             .padding(.horizontal, 6).padding(.vertical, 2)
                             .background(Color.accentColor, in: Capsule())
@@ -537,6 +562,13 @@ private struct CandidateCell: View {
                 Text(ReelSelector.fmt(row.score))
                     .font(.caption).monospacedDigit().foregroundStyle(.secondary)
                     .help("Poäng i urvalet (0–1)")
+            }
+            // Rutbilder: var i filmen, så att båda bilderna i ett kollage syns som delar av samma klipp.
+            if row.panelIndex != nil, let label = row.filmLabel {
+                Label(label, systemImage: "rectangle.split.1x2")
+                    .font(.caption2)
+                    .foregroundStyle(Color.accentColor)
+                    .lineLimit(1)
             }
             if let reason = row.excludedReason {
                 Text(reason)
@@ -565,7 +597,9 @@ private struct CandidateCell: View {
         var lines = [row.filename]
         if let reason = row.excludedReason { lines.append(reason) } else if let reason = row.selectionReason { lines.append(reason) }
         if row.isPinned { lines.append("Låst i filmen") }
-        if row.clipIndex != nil {
+        if let label = row.filmLabel, row.panelIndex != nil {
+            lines.append("I filmen: \(label). Klicka för att markera klippet.")
+        } else if row.clipIndex != nil {
             lines.append("Klicka för att markera klippet")
         } else if isReplaceTarget {
             lines.append("Klicka för att byta det markerade klippets bild")
