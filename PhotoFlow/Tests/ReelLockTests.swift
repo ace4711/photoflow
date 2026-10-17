@@ -218,6 +218,77 @@ struct ReelLockTests {
         #expect(fresh.timeline.allSatisfy { $0.motionPreset == nil && $0.durationLocked == nil && $0.transitionLocked == nil })
     }
 
+    @Test("Föreslå igen behåller en handtillagd bild med egen rörelse, längd och övergång")
+    func suggestAgainKeepsLockedAddedImage() throws {
+        let (model, root) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let spare = try #require(model.candidateRows.last { $0.clipIndex == nil })
+        model.addCandidate(spare.id)
+        let id = try #require(model.selectedAssetID)
+        model.setCustomMotion(id, fit: .cover, motion: customMotion)
+        model.setDuration(id, seconds: 4.4)
+        model.setTransition(id, .init(type: .fadeThroughBlack, direction: nil, duration: 0.8))
+        #expect(model.spec?.editor?.pinnedAssets == nil)
+
+        for change in [{ model.suggestAgain() }, { model.setCount(4) }] {
+            change()
+            let spec = try #require(model.spec)
+            let asset = try #require(spec.assets.first { $0.sha256 == spare.id })
+            let c = try #require(spec.timeline.first { $0.asset == asset.id })
+            #expect(c.motionPreset == "custom")
+            #expect(c.motion == customMotion)
+            #expect(c.duration == 4.4 && c.durationLocked == true)
+            #expect(c.transitionLocked == true && c.transitionIn?.type == .fadeThroughBlack)
+        }
+    }
+
+    @Test("Låst klipp som inte väljs automatiskt behåller sin plats med ordningslås")
+    func orderLockKeepsLockedAddedImage() throws {
+        let (model, root) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let spare = try #require(model.candidateRows.last { $0.clipIndex == nil })
+        model.insertCandidate(spare.id, at: 1)
+        let id = try #require(model.selectedAssetID)
+        model.setDuration(id, seconds: 3.7)
+        model.setOrderLocked(true)
+        model.suggestAgain()
+        let spec = try #require(model.spec)
+        let asset = try #require(spec.assets.first { $0.sha256 == spare.id })
+        #expect(spec.timeline.firstIndex { $0.asset == asset.id } == 1)
+    }
+
+    @Test("Föreslå igen, antal och Börja om behåller spec-id, höjer revisionen och loggar steget")
+    func recomposeContinuesSpec() throws {
+        let (model, root) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: root) }
+        // Som efter en skickning och en antagen mäklarversion med brand och textlager.
+        var remote = try #require(model.spec)
+        remote.brand = .init(id: "maklarhuset", logo: nil, primaryColor: "#123456", font: nil)
+        remote.overlays = [.init(type: "address", text: "Lindvägen 12")]
+        model.adoptRemoteSpec(remote)
+        model.markSynced(revision: 1, status: "proposed")
+        let id = model.spec!.id
+        let created = model.spec!.createdAt
+        var revision = model.spec!.revision
+        let edits = model.spec!.provenance.edits?.count ?? 0
+
+        for (step, change) in [("suggestAgain", { model.suggestAgain() }), ("count", { model.setCount(6) }),
+                               ("startOver", { model.startOver() })] {
+            change()
+            let spec = try #require(model.spec)
+            #expect(spec.id == id, "\(step)")
+            #expect(spec.createdAt == created, "\(step)")
+            #expect(spec.revision == revision + 1, "\(step)")
+            #expect(spec.status == "draft", "\(step)")
+            #expect(spec.brand?.id == "maklarhuset", "\(step)")
+            #expect(spec.overlays.count == 1, "\(step)")
+            #expect(spec.provenance.edits?.last?.op == step, "\(step)")
+            #expect(spec.provenance.edits?.last?.by == "photographer", "\(step)")
+            revision = spec.revision
+        }
+        #expect(model.spec!.provenance.edits!.count == edits + 3)
+    }
+
     @Test("setCount behåller lås och pinnad bild kommer med")
     func setCountKeepsPins() throws {
         let (model, root) = try makeModel()

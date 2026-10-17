@@ -818,8 +818,8 @@ final class ReelEditorModel {
     }
 
     /// Föreslår filmen på nytt (nuvarande antal och format) men behåller låsen: pinnade och
-    /// uteslutna bilder, per-bild-lås (förval, längd, övergång, egen rörelse) för bilder som väljs
-    /// igen, tempo och ordningslås (se `ReelComposer.compose(preserving:)`).
+    /// uteslutna bilder, bilder med per-bild-lås (förval, längd, övergång, egen rörelse) med sina lås,
+    /// tempo och ordningslås (se `ReelComposer.compose(preserving:)`).
     func suggestAgain() {
         recompose(preserving: spec, op: "suggestAgain")
     }
@@ -837,7 +837,8 @@ final class ReelEditorModel {
         candidates = result.candidates
         urls = result.urls
         selection = result.selection
-        spec = result.spec
+        // Samma film i en ny version (id, revision, brand och logg följer med), även vid "Börja om helt".
+        spec = spec.map { ReelComposer.continuing(result.spec, from: $0, op: op, now: now()) } ?? result.spec
         // Låsta bilder kan göra filmen längre än begärt antal.
         count = min(max(count, result.spec.assets.count), Self.countRange.upperBound)
         adaptedCustomMotions = 0

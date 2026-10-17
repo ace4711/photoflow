@@ -92,11 +92,15 @@ nonisolated enum ReelComposer {
 
     /// Komponerar en film. Med `preserving` (nuvarande spec) behålls fotografens val när filmen
     /// föreslås om: `editor` (pinnade, uteslutna, ordningslås, tempo), stilen, och per-bild-lås
-    /// (förval, längd, övergång, egen rörelse) för bilder som väljs igen, matchade på sha256 eftersom
-    /// asset-id:n numreras om. Är `editor.orderLocked` satt behåller låsta klipp (pinnade bilder eller
-    /// bilder med något per-bild-lås som väljs igen) sin position i filmen när positionen finns kvar;
-    /// övriga bilder fyller de lediga platserna i förslagets ordning. Utan `preserving` är resultatet
-    /// helt automatiskt (och `editor` från `options` gäller).
+    /// (förval, längd, övergång, egen rörelse), matchade på sha256 eftersom asset-id:n numreras om.
+    /// En bild med något per-bild-lås räknas som pinnad vid urvalet (plan avsnitt 2: ett handändrat
+    /// beslut följer med bilden genom "Föreslå igen"), så en bild fotografen lagt in och ändrat
+    /// försvinner inte för att urvalet inte hade valt den; som för pinnade bilder kan filmen då bli
+    /// längre än begärt antal. Är `editor.orderLocked` satt behåller låsta klipp (pinnade bilder
+    /// eller bilder med något per-bild-lås) sin position i filmen när positionen finns kvar; övriga
+    /// bilder fyller de lediga platserna i förslagets ordning. Utan `preserving` är resultatet helt
+    /// automatiskt (och `editor` från `options` gäller). Specens identitet (id, revision) är alltid ny
+    /// här; en redigerare som föreslår om en befintlig film för den vidare med `continuing`.
     static func compose(items: [ReelImageAnalyzer.Item], specDirectory: URL, options: Options = Options(),
                         preserving previous: ReelSpec? = nil) -> Result {
         // Exakta kopior (samma innehåll) är samma bild: behåll första filen.
@@ -106,11 +110,10 @@ nonisolated enum ReelComposer {
         let byID = Dictionary(uniqueKeysWithValues: unique.map { ($0.analysis.sha256, $0) })
 
         let editor = (previous?.editor ?? options.editor)?.normalized
-        var selection = ReelSelector.select(candidates, count: options.count, weights: options.weights,
-                                            pinned: editor?.pinnedAssets ?? [], excluded: editor?.excludedAssets ?? [])
 
-        // Per-bild-lås från förra specen, på sha256.
+        // Per-bild-lås från förra specen, på sha256 (i filmens ordning).
         var lockedBySha: [String: ReelMotionPlanner.ClipOverride] = [:]
+        var lockedOrder: [String] = []
         var oldIndexBySha: [String: Int] = [:]
         if let previous {
             let shaByAsset = Dictionary(previous.assets.map { ($0.id, $0.sha256) }, uniquingKeysWith: { a, _ in a })
@@ -118,9 +121,13 @@ nonisolated enum ReelComposer {
             for (i, clip) in previous.timeline.enumerated() {
                 guard let sha = shaByAsset[clip.asset] else { continue }
                 oldIndexBySha[sha] = i
-                if let o = perAsset[clip.asset] { lockedBySha[sha] = o }
+                if let o = perAsset[clip.asset], lockedBySha[sha] == nil { lockedBySha[sha] = o; lockedOrder.append(sha) }
             }
         }
+        let pinnedIDs = editor?.pinnedAssets ?? []
+        var selection = ReelSelector.select(candidates, count: options.count, weights: options.weights,
+                                            pinned: pinnedIDs + lockedOrder.filter { !pinnedIDs.contains($0) },
+                                            excluded: editor?.excludedAssets ?? [])
 
         // Ordning: förslagets, men med låsta klipp kvar på sin plats om `orderLocked`.
         var picks = selection.picks.filter { byID[$0.candidateID] != nil }
@@ -173,6 +180,28 @@ nonisolated enum ReelComposer {
         spec.editor = editor
         return Result(spec: spec, selection: selection, candidates: candidates,
                       urls: Dictionary(unique.map { ($0.analysis.sha256, $0.url) }, uniquingKeysWith: { a, _ in a }))
+    }
+
+    /// En nykomponerad film (`compose`) som nästa version av `previous`, för "Föreslå igen", ändrat
+    /// antal och "Börja om helt" i redigeraren: samma id, `createdAt`, objekt (`property`), brand och
+    /// textlager, revisionen höjd över den förra och en `edit` med `op` tillagd i den förra loggen,
+    /// precis som `rebuild`. Annars skulle en ny spec med revision 1 se synkad ut mot mäklaren
+    /// (som jämför revisionsnummer) och kunna skrivas över vid nästa hämtning.
+    static func continuing(_ new: ReelSpec, from previous: ReelSpec, op: String,
+                           by: ReelSpec.UpdatedBy = .init(role: "photographer", name: nil),
+                           now: Date = Date()) -> ReelSpec {
+        var out = new
+        out.id = previous.id
+        out.createdAt = previous.createdAt
+        out.property = previous.property
+        out.brand = previous.brand
+        out.overlays = previous.overlays
+        out.revision = previous.revision + 1
+        out.status = "draft"
+        out.updatedAt = wholeSeconds(now)
+        out.updatedBy = by
+        out.provenance.edits = (previous.provenance.edits ?? []) + [.init(at: wholeSeconds(now), by: by.role, op: op)]
+        return out
     }
 
     static let defaultStyle = ReelSpec.Style(
