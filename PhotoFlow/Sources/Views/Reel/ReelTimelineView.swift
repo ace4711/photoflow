@@ -554,10 +554,11 @@ private struct ClipBlock: View {
                         .font(.caption.bold())
                         .padding(.horizontal, 6).padding(.vertical, 1)
                         .background(.black.opacity(0.6), in: Capsule())
-                    Spacer(minLength: 0)
+                    // Till vänster: blockets högra del ligger under nästa klipps övergång.
                     if isLocked, width > 56 {
                         Image(systemName: "lock.fill").font(.caption2).help(lockHelp)
                     }
+                    Spacer(minLength: 0)
                 }
                 Spacer(minLength: 0)
                 if width > 70 {

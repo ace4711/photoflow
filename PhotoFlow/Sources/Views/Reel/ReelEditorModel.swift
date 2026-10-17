@@ -652,7 +652,9 @@ final class ReelEditorModel {
     func setDuration(_ assetID: String, seconds: Double) {
         var o = currentOverrides()
         var entry = o[assetID] ?? .init()
-        entry.duration = min(max(seconds, Self.durationRange.lowerBound), Self.durationRange.upperBound)
+        // Hundradelar: snäppta dragningar (0,1 s) ska inte skriva flyttalsbrus som 3.4000000000000004.
+        let clamped = min(max(seconds, Self.durationRange.lowerBound), Self.durationRange.upperBound)
+        entry.duration = (clamped * 100).rounded() / 100
         o[assetID] = entry
         apply(order: order, overrides: o, op: "duration", target: assetID)
     }

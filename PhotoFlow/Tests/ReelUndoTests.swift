@@ -370,5 +370,13 @@ struct ReelUndoTests {
         model.undo()
         #expect(!model.isCoalescing)
     }
-}
 
+    @Test("Längd från en snäppt dragning sparas utan flyttalsbrus")
+    func durationIsRounded() throws {
+        let (model, root, _) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = model.clipRows[0].id
+        model.setDuration(id, seconds: 3.0 + 0.4000000000000004)
+        #expect(model.spec?.timeline.first { $0.asset == id }?.duration == 3.4)
+    }
+}
