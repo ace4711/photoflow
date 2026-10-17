@@ -39,6 +39,8 @@ struct PhotoFlowCLI {
             await verifyCommand(Array(arguments.dropFirst()))
         case "reel":
             await reelCommand(Array(arguments.dropFirst()))
+        case "reel-panels":
+            reelPanelsCommand(Array(arguments.dropFirst()))
         case "enhance":
             await enhanceCommand(Array(arguments.dropFirst()))
         case "--help", "-h", "help":
@@ -56,6 +58,7 @@ struct PhotoFlowCLI {
         Användning: photoflow-cli run --input <mapp> --output <mapp> [flaggor]
                     photoflow-cli verify --output <mapp> [--json]
                     photoflow-cli reel --input <mapp> --output <mapp> [flaggor]
+                    photoflow-cli reel-panels <bild-eller-mapp>... [--list <fil>]
                     photoflow-cli enhance --input <fil> --output <mapp> [--enhance-profile <id>] [--upright on|off] [--mask <png>]
 
         "run" kör hela PhotoFlow-pipelinen (NEF -> DNG -> previews ->
@@ -148,6 +151,11 @@ struct PhotoFlowCLI {
                              (rum/kategori) i analysen.
           --json            Skriv en maskinläsbar JSON-sammanfattning
                              (mellan PHOTOFLOW_CLI_JSON_SUMMARY_BEGIN/_END).
+
+        "reel-panels" mäter montagedetekteringen (`ReelPanelDetector`) utan att skriva
+        något: en rad per bild med träff (ränna/kant) och rutor, tid per bild, och sist
+        antal träffar och de bilder som låg närmast att träffa. Bilder anges som filer,
+        mappar (JPEG/PNG/TIFF/HEIC, inte rekursivt) eller med --list <fil> (en sökväg per rad).
 
         Avslutar med exit-kod 0 om alla steg/kontroller lyckades, annars 1.
         Exit-kod 2 vid felaktiga argument.
@@ -727,6 +735,66 @@ struct PhotoFlowCLI {
             standardError("photoflow-cli reel: \(error.localizedDescription)\n")
             exit(1)
         }
+    }
+
+    // MARK: - reel-panels
+
+    private static func reelPanelsCommand(_ args: [String]) {
+        var paths: [String] = []
+        var idx = 0
+        while idx < args.count {
+            if args[idx] == "--list" {
+                idx += 1
+                guard idx < args.count, let text = try? String(contentsOfFile: args[idx], encoding: .utf8) else {
+                    fail("--list kräver en läsbar fil")
+                }
+                paths += text.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+            } else {
+                paths.append(args[idx])
+            }
+            idx += 1
+        }
+        let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "tif", "tiff", "heic"]
+        var files: [URL] = []
+        for path in paths {
+            let url = URL(fileURLWithPath: path)
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                files += ((try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil,
+                                                                        options: [.skipsHiddenFiles])) ?? [])
+                    .filter { imageExtensions.contains($0.pathExtension.lowercased()) }
+                    .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+            } else {
+                files.append(url)
+            }
+        }
+        guard !files.isEmpty else { fail("Inga bilder angavs") }
+        var hits = 0, read = 0
+        var totalSeconds = 0.0
+        var near: [(closeness: Double, name: String, m: ReelPanelDetector.Measurement)] = []
+        for url in files {
+            let start = Date()
+            guard let gray = ReelPanelDetector.loadLuma(url: url) else { print("kunde inte läsas: \(url.path)"); continue }
+            let measurement = ReelPanelDetector.measure(luma: gray.pixels, width: gray.width, height: gray.height)
+            let detection = ReelPanelDetector.detect(luma: gray.pixels, width: gray.width, height: gray.height)
+            let ms = Date().timeIntervalSince(start) * 1000
+            totalSeconds += ms / 1000
+            read += 1
+            if let detection {
+                hits += 1
+                let rects = detection.panels.map { String(format: "(x %.4f, w %.4f)", $0.x, $0.w) }.joined(separator: " ")
+                print(String(format: "MONTAGE %@  %@  %@  %.0f ms", detection.kind.rawValue, rects, url.path, ms))
+            } else if measurement.geometryOK {
+                near.append((measurement.closeness, url.lastPathComponent, measurement))
+            }
+        }
+        print(String(format: "Bilder: %d, träffar: %d, snitt %.1f ms per bild (avkodning + mätning)", read, hits,
+                     totalSeconds / Double(max(read, 1)) * 1000))
+        for n in near.sorted(by: { $0.closeness > $1.closeness }).prefix(8) {
+            print(String(format: "  närmast: %.2f av gränsen (1,00 = träff)  ränna %.4f  kant täckning %.2f, andra kant %.2f, ρ %.2f  %@",
+                         n.closeness, n.m.gutterWidth, n.m.edgeCoverage, n.m.edgeRunnerUp, n.m.edgeRho, n.name))
+        }
+        exit(0)
     }
 
     // MARK: - Progress printing
