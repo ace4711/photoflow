@@ -56,8 +56,22 @@ export interface Clip {
   fit: Fit;
   motion: Motion;
   transitionIn?: Transition;
+  /** Förval eller "custom" (fotografens egna start/slut, se motionPresets.ts). */
   motionPreset?: string;
   durationLocked?: boolean;
+  /** Övergången är satt för hand och följer klippet; saknas `transitionIn` gäller `style.defaultTransition`. */
+  transitionLocked?: boolean;
+}
+
+/** Redigerarens val (fotografens), bara metadata: renderare ignorerar det. Se docs/reel-spec-v1.md. */
+export interface EditorState {
+  /** sha256 för bilder som alltid ska vara med vid ett nytt förslag. */
+  pinnedAssets?: string[];
+  /** sha256 för bilder som aldrig ska föreslås. */
+  excludedAssets?: string[];
+  orderLocked?: boolean;
+  /** "calm" | "normal" | "fast"; okänt värde räknas som normal. */
+  tempo?: string;
 }
 
 export interface Output {
@@ -95,6 +109,7 @@ export interface ReelSpec {
   brand?: unknown;
   outputs: Output[];
   provenance: Provenance;
+  editor?: EditorState;
   [extra: string]: unknown;
 }
 
