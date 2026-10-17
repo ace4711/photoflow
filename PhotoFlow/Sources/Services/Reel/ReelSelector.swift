@@ -88,7 +88,7 @@ nonisolated enum ReelSelector {
     }
 
     nonisolated struct Exclusion: Sendable, Equatable {
-        nonisolated enum Kind: String, Sendable { case utility, horizon, sharpness, duplicate }
+        nonisolated enum Kind: String, Sendable { case utility, horizon, sharpness, duplicate, user }
         var candidateID: String
         var kind: Kind
         var reason: String
@@ -238,8 +238,24 @@ nonisolated enum ReelSelector {
 
     // MARK: - Urval
 
-    static func select(_ candidates: [ReelCandidate], count requested: Int = 5, weights: Weights = Weights()) -> Selection {
-        let count = min(max(requested, 3), 8)
+    /// Största antal bilder i en film (`pinned` kan ändå höja det: alla låsta väljs).
+    static let maxCount = 12
+
+    /// `pinned` (id = sha256) väljs alltid, även om ett hårt filter annars tagit bort dem; de räknas
+    /// mot `count` (är de fler än `count` höjs antalet), och resten fylls med mall och MMR, där de
+    /// låsta räknas med i likheten så att snarlika bilder inte väljs till. `excluded` tas bort först
+    /// (`Exclusion.Kind.user`) och kommer aldrig tillbaka, inte heller via rimlighetsventilen.
+    /// Både uteslutna och låsta id som inte finns bland kandidaterna ignoreras; en bild som är båda
+    /// är utesluten.
+    static func select(_ candidates: [ReelCandidate], count requested: Int = 5, weights: Weights = Weights(),
+                       pinned pinnedIDs: [String] = [], excluded excludedIDs: [String] = []) -> Selection {
+        let userExcluded = Set(excludedIDs)
+        var pinnedList: [String] = []
+        for c in candidates where pinnedIDs.contains(c.id) && !userExcluded.contains(c.id) && !pinnedList.contains(c.id) {
+            pinnedList.append(c.id)
+        }
+        let pinned = Set(pinnedList)
+        let count = max(min(max(requested, 3), maxCount), pinned.count)
         let byID = Dictionary(candidates.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let pct = sharpnessPercentiles(candidates)
         var scores: [String: Double] = [:]
@@ -248,19 +264,23 @@ nonisolated enum ReelSelector {
         // Steg 1: hårda filter.
         var excluded: [Exclusion] = []
         var removed = Set<String>()
+        for c in candidates where userExcluded.contains(c.id) {
+            removed.insert(c.id)
+            excluded.append(.init(candidateID: c.id, kind: .user, reason: "Utesluten av dig"))
+        }
         func exclude(_ c: ReelCandidate, _ kind: Exclusion.Kind, _ reason: String) {
             removed.insert(c.id)
             excluded.append(.init(candidateID: c.id, kind: kind, reason: reason))
         }
         // Skärpegräns: percentilen räknas över alla kandidater som har skärpa (minst 4).
         var sharpCut: Double?
-        let sharpValues = candidates.compactMap(\.sharpness).sorted()
+        let sharpValues = candidates.filter { !userExcluded.contains($0.id) }.compactMap(\.sharpness).sorted()
         if sharpValues.count >= 4 {
             let pos = weights.sharpnessCutPercentile * Double(sharpValues.count - 1)
             let lo = Int(pos.rounded(.down)), hi = Int(pos.rounded(.up))
             sharpCut = sharpValues[lo] + (sharpValues[hi] - sharpValues[lo]) * (pos - Double(lo))
         }
-        for c in candidates {
+        for c in candidates where !userExcluded.contains(c.id) {
             if c.isUtility, (c.quality ?? 0.5) < weights.utilityHardMaxQuality {
                 exclude(c, .utility, "Nyttobild med låg kvalitet (kvitto, dokument eller liknande)"); continue
             }
@@ -289,6 +309,12 @@ nonisolated enum ReelSelector {
             for i in idxs where i != best {
                 exclude(alive[i], .duplicate, "Dubblett av \(alive[best].filename)")
             }
+        }
+
+        // Låsta bilder är alltid kvar, oavsett hårda filter och dubbletter.
+        for id in pinned where removed.contains(id) {
+            removed.remove(id)
+            excluded.removeAll { $0.candidateID == id }
         }
 
         // Rimlighetsventil: för få kvar → ta tillbaka mjuka bortfall (skärpa, horisont), bästa först.
@@ -353,6 +379,10 @@ nonisolated enum ReelSelector {
             }
             let pool = survivors.filter { !pickedIDs.contains($0.id) }
             guard !pool.isEmpty else { break }
+            // Obrukade låsta bilder: får företräde på platser de passar, och tvingas in när det inte
+            // finns fler platser än låsta kvar.
+            let pinnedLeft = pool.filter { pinned.contains($0.id) }
+            let slotsLeft = queue.count - q + 1
             let pickedRooms = pickedTypes
             let tiers = tiers(for: slot, template: template, pickedRooms: pickedRooms)
 
@@ -367,9 +397,16 @@ nonisolated enum ReelSelector {
                 let different = tierPool.filter { similarity($0.id, first) <= weights.maxClosingSimilarity }
                 if !different.isEmpty { tierPool = different }
             }
+            if !pinnedLeft.isEmpty {
+                let fitting = tierPool.filter { pinned.contains($0.id) }
+                if !fitting.isEmpty { tierPool = fitting }
+                else if slotsLeft <= pinnedLeft.count { tierPool = pinnedLeft; chosenTier = tiers.count - 1 }
+            }
 
             func mmr(_ c: ReelCandidate) -> Double {
-                let maxSim = pickedIDs.map { similarity(c.id, $0) }.max() ?? 0
+                // Obrukade låsta bilder räknas som redan valda för likheten.
+                let against = pickedIDs + pinnedLeft.map(\.id).filter { $0 != c.id }
+                let maxSim = against.map { similarity(c.id, $0) }.max() ?? 0
                 var rel = scores[c.id] ?? 0
                 if slot == .closing && isDusk(c) { rel += 0.08 }
                 // Rumsdiversitet: samma rumstyp en gång till får ett kraftigt avdrag.
@@ -385,7 +422,8 @@ nonisolated enum ReelSelector {
             let fallback = chosenTier == tiers.count - 1 && tiers.count > 1
             picks.append(Pick(candidateID: best.id, slot: slot,
                               reason: reason(slot: slot, c: best, score: scores[best.id] ?? 0,
-                                             fallback: fallback, maxSim: maxSim),
+                                             fallback: fallback, maxSim: maxSim)
+                                + (pinned.contains(best.id) ? ", låst av dig" : ""),
                               score: scores[best.id] ?? 0))
             pickedIDs.append(best.id)
             positions.append(position)

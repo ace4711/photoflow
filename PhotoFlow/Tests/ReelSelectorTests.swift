@@ -116,14 +116,14 @@ struct ReelSelectorTests {
         #expect(sel.picks.count == 5)
     }
 
-    @Test("Antalet följer inställningen och klampas till 3–8")
+    @Test("Antalet följer inställningen och klampas till 3–12")
     func countRespected() {
         let list = (0..<14).map { cand("b\($0)", room: $0 == 0 ? "Fasad" : nil, q: 0.5 + Double($0) / 50, axis: $0) }
         #expect(ReelSelector.select(list, count: 3).picks.count == 3)
         #expect(ReelSelector.select(list, count: 5).picks.count == 5)
         #expect(ReelSelector.select(list, count: 8).picks.count == 8)
         #expect(ReelSelector.select(list, count: 1).picks.count == 3)
-        #expect(ReelSelector.select(list, count: 20).picks.count == 8)
+        #expect(ReelSelector.select(list, count: 20).picks.count == 12)
         // Få kandidater: allt som finns tas med.
         #expect(ReelSelector.select(Array(list.prefix(4)), count: 5).picks.count == 4)
     }
