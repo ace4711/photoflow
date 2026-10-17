@@ -135,14 +135,16 @@ struct ReelTransitionEditor: View {
     // MARK: Åtgärder
 
     private func setChoice(_ choice: Choice) {
-        // Längden följer nuvarande övergång (eller 0,5 s om den är ett hårt klipp utan längd).
-        let duration = isCut ? max(spec.style.defaultTransition.duration, 0.5) : configured.duration
+        // Längden följer nuvarande övergång; från ett hårt klipp standardövergångens längd (minst 0,5 s,
+        // se `ReelMotionPlanner.retyped`).
+        var base = configured
+        if isCut { base.duration = spec.style.defaultTransition.duration }
         switch choice {
         case .auto: model.clearTransition(clip.asset)
-        case .crossfade: model.setTransition(clip.asset, .init(type: .crossfade, direction: nil, duration: duration))
+        case .crossfade: model.setTransition(clip.asset, ReelMotionPlanner.retyped(base, to: .crossfade))
         case .cut: model.setTransition(clip.asset, .init(type: .cut, direction: nil, duration: 0))
-        case .fadeThroughBlack: model.setTransition(clip.asset, .init(type: .fadeThroughBlack, direction: nil, duration: duration))
-        case .push: model.setTransition(clip.asset, .init(type: .push, direction: configured.direction ?? .left, duration: duration))
+        case .fadeThroughBlack: model.setTransition(clip.asset, ReelMotionPlanner.retyped(base, to: .fadeThroughBlack))
+        case .push: model.setTransition(clip.asset, ReelMotionPlanner.retyped(base, to: .push))
         }
     }
 

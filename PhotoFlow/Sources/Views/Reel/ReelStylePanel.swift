@@ -153,10 +153,8 @@ struct ReelStylePanel: View {
     }
 
     private func setType(_ type: ReelSpec.TransitionType) {
-        model.setStyle({ s in
-            s.defaultTransition.type = type
-            s.defaultTransition.direction = type == .push ? (s.defaultTransition.direction ?? .left) : nil
-        }, op: "defaultTransition")
+        model.setStyle({ $0.defaultTransition = ReelMotionPlanner.retyped($0.defaultTransition, to: type) },
+                       op: "defaultTransition")
     }
 
     private func setDirection(_ direction: ReelSpec.Direction) {

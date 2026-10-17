@@ -367,6 +367,22 @@ nonisolated enum ReelMotionPlanner {
               to: customKey(image, frameAspect, custom.fit, custom.motion.to))
     }
 
+    /// Övergången `t` med typen bytt till `type`, som stilpanelen och övergångsinspektören gör det:
+    /// riktning bara för push (behållen, annars vänster). Längden behålls för hårt klipp; för andra
+    /// typer klampas den till `transitionRange`, och kommer den från ett hårt klipp eller ligger under
+    /// intervallet blir den minst 0,5 s, så att ett hårt klipp med längd 0 inte blir en mjuk tona
+    /// som i praktiken är ett hårt klipp.
+    static func retyped(_ t: ReelSpec.Transition, to type: ReelSpec.TransitionType) -> ReelSpec.Transition {
+        var out = t
+        out.type = type
+        out.direction = type == .push ? (t.direction ?? .left) : nil
+        guard type != .cut else { return out }
+        let fallback = transitionDuration
+        let wanted = t.type == .cut || t.duration < transitionRange.lowerBound ? max(t.duration, fallback) : t.duration
+        out.duration = min(max(wanted, transitionRange.lowerBound), transitionRange.upperBound)
+        return out
+    }
+
     // MARK: - Automatiska övergångar
 
     /// Varför en automatisk övergång blev som den blev (styr texten i inspektören).

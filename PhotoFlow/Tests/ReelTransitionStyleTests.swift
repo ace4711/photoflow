@@ -234,6 +234,24 @@ struct ReelTransitionStyleTests {
         #expect(ReelTimeline.totalDuration(spec) == spec.timeline.map(\.duration).reduce(0, +))
     }
 
+    @Test("Byte av typ från hårt klipp (längd 0) ger en verklig längd, och längden klampas till intervallet")
+    func retypeFromCut() {
+        let cut = ReelSpec.Transition(type: .cut, direction: nil, duration: 0)
+        #expect(ReelMotionPlanner.retyped(cut, to: .crossfade) == .init(type: .crossfade, direction: nil, duration: 0.5))
+        #expect(ReelMotionPlanner.retyped(cut, to: .fadeThroughBlack).duration == 0.5)
+        #expect(ReelMotionPlanner.retyped(cut, to: .push) == .init(type: .push, direction: .left, duration: 0.5))
+        // Ett hårt klipp som behållit en längd får tillbaka den.
+        let kept = ReelSpec.Transition(type: .cut, direction: nil, duration: 1.1)
+        #expect(ReelMotionPlanner.retyped(kept, to: .crossfade).duration == 1.1)
+        // Mellan mjuka typer behålls längden; riktning bara för push.
+        let push = ReelSpec.Transition(type: .push, direction: .right, duration: 0.7)
+        #expect(ReelMotionPlanner.retyped(push, to: .crossfade) == .init(type: .crossfade, direction: nil, duration: 0.7))
+        #expect(ReelMotionPlanner.retyped(.init(type: .crossfade, direction: nil, duration: 0.7), to: .push).direction == .left)
+        #expect(ReelMotionPlanner.retyped(push, to: .cut) == .init(type: .cut, direction: nil, duration: 0.7))
+        #expect(ReelMotionPlanner.retyped(.init(type: .crossfade, direction: nil, duration: 0.05), to: .push).duration == 0.5)
+        #expect(ReelMotionPlanner.retyped(.init(type: .crossfade, direction: nil, duration: 3), to: .fadeThroughBlack).duration == 1.5)
+    }
+
     // MARK: Hjälpfunktioner
 
     @Test("Kortas-varningen visas bara när klampningen gör övergången kortare")
