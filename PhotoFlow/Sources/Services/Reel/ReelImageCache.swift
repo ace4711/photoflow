@@ -8,8 +8,10 @@ import ImageIO
 ///
 /// Nyckel: bildens identitet (sha256) och längsta sidan i pixlar. Ett uppslag godtar den minsta
 /// cachade bild med samma identitet vars längsta sida räcker (`>=` önskad), annars laddas en ny
-/// (med 50 % marginal, avrundad uppåt till 256 pixlar, aldrig över originalet; marginalen gör att en zoomdragning inte laddar om bilden vid varje steg) och ersätter mindre bilder av samma
-/// identitet. Taket är i byte (dekodad storlek, bredd × höjd × 4); minst använda bilder kastas först.
+/// och ersätter mindre bilder av samma identitet. Den nya laddas med `margin` (förvalt 50 %,
+/// avrundat uppåt till 256 pixlar, aldrig över originalet), så att en zoomdragning i
+/// förhandsvisningen inte laddar om bilden vid varje steg; exportens egen cache har marginal 0
+/// och laddar exakt den storlek som behövs. Taket är i byte (dekodad storlek, bredd × höjd × 4); minst använda bilder kastas först.
 /// Trådsäker (lås). Laddaren är injicerbar så att tester kan räkna laddningar utan bildfiler.
 nonisolated final class ReelImageCache: @unchecked Sendable {
 
@@ -33,10 +35,14 @@ nonisolated final class ReelImageCache: @unchecked Sendable {
     private var _loadCount = 0
     private var totalBytes = 0
     let maxBytes: Int
+    /// Andel extra storlek en ny laddning får utöver den begärda (0,5 = 50 %; 0 = exakt).
+    let margin: Double
     private let loader: Loader
 
-    init(maxBytes: Int = ReelImageCache.defaultMaxBytes, loader: @escaping Loader = ReelImageCache.loadThumbnail) {
+    init(maxBytes: Int = ReelImageCache.defaultMaxBytes, margin: Double = 0.5,
+         loader: @escaping Loader = ReelImageCache.loadThumbnail) {
         self.maxBytes = maxBytes
+        self.margin = max(margin, 0)
         self.loader = loader
     }
 
@@ -67,7 +73,7 @@ nonisolated final class ReelImageCache: @unchecked Sendable {
         _loadCount += 1
         lock.unlock()
 
-        let edge = min(originalLongEdge, (wanted * 3 / 2 + 255) / 256 * 256)
+        let edge = margin > 0 ? min(originalLongEdge, (Int(Double(wanted) * (1 + margin)) + 255) / 256 * 256) : wanted
         guard let loaded = loader(url, edge) else { return nil }
         let cost = loaded.width * loaded.height * 4
 

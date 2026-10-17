@@ -63,6 +63,8 @@ struct ReelEditorView: View {
         .onDisappear {
             model.cancelAll()
             preview.stop()
+            // Den delade bildcachen (upp till ca 600 MB dekodade bilder) behövs inte när fönstret är stängt.
+            ReelImageCache.shared.removeAll()
         }
     }
 

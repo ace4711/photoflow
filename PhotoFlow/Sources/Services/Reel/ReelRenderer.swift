@@ -50,7 +50,8 @@ nonisolated final class ReelRenderer: @unchecked Sendable {
     let specDirectory: URL
     let maxOutputSize: CGSize
     let context: CIContext
-    /// Delad bildcache (förhandsvisningen) eller en egen per renderare (export).
+    /// Delad bildcache (förhandsvisningen) eller en egen per renderare (export, utan marginal: en
+    /// fast spec renderas en gång, så bilderna laddas i exakt den storlek som behövs).
     let cache: ReelImageCache
 
     private let lock = NSLock()
@@ -64,7 +65,7 @@ nonisolated final class ReelRenderer: @unchecked Sendable {
     init(spec: ReelSpec, specDirectory: URL, maxOutputSize: CGSize,
          cache: ReelImageCache? = nil, context: CIContext? = nil) {
         self.spec = spec
-        self.cache = cache ?? ReelImageCache()
+        self.cache = cache ?? ReelImageCache(margin: 0)
         // Alltid en katalog-URL: `URL(fileURLWithPath:relativeTo:)` löser annars en
         // relativ sökväg mot FÖRÄLDERN när basen saknar avslutande snedstreck (t.ex.
         // en FILM-mapp som inte fanns när URL:en byggdes) — bilderna hittades då inte.
