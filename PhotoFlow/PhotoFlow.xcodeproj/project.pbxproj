@@ -308,6 +308,7 @@
 		C41F9E1BF0E64E5592B2A680 /* PipelineRunnerEnhanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79DFAE384087E51744A48352 /* PipelineRunnerEnhanceTests.swift */; };
 		C430019C7AC35FEEBBD62559 /* ReviewImageSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FAF9E71434C6940E4D09E52 /* ReviewImageSelection.swift */; };
 		C43DA861284AEBFBDD8F6047 /* HDRAlignment.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADE6D33A3AAB34122377A837 /* HDRAlignment.swift */; };
+		C4A21FB9682B790E60FAF7D4 /* ReelMotionGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CD5F6AD076024664FD51E62 /* ReelMotionGeometry.swift */; };
 		C4AF7F35B5A0B0CEECC81279 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83D7AE05B80A7B44D2B244CB /* AppSettings.swift */; };
 		C5051C161F3E050A276E83DF /* ReelFilmStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = A46B11BC45216B6ED990D711 /* ReelFilmStatus.swift */; };
 		C8EAFBE6435DD317CED1BBBA /* BaseFrameMerge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F2BAA518727FAFBB1066BC3 /* BaseFrameMerge.swift */; };
@@ -315,6 +316,7 @@
 		CC54EF14493163219A5966FB /* PipelineRunner+AddressCorrection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 705897AC201BF6521922250B /* PipelineRunner+AddressCorrection.swift */; };
 		CC5D797FAF630DC392D5644D /* RadianceMergeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80496893C94C69ECEB9F5084 /* RadianceMergeTests.swift */; };
 		CD6C1B672ABA4BAC80D330AF /* BracketAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BEACCFCA1D65C2CB03FB654 /* BracketAnalyzer.swift */; };
+		CE951BBC7EEDEC14DA9DBE12 /* ReelMotionGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 526F4216432906DE4F00584E /* ReelMotionGeometryTests.swift */; };
 		CEA7B5A70B2EA3019A94974C /* Preflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FB36CA3303E632713FBD27B /* Preflight.swift */; };
 		CF2C8863EC8526BE496DC274 /* ReelImageAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0831F4831D87ACC606120BAD /* ReelImageAnalyzer.swift */; };
 		CFBB58E7BA4ECBBFDC4C8450 /* SendFolderSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7C528D068B8412F98D29397 /* SendFolderSyncTests.swift */; };
@@ -332,6 +334,7 @@
 		D922C28ED4E9A2CCE49C29F9 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83D7AE05B80A7B44D2B244CB /* AppSettings.swift */; };
 		D931380D5317BD2B8732208C /* PipelineRunner+Metadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18FEAA9B84EC62BC44C9AEB6 /* PipelineRunner+Metadata.swift */; };
 		D99D933C100CB517176FD63E /* FieldNote.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29E248F241C6E12D1E3044CA /* FieldNote.swift */; };
+		DAB8A6276FB346D3972B0575 /* ReelMotionGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CD5F6AD076024664FD51E62 /* ReelMotionGeometry.swift */; };
 		DAF5AE43CE5C4317F0B8D889 /* EnhancementProfileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1279DBB0DF4234F6A70860A6 /* EnhancementProfileTests.swift */; };
 		DC5ED92289D95C664BAF37AB /* FieldNote.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29E248F241C6E12D1E3044CA /* FieldNote.swift */; };
 		DCD9339444D312680DD9C834 /* DashboardStepInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 425424FDDD36B51730D6943D /* DashboardStepInfo.swift */; };
@@ -475,11 +478,13 @@
 		4A06835453C8AF2B1D27AD7D /* ReelPlayerModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelPlayerModel.swift; sourceTree = "<group>"; };
 		4BF4AE0F3AE8CFB935462DEC /* ReelShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelShareSheet.swift; sourceTree = "<group>"; };
 		4C6481123891E543351CFB0B /* two_brackets_and_gap.expected.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = two_brackets_and_gap.expected.json; sourceTree = "<group>"; };
+		4CD5F6AD076024664FD51E62 /* ReelMotionGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelMotionGeometry.swift; sourceTree = "<group>"; };
 		4D7FDF23FE9C36E5EC4B6515 /* HDRAlignmentSanityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRAlignmentSanityTests.swift; sourceTree = "<group>"; };
 		4E056C974E1D51ED88982B56 /* FieldContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldContentView.swift; sourceTree = "<group>"; };
 		4ED048B0E21E2830A6817B4E /* AppSettingsCalendarNamesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsCalendarNamesTests.swift; sourceTree = "<group>"; };
 		51FFA3D32229247BA68422EA /* HDRReEnhanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRReEnhanceTests.swift; sourceTree = "<group>"; };
 		522CA5C3C17A8E64E615BF3F /* StepStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StepStatusTests.swift; sourceTree = "<group>"; };
+		526F4216432906DE4F00584E /* ReelMotionGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelMotionGeometryTests.swift; sourceTree = "<group>"; };
 		538ADBB9C884C5D4533AC39B /* ReelProposal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelProposal.swift; sourceTree = "<group>"; };
 		54B754BC5739B4A350E0F947 /* PhotoFlowField.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PhotoFlowField.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5629B69F4D608E95CB5BE3A9 /* ReelSyncMerger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelSyncMerger.swift; sourceTree = "<group>"; };
@@ -933,6 +938,7 @@
 				EAA900448E73168708031EAF /* ReelImageAnalyzerTests.swift */,
 				16167AF056E96DEC81C47B53 /* ReelLibraryTests.swift */,
 				AE2910216B988022B40A434F /* ReelLockTests.swift */,
+				526F4216432906DE4F00584E /* ReelMotionGeometryTests.swift */,
 				63A20F964CE38E3D0B211D80 /* ReelMotionPlannerTests.swift */,
 				650927EBEBA2BD089349A6AE /* ReelProposalTests.swift */,
 				41008028AD88FDF4444D506D /* ReelRemoteStateTests.swift */,
@@ -1025,6 +1031,7 @@
 				A46B11BC45216B6ED990D711 /* ReelFilmStatus.swift */,
 				0831F4831D87ACC606120BAD /* ReelImageAnalyzer.swift */,
 				EDFDB877742FAA28F1108F6D /* ReelLibrary.swift */,
+				4CD5F6AD076024664FD51E62 /* ReelMotionGeometry.swift */,
 				1A64849410C39F9B898C53F3 /* ReelMotionPlanner.swift */,
 				538ADBB9C884C5D4533AC39B /* ReelProposal.swift */,
 				E2B96CDC3A8B5DE770688817 /* ReelRemoteState.swift */,
@@ -1401,6 +1408,7 @@
 				C5051C161F3E050A276E83DF /* ReelFilmStatus.swift in Sources */,
 				A8CEE63E40E4EEF38C5FB978 /* ReelImageAnalyzer.swift in Sources */,
 				B9D184CB400F657CAAA42DB8 /* ReelLibrary.swift in Sources */,
+				DAB8A6276FB346D3972B0575 /* ReelMotionGeometry.swift in Sources */,
 				9575A03E6C4E2A88143B47EA /* ReelMotionPlanner.swift in Sources */,
 				1DF87B08B00A9C7DFF0262D4 /* ReelProposal.swift in Sources */,
 				7C4E99AA6E7DC5978473E7AE /* ReelRemoteState.swift in Sources */,
@@ -1506,6 +1514,7 @@
 				2B00AE90AC48537987DF0BD6 /* ReelImageAnalyzerTests.swift in Sources */,
 				93F55D548FC9B3910F9E1ED5 /* ReelLibraryTests.swift in Sources */,
 				9FB1FB58E32853C23CAA3608 /* ReelLockTests.swift in Sources */,
+				CE951BBC7EEDEC14DA9DBE12 /* ReelMotionGeometryTests.swift in Sources */,
 				C0ACCDE773ACDDFF892FD9AF /* ReelMotionPlannerTests.swift in Sources */,
 				2EA30C7656888D9498B11E02 /* ReelProposalTests.swift in Sources */,
 				8A5D31B79BD57C5E8BB6845F /* ReelRemoteStateTests.swift in Sources */,
@@ -1640,6 +1649,7 @@
 				CF2C8863EC8526BE496DC274 /* ReelImageAnalyzer.swift in Sources */,
 				7F1E8166C04D63EBA4469A82 /* ReelLibrary.swift in Sources */,
 				858050BFEFDD9F632CE822B5 /* ReelMotionEditor.swift in Sources */,
+				C4A21FB9682B790E60FAF7D4 /* ReelMotionGeometry.swift in Sources */,
 				3D1A836DA889D5344D1E41FD /* ReelMotionPlanner.swift in Sources */,
 				3A7EECA578355D1C038CEBFA /* ReelPlayerModel.swift in Sources */,
 				77132B4D6B5F0CBD50CED9E5 /* ReelPlayerView.swift in Sources */,
