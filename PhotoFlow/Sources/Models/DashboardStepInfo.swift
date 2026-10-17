@@ -169,7 +169,7 @@ extension DashboardStep {
             return StepInfo(
                 summary: "Skapar ett automatiskt filmförslag (Objektfilm, 9:16, 5 bilder) per adress och sparar det i <adress> FILM.",
                 details: [
-                    "Körs efter metadatasteget. Bilderna hämtas från <adress> FÄRDIGA, annars FÖRBÄTTRADE (_enh.jpg), annars TITTBILDER. Minst 3 bilder krävs, annars hoppas adressen över.",
+                    "Körs efter metadatasteget. Bilderna hämtas från <adress> FÄRDIGA (eller <adress> red), annars FÖRBÄTTRADE (_enh.jpg), annars TITTBILDER. Minst 3 bilder krävs, annars hoppas adressen över.",
                     "Återanvänder AI-taggar (rum, kategori) och kvalitet från ai_tags.json/photo_quality.json (HDR-grupper: bästa värdet i gruppen); bara pixelstorlek och motivpunkt mäts på nytt.",
                     "Skriver reel.json (generator \"PhotoFlow Filmförslag\") och reel_9x16.mp4; filmen syns i Filmer-fönstret. Förloppet per adress visas i stegloggen.",
                     "Rör aldrig en film som redigerats (revision > 1), skickats till mäklare (reel-remote.json) eller inte är ett oredigerat förslag. FÄRDIGA-bilder ersätter ett förslag byggt på FÖRBÄTTRADE/TITTBILDER.",

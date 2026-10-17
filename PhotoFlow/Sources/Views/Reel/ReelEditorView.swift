@@ -87,7 +87,7 @@ struct ReelEditorView: View {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Välj"
-        panel.message = "Välj mappen med färdiga bilder (till exempel \"<adress> FÄRDIGA\")"
+        panel.message = "Välj mappen med färdiga bilder (till exempel \"<adress> FÄRDIGA\" eller \"<adress> red\")"
         if let start = request.startPath ?? model.sourceDirectory?.deletingLastPathComponent().path {
             panel.directoryURL = URL(fileURLWithPath: start)
         }

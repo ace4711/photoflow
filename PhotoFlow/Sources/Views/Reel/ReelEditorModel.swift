@@ -20,7 +20,7 @@ struct ReelLaunchRequest: Codable, Hashable {
     /// Öppna "Skicka till mäklare" så fort filmen är laddad (filmlistans "Ny länk…").
     var showShare: Bool?
 
-    /// Historiken: `<adress> FÄRDIGA` i sessionens outputmapp om den finns, annars
+    /// Historiken: `<adress> FÄRDIGA` (eller `<adress> red`) i sessionens outputmapp om den finns, annars
     /// en mappväljare som börjar i outputmappen.
     static func forSession(outputDirectory: URL, address: String?, sessionID: String? = nil) -> ReelLaunchRequest {
         var request = ReelLaunchRequest(startPath: outputDirectory.path, outputPath: outputDirectory.path,

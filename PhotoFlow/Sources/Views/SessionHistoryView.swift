@@ -172,7 +172,7 @@ struct SessionHistoryView: View {
         dismiss()
     }
 
-    /// Bildspel för en adress i sessionen: `<adress> FÄRDIGA` i outputmappen om den finns,
+    /// Bildspel för en adress i sessionen: `<adress> FÄRDIGA` (eller `<adress> red`) i outputmappen om den finns,
     /// annars en mappväljare som börjar i outputmappen.
     private func openReel(_ entry: SessionHistoryStore.Entry, address: String?) {
         let request = ReelLaunchRequest.forSession(

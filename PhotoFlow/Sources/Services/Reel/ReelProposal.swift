@@ -351,7 +351,11 @@ nonisolated enum ReelProposal {
 
         let paths = spec.assets.flatMap { $0.sources.compactMap(\.path) }
         let builtOn: SourceKind? = SourceKind.allCases.first { kind in
-            paths.contains { $0.contains("\(kind.label)/") }
+            paths.contains { path in
+                // Färdiga bilder ligger i `<adress> FÄRDIGA` eller `<adress> red`.
+                path.contains("\(kind.label)/")
+                    || (kind == .finished && path.lowercased().contains("\(AddressFolderLayout.redSuffix)/"))
+            }
         }
         let marker = loadMarker(from: filmDir)
         let fingerprint = marker?.specID == spec.id ? marker?.fingerprint : nil

@@ -50,6 +50,43 @@ struct AddressFolderLayoutTests {
         #expect(AddressFolderLayout.addressName(fromFinishedDir: "Lindvägen 12") == nil)
     }
 
+    @Test("<adress> red räknas som färdiga bilder, FÄRDIGA vinner, filmmappen blir <adress> FILM")
+    func redFolderIsFinished() throws {
+        let fm = FileManager.default
+        let out = fm.temporaryDirectory.appendingPathComponent("FinishedRed-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: out) }
+        try fm.createDirectory(at: out.appendingPathComponent("Chronas väg 7 RED"), withIntermediateDirectories: true)
+        // Bara red finns (valfritt skiftläge).
+        #expect(AddressFolderLayout.finishedDir(in: out, folderName: "Chronas väg 7").lastPathComponent == "Chronas väg 7 RED")
+        // Båda finns: FÄRDIGA vinner.
+        try fm.createDirectory(at: out.appendingPathComponent("Chronas väg 7 FÄRDIGA"), withIntermediateDirectories: true)
+        #expect(AddressFolderLayout.finishedDir(in: out, folderName: "Chronas väg 7").lastPathComponent == "Chronas väg 7 FÄRDIGA")
+        // Ingen finns: FÄRDIGA-sökvägen (som inte finns).
+        let none = AddressFolderLayout.finishedDir(in: out, folderName: "Annan 1")
+        #expect(none.lastPathComponent == "Annan 1 FÄRDIGA" && !fm.fileExists(atPath: none.path))
+
+        #expect(AddressFolderLayout.addressName(fromFinishedDir: "Chronas väg 7 red") == "Chronas väg 7")
+        #expect(AddressFolderLayout.addressName(fromFinishedDir: "Chronas väg 7 Red") == "Chronas väg 7")
+        #expect(AddressFolderLayout.addressName(fromFinishedDir: "Chronas väg 7 färdiga") == "Chronas väg 7")
+        #expect(AddressFolderLayout.addressName(fromFinishedDir: "Redaktionen") == nil)
+        #expect(AddressFolderLayout.addressName(fromFinishedDir: "Chronas väg 7 reduced") == nil)
+        #expect(AddressFolderLayout.addressName(fromFinishedDir: " red") == nil)
+        let red = URL(fileURLWithPath: "/x/Objekt/Chronas väg 7 red", isDirectory: true)
+        #expect(AddressFolderLayout.reelDir(forSource: red).path == "/x/Objekt/Chronas väg 7 FILM")
+    }
+
+    @Test("Historiken öppnar <adress> red när FÄRDIGA saknas")
+    func launchRequestFindsRed() throws {
+        let fm = FileManager.default
+        let out = fm.temporaryDirectory.appendingPathComponent("LaunchRed-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: out) }
+        try fm.createDirectory(at: out.appendingPathComponent("Gatan 1 red"), withIntermediateDirectories: true)
+        let request = ReelLaunchRequest.forSession(outputDirectory: out, address: "Gatan 1")
+        #expect(request.sourcePath.map { URL(fileURLWithPath: $0).lastPathComponent } == "Gatan 1 red")
+        let none = ReelLaunchRequest.forSession(outputDirectory: out, address: "Annan 2")
+        #expect(none.sourcePath == nil)
+    }
+
     @Test("Kurerad källa: allt utom pipelinens FÖRBÄTTRADE och TITTBILDER")
     func curatedSource() {
         func curated(_ name: String) -> Bool {

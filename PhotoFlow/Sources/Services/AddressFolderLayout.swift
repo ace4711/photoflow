@@ -18,7 +18,8 @@ nonisolated enum AddressFolderLayout {
     /// Förbättrade versioner (steget "Förbättra bilder"): `hdr_group_<id>_enh.tiff/jpg`
     /// och `<DSC_xxxx>_enh.tiff/jpg`. Skrivs först till `enhanced/` och flyttas hit av sorteringen.
     static func enhancedDirName(_ folderName: String) -> String { "\(folderName)\(enhancedSuffix)" }
-    /// Färdiga bilder exporterade från Lightroom (underlag för Objektfilm).
+    /// Färdiga bilder exporterade från Lightroom (underlag för Objektfilm). Fotografen kan i stället
+    /// ha en mapp `<adress> red` (redigerade); se `finishedDir(in:folderName:)`.
     static func finishedDirName(_ folderName: String) -> String { "\(folderName) FÄRDIGA" }
     /// Objektfilmens utmapp (`reel.json`, `reel_<format>.mp4`, `reel_analysis.json`).
     static func reelDirName(_ folderName: String) -> String { "\(folderName) FILM" }
@@ -29,6 +30,8 @@ nonisolated enum AddressFolderLayout {
     /// Filnamnsändelsen på förbättrade filer (före filändelsen).
     static let enhancedFileSuffix = "_enh"
     static let finishedSuffix = " FÄRDIGA"
+    /// Alternativt namn på fotografens färdiga bilder (skiftlägesokänsligt, sist i namnet).
+    static let redSuffix = " red"
     static let reelSuffix = " FILM"
 
     static func dngDir(in outputDir: URL, folderName: String) -> URL {
@@ -46,17 +49,33 @@ nonisolated enum AddressFolderLayout {
     static func enhancedStagingDir(in outputDir: URL) -> URL {
         outputDir.appendingPathComponent(enhancedStagingDirName)
     }
+    /// Mappen med fotografens färdiga bilder: `<adress> FÄRDIGA` om den finns, annars `<adress> red`
+    /// (valfritt skiftläge) om den finns. Finns ingen av dem är svaret `<adress> FÄRDIGA`, så att
+    /// anroparens "finns den?" ger nej.
     static func finishedDir(in outputDir: URL, folderName: String) -> URL {
-        outputDir.appendingPathComponent(finishedDirName(folderName))
+        let finished = outputDir.appendingPathComponent(finishedDirName(folderName))
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: finished.path, isDirectory: &isDir), isDir.boolValue { return finished }
+        let wanted = (folderName + redSuffix).lowercased()
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: outputDir.path)) ?? []
+        for name in names.sorted() where name.lowercased() == wanted {
+            let url = outputDir.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue { return url }
+        }
+        return finished
     }
     static func reelDir(in outputDir: URL, folderName: String) -> URL {
         outputDir.appendingPathComponent(reelDirName(folderName))
     }
 
-    /// Adressen ur en `<adress> FÄRDIGA`-mapp (nil om namnet inte följer mönstret).
+    /// Adressen ur en `<adress> FÄRDIGA`- eller `<adress> red`-mapp (skiftlägesokänsligt; nil om
+    /// namnet inte följer mönstret eller adressen skulle bli tom).
     static func addressName(fromFinishedDir name: String) -> String? {
-        guard name.hasSuffix(finishedSuffix), name.count > finishedSuffix.count else { return nil }
-        return String(name.dropLast(finishedSuffix.count))
+        for suffix in [finishedSuffix, redSuffix] where name.lowercased().hasSuffix(suffix.lowercased()) {
+            let address = String(name.dropLast(suffix.count)).trimmingCharacters(in: .whitespaces)
+            return address.isEmpty ? nil : address
+        }
+        return nil
     }
 
     /// Är bilderna i källmappen fotografens egna, redigerade (`<adress> FÄRDIGA`, `<adress> red`, en mapp
@@ -69,7 +88,7 @@ nonisolated enum AddressFolderLayout {
     }
 
     /// Filmens utmapp för en källmapp med färdiga bilder: `<adress> FILM` bredvid
-    /// `<adress> FÄRDIGA`, annars `<källmappens namn> FILM` bredvid källmappen.
+    /// `<adress> FÄRDIGA` eller `<adress> red`, annars `<källmappens namn> FILM` bredvid källmappen.
     static func reelDir(forSource source: URL) -> URL {
         let name = source.lastPathComponent
         let base = addressName(fromFinishedDir: name) ?? name

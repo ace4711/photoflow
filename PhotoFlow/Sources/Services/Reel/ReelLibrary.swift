@@ -37,7 +37,7 @@ nonisolated struct ReelFilmFolder: Sendable, Equatable, Identifiable {
     var id: String { directory.path }
 
     /// Mappen med de färdiga bilderna: den som `reel-remote.json` pekar på, annars
-    /// `<adress> FÄRDIGA` bredvid FILM-mappen. Nil om ingen av dem finns kvar.
+    /// `<adress> FÄRDIGA` (eller `<adress> red`) bredvid FILM-mappen. Nil om ingen av dem finns kvar.
     func sourceDirectory() -> URL? {
         let fm = FileManager.default
         func exists(_ url: URL) -> Bool {
