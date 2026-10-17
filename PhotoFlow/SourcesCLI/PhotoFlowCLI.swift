@@ -132,9 +132,13 @@ struct PhotoFlowCLI {
                              inte rekursivt). Krävs.
           --output <mapp>   Mapp för reel.json, reel_analysis.json och
                              videon. Krävs.
-          --count <n>       Antal bilder i filmen (standard 5).
+          --count <n>       Exakt antal bilder i filmen, 3-12 (standard: automatiskt,
+                             en bild per viktig rumstyp, 5-8).
           --aspect <a>      9:16 (standard, 1080x1920), 1:1 (1080x1080)
                              eller 16:9 (1920x1080).
+          --ai-tags <mapp>  Mapp med ai_tags.json (rum/bildtext som reserv;
+                             standard: indatamappen).
+          --no-render       Skriv bara reel.json och urvalet, ingen video.
           --no-ai           Hoppa över Foundation Models-beskrivningen
                              (rum/kategori) i analysen.
           --json            Skriv en maskinläsbar JSON-sammanfattning
@@ -564,10 +568,12 @@ struct PhotoFlowCLI {
     private static func reelCommand(_ args: [String]) async {
         var inputPath: String?
         var outputPath: String?
-        var count = 5
+        var count: Int?
         var format = ReelFormat.vertical
         var describe = true
         var jsonOutput = false
+        var render = true
+        var aiTagsPath: String?
 
         var idx = 0
         while idx < args.count {
@@ -581,9 +587,15 @@ struct PhotoFlowCLI {
                 idx += 1
                 guard idx < args.count else { fail("--output kräver ett värde") }
                 outputPath = args[idx]
+            case "--ai-tags":
+                idx += 1
+                guard idx < args.count else { fail("--ai-tags kräver ett värde") }
+                aiTagsPath = args[idx]
+            case "--no-render":
+                render = false
             case "--count":
                 idx += 1
-                guard idx < args.count, let n = Int(args[idx]), n > 0 else { fail("--count kräver ett heltal > 0") }
+                guard idx < args.count, let n = Int(args[idx]), (3...12).contains(n) else { fail("--count kräver ett heltal 3-12") }
                 count = n
             case "--aspect":
                 idx += 1
@@ -638,7 +650,8 @@ struct PhotoFlowCLI {
             // Analys
             let analysisStart = Date()
             let items = try await ReelImageAnalyzer.analyze(
-                urls: files, cacheDirectory: outputURL, aiTagsDirectory: inputURL, describe: describe)
+                urls: files, cacheDirectory: outputURL,
+                aiTagsDirectory: aiTagsPath.map { URL(fileURLWithPath: $0) } ?? inputURL, describe: describe)
             let analysisSeconds = Date().timeIntervalSince(analysisStart)
             log(String(format: "Analys: %d av %d bilder på %.1fs", items.count, files.count, analysisSeconds))
             guard !items.isEmpty else { fail("Ingen bild gick att analysera") }
@@ -666,6 +679,10 @@ struct PhotoFlowCLI {
 
             // Rendera
             let output = format.output
+            if !render {
+                log("Ingen rendering (--no-render).")
+                exit(0)
+            }
             let videoURL = outputURL.appendingPathComponent("reel_\(output.aspect.replacingOccurrences(of: ":", with: "x")).mp4")
             let renderStart = Date()
             let lastPercent = ProgressBox()
