@@ -1,6 +1,6 @@
-// ReelSpec v1: TypeScript-typer och inläsning. Motsvarar
+// ReelSpec v1/v2: TypeScript-typer och inläsning. Motsvarar
 // PhotoFlow/Sources/Shared/ReelSpec.swift; den normativa beskrivningen finns i
-// docs/reel-spec-v1.md. Läsare ska ignorera okända fält, så typerna är
+// docs/reel-spec-v1.md (rutor, version 2: docs/reel-spec-v2.md). Läsare ska ignorera okända fält, så typerna är
 // strukturella och `parseReelSpec` returnerar det inlästa objektet som det är
 // (okända fält bevaras, så att en redigerare kan skriva tillbaka dem).
 //
@@ -8,13 +8,15 @@
 // att Node kan köra filen direkt.
 
 export const SCHEMA_NAME = "photoflow.reel";
-/** Den schemaversion den här koden förstår. */
-export const CURRENT_VERSION = 1;
+/** Den högsta schemaversion den här koden förstår (2 = rutor, docs/reel-spec-v2.md). */
+export const CURRENT_VERSION = 2;
 
 export type Easing = "linear" | "easeInOut";
 export type TransitionType = "crossfade" | "cut" | "fadeThroughBlack" | "push";
 export type Direction = "left" | "right" | "up" | "down";
-export type Fit = "cover" | "contain-blur";
+export type Fit = "cover" | "contain-blur" | "panels";
+export type PanelLayout = "stack" | "side" | "sequence";
+export type EntranceType = "slide" | "fade" | "none";
 
 export interface UpdatedBy { role: string; name?: string }
 export interface Property { address: string; sessionID?: string; kind?: string }
@@ -50,6 +52,16 @@ export interface Style { defaultTransition: Transition; easing: Easing; backgrou
 export interface MotionKey { cx: number; cy: number; zoom: number }
 export interface Motion { from: MotionKey; to: MotionKey }
 
+/** Rektangel i normaliserade bildkoordinater. */
+export interface UnitRect { x: number; y: number; w: number; h: number }
+/** En ruta i ett rutklipp (version 2): en bild, eller en del av den (`source`), med egen rörelse. */
+export interface Panel { asset: string; source?: UnitRect | null; motion: Motion }
+export interface Entrance { type: EntranceType; stagger?: number; duration?: number }
+
+export const DEFAULT_GUTTER = 0.006;
+export const DEFAULT_ENTRANCE_STAGGER = 0.3;
+export const DEFAULT_ENTRANCE_DURATION = 0.6;
+
 export interface Clip {
   asset: string;
   duration: number;
@@ -63,6 +75,12 @@ export interface Clip {
   transitionLocked?: boolean;
   /** Fotografens oklampade egna start/slut (bara när klampning mot formatet ändrat dem), se docs/reel-spec-v1.md 2.3. */
   customMotion?: Motion;
+  /** Bara för fit "panels" (version 2). */
+  layout?: PanelLayout;
+  panels?: Panel[];
+  /** Avstånd mellan rutorna som andel av ramens kortsida (stack/side). */
+  gutter?: number;
+  entrance?: Entrance;
 }
 
 /** Redigerarens val (fotografens), bara metadata: renderare ignorerar det. Se docs/reel-spec-v1.md. */
@@ -128,7 +146,9 @@ export class ReelSpecError extends Error {
 
 const TRANSITION_TYPES = ["crossfade", "cut", "fadeThroughBlack", "push"];
 const DIRECTIONS = ["left", "right", "up", "down"];
-const FITS = ["cover", "contain-blur"];
+const FITS = ["cover", "contain-blur", "panels"];
+const LAYOUTS = ["stack", "side", "sequence"];
+const ENTRANCES = ["slide", "fade", "none"];
 
 type Obj = Record<string, unknown>;
 function isObj(v: unknown): v is Obj {
@@ -156,6 +176,47 @@ function checkTransition(t: unknown, where: string): void {
 function checkKey(k: unknown, where: string): void {
   need(isObj(k) && isNum(k.cx) && isNum(k.cy) && isNum(k.zoom),
     `${where}: rörelsens nyckelbild måste ha cx, cy och zoom (tal).`);
+}
+
+/** Rutklipp (fit "panels", version 2): layout, rutor, källrektanglar, gutter och ingång. */
+function checkPanels(c: Obj, where: string, ids: Set<string>): void {
+  need(typeof c.layout === "string" && LAYOUTS.includes(c.layout),
+    `${where}: rutklipp saknar giltig layout (väntade ${LAYOUTS.join(", ")}).`);
+  need(Array.isArray(c.panels), `${where}: rutklipp saknar panels.`);
+  const n = c.panels.length;
+  need(c.layout === "sequence" ? n >= 2 : n === 2,
+    `${where}: layout ${c.layout} kräver ${c.layout === "sequence" ? "minst två" : "exakt två"} rutor (fick ${n}).`);
+  c.panels.forEach((p: unknown, k: number) => {
+    const w = `${where} ruta ${k + 1}`;
+    need(isObj(p), `${w}: måste vara ett objekt.`);
+    need(typeof p.asset === "string" && ids.has(p.asset), `${w}: pekar på en bild (${String(p.asset)}) som inte finns i assets.`);
+    need(isObj(p.motion), `${w}: saknar motion.`);
+    checkKey(p.motion.from, `${w} motion.from`);
+    checkKey(p.motion.to, `${w} motion.to`);
+    if (p.source !== undefined && p.source !== null) {
+      const s = p.source;
+      need(isObj(s) && isNum(s.x) && isNum(s.y) && isNum(s.w) && isNum(s.h)
+        && s.w > 0 && s.h > 0 && s.x >= 0 && s.y >= 0 && s.x + s.w <= 1 + 1e-9 && s.y + s.h <= 1 + 1e-9,
+        `${w}: source måste vara {x, y, w, h} inom bilden med positiv bredd och höjd.`);
+    }
+  });
+  need(c.panels[0].asset === c.asset, `${where}: klippets asset måste vara första rutans bild.`);
+  if (c.gutter !== undefined && c.gutter !== null) need(isNum(c.gutter) && c.gutter >= 0, `${where}: gutter måste vara ett tal ≥ 0.`);
+  if (c.entrance !== undefined && c.entrance !== null) {
+    const e = c.entrance;
+    need(isObj(e) && typeof e.type === "string" && ENTRANCES.includes(e.type),
+      `${where}: okänd ingång (entrance.type), väntade ${ENTRANCES.join(", ")}.`);
+    for (const k of ["stagger", "duration"]) {
+      need(e[k] === undefined || e[k] === null || (isNum(e[k]) && e[k] >= 0), `${where}: entrance.${k} måste vara ett tal ≥ 0.`);
+    }
+  }
+}
+
+/** Alla bilder (asset-id) ett klipp visar: klippets egen och rutornas. */
+export function referencedAssetIds(c: Clip): string[] {
+  const ids = [c.asset];
+  for (const p of c.panels ?? []) if (!ids.includes(p.asset)) ids.push(p.asset);
+  return ids;
 }
 
 /**
@@ -211,11 +272,12 @@ export function parseReelSpec(json: unknown): ReelSpec {
     need(ids.has(c.asset), `${where}: pekar på en bild (${c.asset}) som inte finns i assets.`);
     need(isNum(c.duration) && c.duration > 0, `${where}: duration måste vara ett tal större än 0.`);
     need(typeof c.fit === "string" && FITS.includes(c.fit),
-      `${where}: okänt fit "${String(c.fit)}" (väntade cover eller contain-blur).`);
+      `${where}: okänt fit "${String(c.fit)}" (väntade cover, contain-blur eller panels).`);
     need(isObj(c.motion), `${where}: saknar motion.`);
     checkKey(c.motion.from, `${where} motion.from`);
     checkKey(c.motion.to, `${where} motion.to`);
     if (c.transitionIn !== undefined && c.transitionIn !== null) checkTransition(c.transitionIn, `${where} transitionIn`);
+    if (c.fit === "panels") checkPanels(c, where, ids);
   });
 
   need(Array.isArray(raw.outputs), "Reelen saknar outputs.");

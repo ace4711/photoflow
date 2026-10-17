@@ -116,6 +116,16 @@ nonisolated enum ReelMotionPlanner {
         var motion: ReelSpec.Motion
     }
 
+    /// Ett rutklipps utformning (`fit == .panels`, spec v2): behandlas som fotografens låsta val.
+    /// Planeraren ritar om varken layout, rutor, rörelse eller ingång (rutornas bilder pekar på asset-id:n
+    /// i den spec som skapar låset); bara längd och övergång följer reglerna.
+    nonisolated struct PanelsLock: Sendable, Equatable {
+        var layout: ReelSpec.PanelLayout
+        var panels: [ReelSpec.Panel]
+        var gutter: Double?
+        var entrance: ReelSpec.Entrance?
+    }
+
     /// Fotografens ändringar för ett klipp. `duration` nil = automatisk längd.
     /// Övergången är låst när `transitionLocked`: `transition` används då som den är, och nil
     /// betyder "filmens `style.defaultTransition`" (skrivs som `transitionIn == nil`).
@@ -126,8 +136,10 @@ nonisolated enum ReelMotionPlanner {
         var transitionLocked = false
         var transition: ReelSpec.Transition?
         var custom: CustomMotion?
+        /// Klippet är ett rutklipp som ska behållas som det är (se `PanelsLock`).
+        var panels: PanelsLock?
         var isDefault: Bool {
-            preset == .auto && duration == nil && !transitionLocked && custom == nil
+            preset == .auto && duration == nil && !transitionLocked && custom == nil && panels == nil
         }
 
         /// `.custom` utan rörelse är ett förval som inte går att utföra: räkna som automatiskt.
@@ -161,6 +173,7 @@ nonisolated enum ReelMotionPlanner {
         var result = images.map { kind(of: $0, frameAspect: frameAspect) }
         var forced = Set<Int>()
         for (i, image) in images.enumerated() {
+            if overrides[image.assetID]?.panels != nil { result[i] = .zoom; forced.insert(i); continue }
             switch overrides[image.assetID]?.effectivePreset ?? .auto {
             case .auto: break
             case .custom:
@@ -296,6 +309,27 @@ nonisolated enum ReelMotionPlanner {
             var unclamped: ReelSpec.Motion?
             var panSign = 0.0
 
+            if let lock = override.panels, let first = lock.panels.first {
+                // Rutklipp: fotografens val behålls som det är; längden följer reglerna (en `sequence`
+                // får en grundlängd per ruta).
+                var transition: ReelSpec.Transition?
+                if override.transitionLocked {
+                    transition = override.transition
+                } else if i > 0 {
+                    transition = automaticTransition(previousPanSign: 0, isLast: isLast,
+                                                     defaultTransition: defaultTransition).transition
+                }
+                previousPanSign = 0
+                let perPanel = lock.layout == .sequence ? Double(lock.panels.count) : 1
+                clips.append(.init(asset: first.asset, duration: override.duration ?? autoDuration * perPanel,
+                                   fit: .panels, motion: first.motion, transitionIn: transition,
+                                   motionPreset: Preset.custom.rawValue,
+                                   durationLocked: override.duration == nil ? nil : true,
+                                   transitionLocked: override.transitionLocked ? true : nil,
+                                   layout: lock.layout, panels: lock.panels, gutter: lock.gutter, entrance: lock.entrance))
+                continue
+            }
+
             if override.preset == .custom, let custom = override.custom {
                 // Egen rörelse: behåll fit och nycklar, klampa mittpunkt (och zoom ≥ 1) mot formatet.
                 fit = custom.fit
@@ -424,6 +458,7 @@ nonisolated enum ReelMotionPlanner {
     /// mått som `plan` använder för nästa övergång. Egen rörelse räknas som panorering vid mer
     /// än 0,02 i sidled; annars bara rörelse utan zoom.
     static func panSign(of clip: ReelSpec.Clip) -> Double {
+        if clip.fit == .panels { return 0 }
         let dx = clip.motion.to.cx - clip.motion.from.cx
         if clip.motionPreset == Preset.custom.rawValue { return abs(dx) > 0.02 ? (dx > 0 ? 1 : -1) : 0 }
         guard abs(clip.motion.to.zoom - clip.motion.from.zoom) < 1e-9, clip.fit == .cover, dx != 0 else { return 0 }
@@ -483,7 +518,7 @@ nonisolated enum ReelMotionPlanner {
                                       cx: Double, cy: Double, zoom: Double) -> CGPoint {
         let c = CGPoint(x: cx, y: cy)
         switch fit {
-        case .cover:
+        case .cover, .panels:
             let r = ReelTimeline.cropRect(imageSize: image.size, frameAspect: frameAspect, center: c, zoom: zoom)
             return CGPoint(x: r.midX, y: r.midY)
         case .containBlur:

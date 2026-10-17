@@ -86,13 +86,15 @@ struct ReelSpecCodingTests {
 
     @Test("Version och minReaderVersion styr om specen går att läsa")
     func versionGate() throws {
-        #expect(ReelSpec.currentVersion == 1)
+        #expect(ReelSpec.currentVersion == 2)
         var spec = try ReelSpec.decode(from: try Self.exampleData())
         #expect(spec.isReadable)
 
-        spec.version = 2            // nyare skrivare, men bakåtkompatibel
+        spec.version = 3            // nyare skrivare, men bakåtkompatibel
         #expect(spec.isReadable)
-        spec.minReaderVersion = 2   // brytande ändring
+        spec.minReaderVersion = 2   // rutor: den här koden läser version 2
+        #expect(spec.isReadable)
+        spec.minReaderVersion = 3   // brytande ändring
         #expect(!spec.isReadable)
 
         spec.minReaderVersion = 1

@@ -2,6 +2,8 @@
 
 Det här dokumentet är facit för schemat `photoflow.reel` version 1 och för formlerna som gör att alla renderare (Swift/Core Image på Mac, Canvas/WebGL på webben, ffmpeg i molnet) ritar samma bild. Referensimplementationen är `PhotoFlow/Sources/Shared/ReelTimeline.swift`; den testas mot `PhotoFlow/Tests/Fixtures/Reel/timeline-vectors.json`, som en TypeScript-port ska testas mot med samma tolerans (1e-9).
 
+**Version 2 (rutor)** är ett tillägg i `reel-spec-v2.md`: klipp med `fit: "panels"` (montagehalvor, kollage, rutor efter varandra). Filer utan sådana klipp är fortfarande version 1 och kodas som här; läsare med `currentVersion` 1 vägrar filer med `minReaderVersion: 2`.
+
 Orden **ska**/**får** används i RFC-mening. Siffror är dubbla flyttal (IEEE 754 binary64).
 
 ## 1. Konventioner
@@ -20,7 +22,7 @@ Läsare **ska** ignorera okända fält på alla nivåer. Skrivare **bör** skriv
 | Fält | Typ | Betydelse |
 |---|---|---|
 | `schema` | sträng | Alltid `"photoflow.reel"`. |
-| `version` | heltal | Version av skrivarens schema. Nu 1. |
+| `version` | heltal | Version av skrivarens schema: 1, eller 2 när filmen har rutklipp (`reel-spec-v2.md`). |
 | `minReaderVersion` | heltal | Lägsta läsarversion som kan tolka filen. En läsare med lägre version **ska** vägra filen. |
 | `id` | sträng | Reelens id (UUID). |
 | `revision` | heltal | Räknas upp vid varje sparning. |
@@ -58,7 +60,7 @@ Läsare **ska** ignorera okända fält på alla nivåer. Skrivare **bör** skriv
 `{asset, duration, fit, motion, transitionIn?, motionPreset?, durationLocked?, transitionLocked?, customMotion?}`
 
 - `duration`: sekunder, > 0.
-- `fit`: `"cover"` eller `"contain-blur"`.
+- `fit`: `"cover"` eller `"contain-blur"` (version 2 lägger till `"panels"`, se `reel-spec-v2.md`).
 - `motion`: `{from, to}` där varje nyckel är `{cx, cy, zoom}`. `cx`, `cy` är mittpunkten i bildkoordinater, `zoom` ≥ 1 är relativt basutsnittet (1 = hela cover-utsnittet).
 - `transitionIn`: `{type, direction?, duration}` med `type` ∈ `crossfade`, `cut`, `fadeThroughBlack`, `push`. `direction` ∈ `left`, `right`, `up`, `down` (bara `push`; saknas den används `left`). Ignoreras för klipp 0.
 - `motionPreset?`, `durationLocked?`: fotografens val i redigeraren (`zoomIn`, `zoomOut`, `panRight`, `panLeft`, `contain`; `true` när längden satts för hand). Bara metadata så att en ombyggnad bevarar valen; renderare läser `motion` och `duration`. Tillägg inom v1.

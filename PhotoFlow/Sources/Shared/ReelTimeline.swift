@@ -40,6 +40,20 @@ nonisolated enum ReelTimeline {
         var z: Int
         /// Bara för `contain-blur` med suddig bakgrund.
         var backdrop: Backdrop?
+        /// Bara för rutlager (`fit == .panels`, version 2). `opacity` och `offset` ovan gäller då hela
+        /// klippets grupp (alla rutor med samma `z` ritas först på en svart ram och blandas sedan,
+        /// som `contain-blur`-gruppen); rutans egen ingång ligger här.
+        var panel: PanelInfo?
+    }
+
+    /// Rutans egna värden inom gruppen (spec v2, avsnitt 4–5).
+    nonisolated struct PanelInfo: Equatable, Sendable {
+        /// Rutans ordning i klippet (0 = första).
+        var index: Int
+        /// Rutans egen opacitet (ingång `fade`), 0...1. Rutor med 0 returneras aldrig.
+        var opacity: Double
+        /// Rutans egen förskjutning (ingång `slide`, intern skjutning i `sequence`), ramandelar.
+        var offset: CGPoint
     }
 
     // MARK: - Tid
@@ -150,6 +164,112 @@ nonisolated enum ReelTimeline {
         return CGRect(x: x, y: y, width: s, height: s)
     }
 
+    // MARK: - Rutor (spec v2)
+
+    /// Rutornas `dest` i ramkoordinater för `stack` och `side` (avsnitt 3.1 i `reel-spec-v2.md`).
+    /// `gutter` är andel av ramens kortsida, klampad till [0, 0,1].
+    static func panelDests(layout: ReelSpec.PanelLayout, frameAspect: Double, gutter: Double) -> [CGRect] {
+        let g = min(max(gutter, 0), 0.1)
+        switch layout {
+        case .stack:
+            let gy = g * min(frameAspect, 1)
+            let h = (1 - gy) / 2
+            return [CGRect(x: 0, y: 0, width: 1, height: h), CGRect(x: 0, y: (1 + gy) / 2, width: 1, height: h)]
+        case .side:
+            let gx = g * min(1, 1 / frameAspect)
+            let w = (1 - gx) / 2
+            return [CGRect(x: 0, y: 0, width: w, height: 1), CGRect(x: (1 + gx) / 2, y: 0, width: w, height: 1)]
+        case .sequence:
+            return [CGRect(x: 0, y: 0, width: 1, height: 1)]
+        }
+    }
+
+    /// Cover-utsnittet inom en rutas `source` mot en ruta med bildförhållandet `destAspect`, omräknat
+    /// till hela bildens koordinater (avsnitt 2 i `reel-spec-v2.md`). Mittpunkten (hela bildens
+    /// koordinater) klampas inom `source`.
+    static func panelCrop(imageSize: CGSize, source: ReelSpec.UnitRect?, destAspect: Double,
+                          center: CGPoint, zoom: Double) -> CGRect {
+        guard let s = source, s.w > 0, s.h > 0 else {
+            return cropRect(imageSize: imageSize, frameAspect: destAspect, center: center, zoom: zoom)
+        }
+        let local = CGPoint(x: (Double(center.x) - s.x) / s.w, y: (Double(center.y) - s.y) / s.h)
+        let r = cropRect(imageSize: CGSize(width: s.w * Double(imageSize.width), height: s.h * Double(imageSize.height)),
+                         frameAspect: destAspect, center: local, zoom: zoom)
+        return CGRect(x: s.x + Double(r.minX) * s.w, y: s.y + Double(r.minY) * s.h,
+                      width: Double(r.width) * s.w, height: Double(r.height) * s.h)
+    }
+
+    /// Tiden en intern skjutning mellan två rutor i `sequence` tar: min(0,4, D / (2n)).
+    static func sequencePushDuration(clipDuration d: Double, panelCount n: Int) -> Double {
+        min(0.4, d / Double(2 * max(n, 1)))
+    }
+
+    /// Rutlagren för klipp `index` vid tid `t`. `opacity`/`offset`/`z` är gruppens.
+    private static func panelLayers(_ spec: ReelSpec, clip index: Int, start: Double, t: Double,
+                                    frameAspect: Double, opacity: Double, offset: CGPoint, z: Int) -> [LayerState] {
+        let clip = spec.timeline[index]
+        guard clip.fit == .panels, let layout = clip.layout, let panels = clip.panels, panels.count >= 2,
+              clip.duration > 0 else { return [] }
+        let d = clip.duration
+        let tau = min(max(t - start, 0), d)
+
+        func make(_ k: Int, dest: CGRect, motionP: Double, panelOpacity: Double, panelOffset: CGPoint) -> LayerState? {
+            guard panelOpacity > 0,
+                  let asset = spec.assets.first(where: { $0.id == panels[k].asset }) else { return nil }
+            let imageSize = CGSize(width: asset.width, height: asset.height)
+            let key = interpolate(panels[k].motion, e: easing(spec.style.easing, motionP))
+            let destAspect = Double(dest.width) * frameAspect / Double(dest.height)
+            let crop = panelCrop(imageSize: imageSize, source: panels[k].source, destAspect: destAspect,
+                                 center: CGPoint(x: key.cx, y: key.cy), zoom: key.zoom)
+            return LayerState(asset: asset.id, fit: .panels, crop: crop, dest: dest, opacity: opacity,
+                              offset: offset, z: z, backdrop: nil,
+                              panel: PanelInfo(index: k, opacity: panelOpacity, offset: panelOffset))
+        }
+
+        switch layout {
+        case .stack, .side:
+            guard panels.count == 2 else { return [] }
+            let dests = panelDests(layout: layout, frameAspect: frameAspect, gutter: clip.gutter ?? ReelSpec.Clip.defaultGutter)
+            let p = min(max(tau / d, 0), 1)
+            let din = min(max(clip.entrance?.duration ?? ReelSpec.Entrance.defaultDuration, 0), d / 2)
+            let stagger = min(max(clip.entrance?.stagger ?? ReelSpec.Entrance.defaultStagger, 0), d / 2)
+            return (0..<2).compactMap { k in
+                var o = 1.0, off = CGPoint.zero
+                if let type = clip.entrance?.type, type != .none {
+                    let q = din > 0 ? min(max((tau - Double(k) * stagger) / din, 0), 1) : 1
+                    let e = easing(spec.style.easing, q)
+                    if type == .fade {
+                        o = e
+                    } else {
+                        let sign = k == 0 ? -1.0 : 1.0
+                        off = layout == .stack ? CGPoint(x: sign * (1 - e), y: 0) : CGPoint(x: 0, y: sign * (1 - e))
+                    }
+                }
+                return make(k, dest: dests[k], motionP: p, panelOpacity: o, panelOffset: off)
+            }
+        case .sequence:
+            let n = panels.count
+            let seg = d / Double(n)
+            let dp = sequencePushDuration(clipDuration: d, panelCount: n)
+            let full = CGRect(x: 0, y: 0, width: 1, height: 1)
+            func progress(_ k: Int) -> Double { min(max((tau - Double(k) * seg) / seg, 0), 1) }
+            // Pågår skjutningen k−1 → k? Den ligger i [k·seg − dp/2, k·seg + dp/2).
+            for k in 1..<n {
+                let from = Double(k) * seg - dp / 2
+                guard tau >= from, tau < from + dp else { continue }
+                let e = easing(spec.style.easing, (tau - from) / dp)
+                return [make(k - 1, dest: full, motionP: progress(k - 1), panelOpacity: 1, panelOffset: CGPoint(x: -e, y: 0)),
+                        make(k, dest: full, motionP: progress(k), panelOpacity: 1, panelOffset: CGPoint(x: 1 - e, y: 0))]
+                    .compactMap { $0 }
+            }
+            // Annars: den ruta vars skjutning in är klar (största k med tau ≥ k·seg + dp/2).
+            var current = 0
+            for k in 1..<n where tau >= Double(k) * seg + dp / 2 { current = k }
+            return [make(current, dest: full, motionP: progress(current), panelOpacity: 1, panelOffset: .zero)]
+                .compactMap { $0 }
+        }
+    }
+
     // MARK: - Tillstånd vid tid t
 
     /// Lagren som syns vid tid `t` (klampas till [0, total]), lägst `z` först.
@@ -166,10 +286,15 @@ nonisolated enum ReelTimeline {
         for k in spec.timeline.indices where starts[k] <= t { i = k }
 
         let frameAspect = Double(outputSize.width / outputSize.height)
-        func layer(_ clip: Int, opacity: Double, offset: CGPoint, z: Int) -> LayerState? {
-            guard opacity > 0 else { return nil }
+        func layer(_ clip: Int, opacity: Double, offset: CGPoint, z: Int) -> [LayerState] {
+            guard opacity > 0 else { return [] }
+            if spec.timeline[clip].fit == .panels {
+                return panelLayers(spec, clip: clip, start: starts[clip], t: t, frameAspect: frameAspect,
+                                   opacity: opacity, offset: offset, z: z)
+            }
             return makeLayer(spec, clip: clip, start: starts[clip], t: t, frameAspect: frameAspect,
                              frameHeight: Double(outputSize.height), opacity: opacity, offset: offset, z: z)
+                .map { [$0] } ?? []
         }
 
         if let tr = transition(spec, at: i), t < starts[i] + tr.duration {
@@ -178,8 +303,8 @@ nonisolated enum ReelTimeline {
             case .crossfade:
                 // Utgående fullt synligt under; inkommande ovanpå med alfa e.
                 // Blandning (1−e)·ut + e·in direkt i sRGB-värden.
-                return [layer(i - 1, opacity: 1, offset: .zero, z: 0),
-                        layer(i, opacity: e, offset: .zero, z: 1)].compactMap { $0 }
+                return layer(i - 1, opacity: 1, offset: .zero, z: 0)
+                    + layer(i, opacity: e, offset: .zero, z: 1)
             case .push:
                 let dir = tr.direction ?? .left
                 let (dx, dy): (Double, Double)
@@ -191,9 +316,8 @@ nonisolated enum ReelTimeline {
                 }
                 // Utgående glider e ramar i riktningen; inkommande startar en
                 // ram bakom och når 0 när e = 1.
-                return [layer(i - 1, opacity: 1, offset: CGPoint(x: dx * e, y: dy * e), z: 0),
-                        layer(i, opacity: 1, offset: CGPoint(x: dx * (e - 1), y: dy * (e - 1)), z: 1)]
-                    .compactMap { $0 }
+                return layer(i - 1, opacity: 1, offset: CGPoint(x: dx * e, y: dy * e), z: 0)
+                    + layer(i, opacity: 1, offset: CGPoint(x: dx * (e - 1), y: dy * (e - 1)), z: 1)
             case .fadeThroughBlack:
                 // Svart bakom. Första halvan (q < 0,5): utgående tonar ut,
                 // opacitet 1 − easing(2q). Andra halvan: inkommande tonar in,
@@ -202,16 +326,16 @@ nonisolated enum ReelTimeline {
                 let q = (t - starts[i]) / tr.duration
                 if q < 0.5 {
                     let o = 1 - easing(spec.style.easing, 2 * q)
-                    return [layer(i - 1, opacity: o, offset: .zero, z: 0)].compactMap { $0 }
+                    return layer(i - 1, opacity: o, offset: .zero, z: 0)
                 } else {
                     let o = easing(spec.style.easing, 2 * q - 1)
-                    return [layer(i, opacity: o, offset: .zero, z: 1)].compactMap { $0 }
+                    return layer(i, opacity: o, offset: .zero, z: 1)
                 }
             case .cut:
                 break // returneras aldrig av `transition`
             }
         }
-        return [layer(i, opacity: 1, offset: .zero, z: 1)].compactMap { $0 }
+        return layer(i, opacity: 1, offset: .zero, z: 1)
     }
 
     private static func makeLayer(_ spec: ReelSpec, clip index: Int, start: Double, t: Double,
@@ -242,6 +366,8 @@ nonisolated enum ReelTimeline {
                               crop: containCrop(center: center, zoom: key.zoom),
                               dest: containRect(imageSize: imageSize, frameAspect: frameAspect),
                               opacity: opacity, offset: offset, z: z, backdrop: backdrop)
+        case .panels:
+            return nil   // ritas av `panelLayers`
         }
     }
 }

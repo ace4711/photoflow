@@ -33,7 +33,7 @@ nonisolated enum ReelMotionGeometry {
     /// (spec 5.1) eller, för contain-blur, hela bilden (1×1, spec 5.2).
     static func baseSize(fit: ReelSpec.Fit, imageSize: CGSize, frameAspect: Double) -> CGSize {
         switch fit {
-        case .cover:
+        case .cover, .panels:   // rutklipp redigeras inte här (R6d); geometrin är cover så att inget kraschar
             let r = ReelTimeline.cropRect(imageSize: imageSize, frameAspect: frameAspect,
                                           center: CGPoint(x: 0.5, y: 0.5), zoom: 1)
             return r.size
@@ -46,7 +46,7 @@ nonisolated enum ReelMotionGeometry {
     static func frame(for key: ReelSpec.MotionKey, fit: ReelSpec.Fit, imageSize: CGSize, frameAspect: Double) -> CGRect {
         let center = CGPoint(x: key.cx, y: key.cy)
         switch fit {
-        case .cover:
+        case .cover, .panels:
             return ReelTimeline.cropRect(imageSize: imageSize, frameAspect: frameAspect, center: center, zoom: key.zoom)
         case .containBlur:
             return ReelTimeline.containCrop(center: center, zoom: key.zoom)

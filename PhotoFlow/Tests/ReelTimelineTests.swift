@@ -323,7 +323,9 @@ struct ReelTimelineTests {
     struct Layer: Decodable {
         var asset: String; var fit: String; var crop: Rect; var dest: Rect
         var opacity: Double; var offset: Offset; var z: Int; var backdrop: Backdrop?
+        var panel: PanelInfo?
     }
+    struct PanelInfo: Decodable { var index: Int; var opacity: Double; var offset: Offset }
     struct StateCase: Decodable { var t: Double; var outputSize: [Double]; var layers: [Layer] }
     struct Timeline: Decodable {
         var name: String; var specFile: String?; var spec: ReelSpec?
@@ -377,6 +379,12 @@ struct ReelTimelineTests {
                     #expect(Self.approx(Double(l.offset.x), e.offset.x, tol) && Self.approx(Double(l.offset.y), e.offset.y, tol), "\(label): offset")
                     #expect(Self.approx(l.crop, e.crop.x, e.crop.y, e.crop.w, e.crop.h, tol), "\(label): crop")
                     #expect(Self.approx(l.dest, e.dest.x, e.dest.y, e.dest.w, e.dest.h, tol), "\(label): dest")
+                    #expect((l.panel == nil) == (e.panel == nil), "\(label): panel")
+                    if let p = l.panel, let ep = e.panel {
+                        #expect(p.index == ep.index && Self.approx(p.opacity, ep.opacity, tol), "\(label): panel")
+                        #expect(Self.approx(Double(p.offset.x), ep.offset.x, tol) && Self.approx(Double(p.offset.y), ep.offset.y, tol),
+                                "\(label): panel-offset")
+                    }
                     #expect((l.backdrop == nil) == (e.backdrop == nil), "\(label): backdrop")
                     if let b = l.backdrop, let eb = e.backdrop {
                         #expect(Self.approx(b.sigma, eb.sigma, tol), "\(label): sigma")

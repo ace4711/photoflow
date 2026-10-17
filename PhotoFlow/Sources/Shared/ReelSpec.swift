@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 /// ReelSpec v1: den plattformsoberoende beskrivningen av ett bildspel
 /// ("Objektfilm"). Specen säger *vad* som ska synas vid tid *t*, aldrig *hur*
@@ -18,8 +19,11 @@ nonisolated struct ReelSpec: Codable, Sendable, Equatable {
 
     /// Fast värde i `schema`, så att en läsare kan avgöra att filen är en reel.
     static let schemaName = "photoflow.reel"
-    /// Den schemaversion den här koden skriver och förstår.
-    static let currentVersion = 1
+    /// Den högsta schemaversion den här koden förstår (läsare). Skrivaren skriver bara 2 när filmen
+    /// har rutklipp (`fit: "panels"`), annars 1 (se `requiredVersion`, `updatingVersions`).
+    static let currentVersion = 2
+    /// Version 2 = rutor (`docs/reel-spec-v2.md`).
+    static let panelsVersion = 2
 
     var schema: String
     var version: Int
@@ -50,6 +54,35 @@ nonisolated struct ReelSpec: Codable, Sendable, Equatable {
     /// Kan den här koden läsa filen? (`schema` rätt och inget brytande krav.)
     var isReadable: Bool {
         schema == Self.schemaName && minReaderVersion <= Self.currentVersion
+    }
+
+    /// Lägsta läsarversion filmens innehåll kräver: 2 om något klipp är ett rutklipp, annars 1.
+    var requiredVersion: Int {
+        timeline.contains { $0.fit == .panels } ? Self.panelsVersion : 1
+    }
+
+    /// Samma spec med `version` och `minReaderVersion` satta exakt efter innehållet (`requiredVersion`):
+    /// 2 med rutklipp, annars 1. Ombyggnaden (`ReelComposer.rebuild`) använder den, så att en film
+    /// som inte längre har rutor åter skrivs som version 1.
+    func updatingVersions() -> ReelSpec {
+        var s = self
+        s.version = requiredVersion
+        s.minReaderVersion = requiredVersion
+        return s
+    }
+
+    /// Samma spec med versionsfälten höjda till minst `requiredVersion` (aldrig sänkta). `jsonData()`
+    /// använder den: rutklipp ger alltid `minReaderVersion` 2, och en spec utan rutor kodas byte för byte som förut.
+    func raisingVersions() -> ReelSpec {
+        var s = self
+        s.version = max(s.version, requiredVersion)
+        s.minReaderVersion = max(s.minReaderVersion, requiredVersion)
+        return s
+    }
+
+    /// Asset-id:n som något klipp använder: klippets egen bild och rutornas bilder.
+    var usedAssetIDs: Set<String> {
+        Set(timeline.flatMap(\.referencedAssetIDs))
     }
 
     // MARK: - Delstrukturer
@@ -145,6 +178,53 @@ nonisolated struct ReelSpec: Codable, Sendable, Equatable {
     nonisolated enum Fit: String, Codable, Sendable {
         case cover
         case containBlur = "contain-blur"
+        /// Klippet består av rutor (`Clip.panels`, `Clip.layout`). Kräver version 2.
+        case panels
+    }
+
+    /// Hur rutorna i ett rutklipp läggs ut (avsnitt 2 i `docs/reel-spec-v2.md`).
+    nonisolated enum PanelLayout: String, Codable, Sendable {
+        /// Två rutor ovanför varandra.
+        case stack
+        /// Två rutor sida vid sida.
+        case side
+        /// Rutorna visas efter varandra med en intern skjut-övergång.
+        case sequence
+    }
+
+    /// Rektangel i normaliserade bildkoordinater (origo uppe till vänster).
+    nonisolated struct UnitRect: Codable, Sendable, Equatable {
+        var x: Double
+        var y: Double
+        var w: Double
+        var h: Double
+        var cgRect: CGRect { CGRect(x: x, y: y, width: w, height: h) }
+        init(x: Double, y: Double, w: Double, h: Double) { self.x = x; self.y = y; self.w = w; self.h = h }
+    }
+
+    /// En ruta i ett rutklipp: en bild (eller en del av den, `source`) med egen rörelse.
+    nonisolated struct Panel: Codable, Sendable, Equatable {
+        var asset: String
+        /// Den del av bilden rutan använder (bildkoordinater); nil = hela bilden. Montagehalvor.
+        var source: UnitRect?
+        /// Rörelsen i hela bildens koordinater (mittpunkten klampas inom `source`).
+        var motion: Motion
+    }
+
+    nonisolated enum EntranceType: String, Codable, Sendable {
+        case slide, fade, none
+    }
+
+    /// Hur rutorna kommer in i början av ett `stack`/`side`-klipp (ignoreras för `sequence`).
+    nonisolated struct Entrance: Codable, Sendable, Equatable {
+        var type: EntranceType
+        /// Sekunder mellan rutornas start. Saknas den gäller `defaultStagger`.
+        var stagger: Double?
+        /// Längd (sekunder) på varje rutas ingång. Saknas den gäller `defaultDuration`.
+        var duration: Double?
+
+        static let defaultStagger = 0.3
+        static let defaultDuration = 0.6
     }
 
     /// Ett lägesbeskrivande nyckelbildsläge: mittpunkt i normaliserade
@@ -182,6 +262,23 @@ nonisolated struct ReelSpec: Codable, Sendable, Equatable {
         /// att ett formatbyte fram och tillbaka inte ändrar den egna rörelsen för gott. Bara metadata
         /// för redigeraren; renderare läser `motion`. Tillägg inom v1.
         var customMotion: Motion?
+        /// Bara för `fit == .panels` (version 2): hur rutorna läggs ut.
+        var layout: PanelLayout?
+        /// Bara för `fit == .panels`: rutorna (två för `stack`/`side`, två eller fler för `sequence`).
+        var panels: [Panel]?
+        /// Bara för `stack`/`side`: avståndet mellan rutorna som andel av ramens kortsida (förval `defaultGutter`).
+        var gutter: Double?
+        /// Bara för `stack`/`side`: ingången. Saknas den visas rutorna direkt.
+        var entrance: Entrance?
+
+        static let defaultGutter = 0.006
+
+        /// Alla bilder klippet visar: den egna och rutornas.
+        var referencedAssetIDs: [String] {
+            var ids = [asset]
+            for p in panels ?? [] where !ids.contains(p.asset) { ids.append(p.asset) }
+            return ids
+        }
     }
 
     /// Redigerarens val som gäller hela filmen. Bara metadata (se `ReelComposer`).
@@ -284,7 +381,7 @@ nonisolated struct ReelSpec: Codable, Sendable, Equatable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601
-        return try encoder.encode(self)
+        return try encoder.encode(raisingVersions())
     }
 
     /// Avkodar en spec. Okända fält ignoreras; versionskravet kontrolleras

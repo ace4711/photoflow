@@ -56,6 +56,14 @@ for (const tl of vectors.timelines) {
         near(l.offset.y, e.offset.y, `${where}: offset.y`);
         nearRect(l.crop, e.crop, `${where}: crop`);
         nearRect(l.dest, e.dest, `${where}: dest`);
+        const ep = e.panel ?? null;
+        assert.equal((l.panel ?? null) === null, ep === null, `${where}: panel finns`);
+        if (l.panel && ep) {
+          assert.equal(l.panel.index, ep.index, `${where}: panel.index`);
+          near(l.panel.opacity, ep.opacity, `${where}: panel.opacity`);
+          near(l.panel.offset.x, ep.offset.x, `${where}: panel.offset.x`);
+          near(l.panel.offset.y, ep.offset.y, `${where}: panel.offset.y`);
+        }
         assert.equal(l.backdrop === null, e.backdrop === null, `${where}: backdrop finns`);
         if (l.backdrop && e.backdrop) {
           nearRect(l.backdrop.crop, e.backdrop.crop, `${where}: backdrop.crop`);
@@ -77,7 +85,7 @@ test("parseReelSpec: begripliga fel", () => {
   const ok = readFileSync(join(fixtures, "example-v1.json"), "utf8");
   assert.throws(() => parseReelSpec("{inte json"), ReelSpecError);
   assert.throws(() => parseReelSpec({ schema: "annat" }), /inte en reel-fil/);
-  const nyare = JSON.parse(ok); nyare.minReaderVersion = 2;
+  const nyare = JSON.parse(ok); nyare.minReaderVersion = 3;
   assert.throws(() => parseReelSpec(nyare), /nyare läsare/);
   const sak = JSON.parse(ok); sak.timeline[0].asset = "x9";
   assert.throws(() => parseReelSpec(sak), /Klipp 1.*x9/);
@@ -87,4 +95,37 @@ test("parseReelSpec: begripliga fel", () => {
   const extra = JSON.parse(ok); extra.nyttFalt = { a: 1 }; extra.timeline[0].annat = 5;
   const spec = parseReelSpec(extra);
   assert.deepEqual(spec.nyttFalt, { a: 1 });
+});
+
+test("rutor: vektorfallen finns och täcker alla layouter och ingångar", () => {
+  const names: string[] = vectors.timelines.map((t: { name: string }) => t.name).filter((n: string) => n.startsWith("panels-"));
+  assert.ok(names.length >= 8, `fick ${names.length} rutfall`);
+  const kinds = new Set<string>();
+  for (const tl of vectors.timelines) {
+    for (const c of tl.spec?.timeline ?? []) {
+      if (c.fit === "panels") { kinds.add(`layout:${c.layout}`); kinds.add(`entrance:${c.entrance?.type ?? "saknas"}`); }
+      for (const p of c.panels ?? []) if (p.source) kinds.add("source");
+    }
+  }
+  for (const k of ["layout:stack", "layout:side", "layout:sequence", "entrance:slide", "entrance:fade", "entrance:none", "entrance:saknas", "source"]) {
+    assert.ok(kinds.has(k), `saknar ${k}`);
+  }
+});
+
+test("parseReelSpec: rutklipp valideras", () => {
+  const tl = vectors.timelines.find((t: { name: string }) => t.name === "panels-stack-slide");
+  const ok = (): any => JSON.parse(JSON.stringify(tl.spec));
+  assert.doesNotThrow(() => parseReelSpec(ok()));
+  const noLayout = ok(); delete noLayout.timeline[1].layout;
+  assert.throws(() => parseReelSpec(noLayout), /layout/);
+  const three = ok(); three.timeline[1].panels.push(three.timeline[1].panels[0]);
+  assert.throws(() => parseReelSpec(three), /exakt två/);
+  const missing = ok(); missing.timeline[1].panels[1].asset = "zz";
+  assert.throws(() => parseReelSpec(missing), /ruta 2.*zz/);
+  const badSrc = ok(); badSrc.timeline[1].panels[0].source = { x: 0.8, y: 0, w: 0.5, h: 1 };
+  assert.throws(() => parseReelSpec(badSrc), /source/);
+  const badEntrance = ok(); badEntrance.timeline[1].entrance = { type: "wipe" };
+  assert.throws(() => parseReelSpec(badEntrance), /ingång/);
+  const wrongAsset = ok(); wrongAsset.timeline[1].asset = "c";
+  assert.throws(() => parseReelSpec(wrongAsset), /första rutans bild/);
 });

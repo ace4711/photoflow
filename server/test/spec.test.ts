@@ -231,6 +231,15 @@ test("poolvalidering: dubbletter, max 40, ogiltig hash och specens id/duration/u
   assert.equal((await put(id, clips, 1)).status, 422);
   // minReaderVersion 2 vägras
   assert.equal((await put(id, specBody([0], { minReaderVersion: 2 }), 1)).status, 422);
+  // en riktig v2-spec (rutklipp) vägras tydligt och sparas inte (R6a: servern är fortfarande v1)
+  const panelsSpec = specBody([0, 1], { version: 2, minReaderVersion: 2 });
+  const pc = (panelsSpec.timeline as any[])[1];
+  const pm = { from: { cx: 0.5, cy: 0.5, zoom: 1 }, to: { cx: 0.5, cy: 0.5, zoom: 1.04 } };
+  Object.assign(pc, { fit: "panels", layout: "stack", panels: [{ asset: pc.asset, motion: pm }, { asset: "a3", motion: pm }] });
+  const pr = await put(id, panelsSpec, 1);
+  assert.equal(pr.status, 422);
+  assert.equal(pr.json.error.code, "invalid_spec");
+  assert.match(pr.json.error.message, /version 2.*bara version 1/);
   // fel reel-id
   assert.equal((await put(id, specBody([0], { id: "annat" }), 1)).status, 422);
   // mäklaren får inte ändra utbildsprofiler men fotografen får
