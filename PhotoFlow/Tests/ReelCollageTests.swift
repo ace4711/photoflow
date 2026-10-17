@@ -150,6 +150,17 @@ struct ReelCollageTests {
         #expect(pair.reason.hasPrefix("Kollage: Kök (två bilder), båda ryms i 9:8"))
     }
 
+    @Test("De närmast bortvalda räknas bland dem med ett rum som passar, inte bland alla bortvalda")
+    func poolFilteredByRoom() throws {
+        let list = villa().filter { $0.id != "matp" }
+        // Tio bortvalda fasadbilder med högre poäng än köksbilden fyller inte poolen åt köket.
+        var pool = (0..<10).map { cand("f\($0)", room: "Fasad", q: 0.95, axis: 20 + $0) }
+        pool.append(cand("kok2", room: "Kök", q: 0.5, axis: 8))
+        let found = ReelCollage.pairs(order: list, openingID: "fasad", closingID: "trad", pool: pool, frameAspect: vertical,
+                                      score: { $0.quality ?? 0 }, distance: { _, _ in nil }, pinned: [], weights: .init())
+        #expect(found.first?.partnerID == "kok2")
+    }
+
     // MARK: - Urval
 
     @Test("Urvalet: kollaget är ett klipp men två bilder, båda i picks, och nästa rumstyp får den lediga platsen")
@@ -417,6 +428,22 @@ struct ReelCollageTests {
         let again = ReelComposer.rebuild(vertical, order: vertical.timeline.map(\.asset))
         #expect(again.timeline == vertical.timeline)
         #expect(again.assets == vertical.assets)
+    }
+
+    @Test("En extra bild (urvalet valde den inte) lämnar filmen när kollaget upplöses; en vald partner får eget klipp")
+    func extraPartnerLeavesOnDissolve() throws {
+        var list = items().filter { $0.analysis.room != "Matplats" }
+        list.append(item(8, room: "Kök", q: 0.6))
+        var options = ReelComposer.Options()
+        options.curated = true
+        let spec = ReelComposer.compose(items: list, specDirectory: specDir, options: options).spec
+        let i = try #require(collageIndex(spec))
+        let partner = try #require(ReelComposer.autoCollagePartner(spec.timeline[i]))
+        let reasons = Dictionary(uniqueKeysWithValues: (spec.provenance.autoSelection ?? []).map { ($0.asset, $0) })
+        #expect(reasons[partner]?.slot == "extra" && reasons[partner]?.reason.hasSuffix("extra bild utan egen plats") == true)
+        let landscape = ReelComposer.rebuild(spec, order: spec.timeline.map(\.asset), format: .landscape)
+        #expect(landscape.timeline.count == spec.timeline.count && !landscape.assets.contains { $0.id == partner })
+        #expect(landscape.timeline.allSatisfy { $0.fit != .panels } && landscape.version == 1)
     }
 
     @Test("Ändra ordning: kollaget följer ankaret; ta bort ankaret: båda bilderna lämnar filmen")

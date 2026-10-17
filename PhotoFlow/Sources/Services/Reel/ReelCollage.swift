@@ -9,7 +9,8 @@ import Foundation
 /// - Ankare (bilden som behöver en partner): en vald bild som i formatet annars blir contain-blur eller
 ///   vars motiv inte ryms i cover-utsnittet (`ReelMotionPlanner.needsCollage`). Öppning och avslut är
 ///   aldrig kollage: de är filmens första och sista intryck och ska fylla hela rutan (beslut R6c).
-/// - Partner: en annan vald bild eller en av de närmast bortvalda (`collagePoolSize` bäst), med
+/// - Partner: en annan vald bild eller en av de närmast bortvalda (de `collagePoolSize` bäst poängsatta med
+///   ett rum som passar ankaret), med
 ///   kompatibelt rum (samma typ eller ett par i `collageRoomPairs`), inte nära dubblett
 ///   (`collageMinDistance`), liknande ljus (`collageMaxLuminanceDiff`) och motiv som ryms i rutan.
 /// - Aldrig fasad eller utsikt (`collageExcludedRooms`), aldrig montage, aldrig en låst bild.
@@ -87,12 +88,14 @@ nonisolated enum ReelCollage {
         }.sorted { (badness($0), -(position[$0.id] ?? 0)) > (badness($1), -(position[$1.id] ?? 0)) }
 
         let maxPairs = max(1, Int(Double(order.count) * w.collageMaxShare))
-        let poolBest = pool.sorted { score($0) > score($1) }.prefix(w.collagePoolSize)
+        let poolByScore = pool.sorted { score($0) > score($1) }
         var used = Set<String>()
         var result: [Pair] = []
         for a in anchors where result.count < maxPairs && !used.contains(a.id) {
             // Valda bilder före bortvalda vid lika poäng; annars bäst grundpoäng först.
-            let candidates = (order.map { ($0, true) } + poolBest.map { ($0, false) }).filter { c, _ in
+            // De närmast bortvalda är de `collagePoolSize` bäst poängsatta med ett rum som passar ankaret.
+            let near = poolByScore.filter { compatibleRooms(a, $0, weights: w) }.prefix(w.collagePoolSize)
+            let candidates = (order.map { ($0, true) } + near.map { ($0, false) }).filter { c, _ in
                 free(c) && !used.contains(c.id)
             }.sorted { score($0.0) > score($1.0) || (score($0.0) == score($1.0) && $0.1 && !$1.1) }
             guard let (p, picked) = candidates.first(where: { c, _ in
