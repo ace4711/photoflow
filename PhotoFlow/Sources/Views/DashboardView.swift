@@ -238,6 +238,8 @@ struct DashboardView: View {
                 Button("Nytt bildspel…", systemImage: "film") { openReelWindow() }
                 Button("Filmer i den här sessionen", systemImage: "film.stack") { openFilmsWindow() }
                     .disabled(settings.outputDirectory == nil)
+                Divider()
+                Button("HDR-jämförelse…", systemImage: "square.split.2x1") { openWindow(id: HDRCompareWindow.id) }
             } label: {
                 Image(systemName: "film")
             }

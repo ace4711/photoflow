@@ -34,7 +34,7 @@ nonisolated struct HDRCompareMetricsFile: Codable, Equatable, Sendable {
 
 /// Läser bilderna i ett manifest, kör `HDRCompareMetrics` och fyller `metrics.json`.
 nonisolated enum HDRCompareRunner {
-    nonisolated(unsafe) private static let context = CIContext(options: [.cacheIntermediates: false])
+    private static let context = CIContext(options: [.cacheIntermediates: false])
 
     /// Läser en bild (TIFF/JPEG/PNG/DNG) nedskalad till `maxDimension` som sRGB-gamma-RGBA-float.
     static func loadImage(_ url: URL, maxDimension: Int = HDRCompareMetrics.workingDimension) -> HDRCompareMetrics.Image? {

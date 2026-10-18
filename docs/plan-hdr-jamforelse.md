@@ -118,14 +118,14 @@ Mot `ref` är ΔE bara vägledande: fotografens bild har manuell framkallning, b
 6. **Fredrik:** skapar testkatalogen, ställer in HDR-dialogen, startar körningen (eller lämnar datorn). Kontrollerar 2–3 grupper manuellt i Lightroom.
 
 **Fas 3 – mått**
-7. `HDRCompareMetrics` (registrering, klippning, brus, färg, ΔE) med tester på syntetiska bilder.
+7. `HDRCompareMetrics` (registrering, klippning, brus, färg, ΔE) med tester på syntetiska bilder. **Klar** (`HDRCompareMetrics.swift`; inläsning och `metrics.json` i `HDRCompareRunner.swift`). Kvar: vitbalans i K/tint (bara a*/b* för nu), och Visions homografi kräver lika stora bilder så en beskuren Lightroom-bild sträcks först.
 8. `photoflow-cli hdr-compare --manifest <fil>` → `metrics.json` + `summary.json`.
 
 **Fas 4 – jämförelsefönstret**
-9. `CompareViewport` + sida vid sida med synkad zoom/panorering.
-10. Svepreglage och A/B-växling, tangentbordsgenvägar.
-11. Blindläge, bedömningspanel, `verdicts.json`.
-12. Sammanfattningsvy med mått och betyg, Markdown-export.
+9. `CompareViewport` + sida vid sida med synkad zoom/panorering. **Klar** (`Views/HDRCompare/`).
+10. Svepreglage och A/B-växling, tangentbordsgenvägar. **Klar** (S, mellanslag, Z, B).
+11. Blindläge, bedömningspanel, `verdicts.json`. **Klar.**
+12. Sammanfattningsvy med mått och betyg, Markdown-export. **Klar** (`summary.md` + `summary.json`). Knappen "Starta Lightroom-körning…" visar bara instruktioner och kommandot `photoflow-cli lr-trigger`; den startar inget.
 13. Ingång från `BracketReviewView` för vanliga sessioner (vår HDR ↔ Lightroom-export för samma grupp).
 
 **Fas 5 – utvärdering**
