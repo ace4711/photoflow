@@ -132,8 +132,14 @@ nonisolated enum HDRCompareCLI {
 
     /// Relativ sökväg mot manifestets mapp när filen ligger under den, annars oförändrad.
     static func relativePath(_ path: String, root: URL) -> String {
-        let prefix = root.standardizedFileURL.path + "/"
-        return path.hasPrefix(prefix) ? String(path.dropFirst(prefix.count)) : path
+        // Symlänkar (/tmp ↔ /private/tmp) löses upp på båda sidor så att jämförelsen stämmer.
+        let resolvedRoot = root.resolvingSymlinksInPath().path + "/"
+        for candidate in [path, URL(fileURLWithPath: path).resolvingSymlinksInPath().path] {
+            for prefix in [root.standardizedFileURL.path + "/", resolvedRoot] where candidate.hasPrefix(prefix) {
+                return String(candidate.dropFirst(prefix.count))
+            }
+        }
+        return path
     }
 
     /// Triggern i experimentläge: NEF-kopiorna i testkatalogen och en exportmapp (`out/<id>/`) per grupp.
