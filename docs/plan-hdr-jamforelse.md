@@ -1,6 +1,6 @@
 # Plan: jämför PhotoFlows HDR med Lightrooms (≈ 20 bracket-grupper)
 
-Status: plan, inget implementerat. Syftet är att mäta och visuellt bedöma hur vår inbyggda HDR (`Services/HDR/`) står sig mot Lightroom Classics Photo Merge > HDR på samma ramar, och att kunna göra jämförelsen i appen.
+Status: beslut tagna 2026-10-18 (avsnitt 8), fas 1–4 påbörjas. Syftet är att mäta och visuellt bedöma hur vår inbyggda HDR (`Services/HDR/`) står sig mot Lightroom Classics Photo Merge > HDR på samma ramar, och att kunna göra jämförelsen i appen.
 
 ## 1. Utgångsläge (vad som finns i dag)
 
@@ -131,7 +131,16 @@ Mot `ref` är ΔE bara vägledande: fotografens bild har manuell framkallning, b
 **Fas 5 – utvärdering**
 14. **Fredrik** bedömer alla 20 grupper i blindläge (≈ 30–45 min). Resultat och slutsatser förs in i den här planen; konkreta förbättringar av motorn blir egna planer.
 
-## 8. Öppna beslut för Fredrik
+## 8. Beslut (Fredrik, 2026-10-18)
+
+1. Lightroom körs **som fotografen kör**: Auto Align på, Auto Settings på, Deghost Låg, Create Stack av. Bara varianten `lr-auto` (ingen `lr-plain`).
+2. **Separat testkatalog** `PhotoFlow-HDR-test.lrcat`.
+3. **Fredrik startar Lightroom-körningen själv** (knapp i jämförelsefönstret / `photoflow-cli lr-trigger`), aldrig agenter.
+4. Vår HDR jämförs **både före och efter Förbättra** (`pf-radiance` och `pf-radiance-enh`).
+5. (Standard) Alla ramar till båda motorerna.
+6. (Standard) Fotografreferens bara för Chronas väg 7 tills vidare.
+
+### Ursprungliga öppna frågor
 
 1. Vilka Lightroom-inställningar gäller som "Lightrooms HDR": Auto Settings på eller av (eller båda varianterna), och Deghost Av/Låg/Medel?
 2. Separat Lightroom-katalog för testet (rekommenderas) eller den vanliga?
