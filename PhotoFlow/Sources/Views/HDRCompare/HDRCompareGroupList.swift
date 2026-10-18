@@ -42,6 +42,9 @@ struct HDRCompareGroupList: View {
             }
             Spacer(minLength: 0)
         }
+        .contentShape(Rectangle())
+        // Ett klick på en grupp (även den redan valda) går från sammanfattningen till bilderna.
+        .simultaneousGesture(TapGesture().onEnded { model.showSummary = false })
         .task(id: group.id) { await model.loadThumbnail(for: group) }
     }
 

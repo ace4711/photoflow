@@ -34,6 +34,8 @@ struct HDRCompareSummaryView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            Button("Jämför bilderna", systemImage: "rectangle.split.2x1") { model.showSummary = false }
+                .buttonStyle(.borderedProminent)
             Button("Exportera Markdown…", systemImage: "square.and.arrow.up") { model.exportSummaryWithPanel() }
         }
     }
