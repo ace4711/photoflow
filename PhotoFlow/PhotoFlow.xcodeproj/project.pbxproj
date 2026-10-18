@@ -113,6 +113,7 @@
 		3D05C8D89538E5AAC7F88111 /* ReelSyncMergerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 619F544EAB6D20AB1A02E1CD /* ReelSyncMergerTests.swift */; };
 		3D1A836DA889D5344D1E41FD /* ReelMotionPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A64849410C39F9B898C53F3 /* ReelMotionPlanner.swift */; };
 		3EAB359190AFEAE9E9AC4C02 /* SkyReplacement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E0BE15516725FAFEF16188D /* SkyReplacement.swift */; };
+		3EB5787882D2A11EDB7E8E85 /* HDRCompareMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 070B891AE6F6DD4E1E781336 /* HDRCompareMetrics.swift */; };
 		3F437BD6C250B4045AD8073E /* ReelTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8E31B3A6CF246A50408904B /* ReelTimelineTests.swift */; };
 		3F61FCC5962A450C64F153F5 /* HDRAlignmentSanityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D7FDF23FE9C36E5EC4B6515 /* HDRAlignmentSanityTests.swift */; };
 		41708C5B95635D02C78BCFD5 /* ReelUndoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F1987E2A76904677A75B8A5 /* ReelUndoTests.swift */; };
@@ -178,6 +179,7 @@
 		6AF69D640B43FEB1350C0C33 /* ReelImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BD0891A861620C34BEBFA14 /* ReelImageCache.swift */; };
 		6B1BE61674959138552BFE8C /* HDRImageOps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 701FB4D645D0284EBA3E75BA /* HDRImageOps.swift */; };
 		6BC71D8156DE0503F2CABA9E /* ReelUploadPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3949C70C7BA7535942D7E805 /* ReelUploadPlanner.swift */; };
+		6D05BEA1CBC3D2668FBBBFD3 /* HDRCompareMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 070B891AE6F6DD4E1E781336 /* HDRCompareMetrics.swift */; };
 		6D6B6D699DDDCAD99E6CF8E3 /* WindowPullMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A02F70B6B4D8ECBFAA932DFF /* WindowPullMetrics.swift */; };
 		6E258328C959DEE31F1DEA7E /* VerticalCorrection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4813AE42A017B14A7983958F /* VerticalCorrection.swift */; };
 		6E72A8D41A6CB0B986CAAF42 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5741822D3A108DFE01C65016 /* ContentView.swift */; };
@@ -309,6 +311,7 @@
 		B945783E4B526F2C2F90FC81 /* PipelineRunner+Enhance.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC54EC5842589E3C9A74EA55 /* PipelineRunner+Enhance.swift */; };
 		B9B272A0F3F5B429B2E89AD4 /* PipelineRunner+FieldNotes.swift in Sources */ = {isa = PBXBuildFile; fileRef = F672A73F6455FCF2D2F51CD1 /* PipelineRunner+FieldNotes.swift */; };
 		B9D184CB400F657CAAA42DB8 /* ReelLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDFDB877742FAA28F1108F6D /* ReelLibrary.swift */; };
+		B9D49C0AB96E35A1DB9FD528 /* HDRCompareMetricsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D48B8BF42A786318272D19A2 /* HDRCompareMetricsTests.swift */; };
 		BAFC8EE66AAFCD940587B052 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57074BFC0A2871C3D4A731BF /* SettingsView.swift */; };
 		BC3DCF73557039B1A186E66D /* ReelSpec.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACFE8398C36DC1D9216B103B /* ReelSpec.swift */; };
 		BC519EC3070BFAA701BF2E3B /* bracket3_subsec.csv in Resources */ = {isa = PBXBuildFile; fileRef = A8E8B9ECAF0A7DB7D21504F5 /* bracket3_subsec.csv */; };
@@ -439,6 +442,7 @@
 		035E46527E4A4040C9004FA8 /* ReelTimelineLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelTimelineLayout.swift; sourceTree = "<group>"; };
 		047A4F34D1248758CFABEBF3 /* ReelWebParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelWebParityTests.swift; sourceTree = "<group>"; };
 		04F7EB11531DBB10EA697354 /* PipelineRunner+Lightroom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+Lightroom.swift"; sourceTree = "<group>"; };
+		070B891AE6F6DD4E1E781336 /* HDRCompareMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRCompareMetrics.swift; sourceTree = "<group>"; };
 		07F438E24E4E1E4884E9C260 /* PipelineRunner+HDR.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+HDR.swift"; sourceTree = "<group>"; };
 		0831F4831D87ACC606120BAD /* ReelImageAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelImageAnalyzer.swift; sourceTree = "<group>"; };
 		09126C3FA79F50675EABFC46 /* kylskapet_trasigt_stopp_sv.m4a */ = {isa = PBXFileReference; path = kylskapet_trasigt_stopp_sv.m4a; sourceTree = "<group>"; };
@@ -683,6 +687,7 @@
 		D180E348EDC56158B0BF798D /* StepCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StepCardView.swift; sourceTree = "<group>"; };
 		D2FF546BEC5023F23323CDC0 /* SessionStatusIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStatusIntent.swift; sourceTree = "<group>"; };
 		D339827929C97F1ECCE40F1B /* PipelineRunner+Previews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+Previews.swift"; sourceTree = "<group>"; };
+		D48B8BF42A786318272D19A2 /* HDRCompareMetricsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRCompareMetricsTests.swift; sourceTree = "<group>"; };
 		D4A38FD1EFF2B96F70EF36FA /* SessionManifestStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionManifestStore.swift; sourceTree = "<group>"; };
 		D50D551064D043FE970068C2 /* MetadataPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetadataPlan.swift; sourceTree = "<group>"; };
 		D5183565A389E58271C903BF /* EnhancementEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnhancementEngineTests.swift; sourceTree = "<group>"; };
@@ -755,6 +760,7 @@
 				8F2BAA518727FAFBB1066BC3 /* BaseFrameMerge.swift */,
 				80F00E018557CCC542713B03 /* ExposureFusion.swift */,
 				ADE6D33A3AAB34122377A837 /* HDRAlignment.swift */,
+				070B891AE6F6DD4E1E781336 /* HDRCompareMetrics.swift */,
 				881974C88BC24DB7A88BFDB5 /* HDREngine.swift */,
 				701FB4D645D0284EBA3E75BA /* HDRImageOps.swift */,
 				F896F86D7D0B66BC08B64A95 /* HDRLog.swift */,
@@ -951,6 +957,7 @@
 				35FBC4BAC7ED6F6C2846AB8F /* FieldNoteMatcherTests.swift */,
 				946B3F14AAFC5C10D4CF5C86 /* FileSafetyTests.swift */,
 				4D7FDF23FE9C36E5EC4B6515 /* HDRAlignmentSanityTests.swift */,
+				D48B8BF42A786318272D19A2 /* HDRCompareMetricsTests.swift */,
 				B51C4036F541011FEFD2ABBA /* HDRLogTests.swift */,
 				51FFA3D32229247BA68422EA /* HDRReEnhanceTests.swift */,
 				BFD5B346502FAFFEF722B677 /* HDRWriterTIFFTests.swift */,
@@ -1434,6 +1441,7 @@
 				5B3E1B089DA7F094A548A42C /* FieldNoteMatcher.swift in Sources */,
 				E0998FD45B107A5D7769489A /* FileSafety.swift in Sources */,
 				90157AF70F2EDD7F25DA237E /* HDRAlignment.swift in Sources */,
+				3EB5787882D2A11EDB7E8E85 /* HDRCompareMetrics.swift in Sources */,
 				7F91B2FDF08836EC2AC161D7 /* HDREngine.swift in Sources */,
 				E53E6D7DB188BF2342CAB765 /* HDRImageOps.swift in Sources */,
 				9EC3A5DC0FB670DC9916C8B8 /* HDRLog.swift in Sources */,
@@ -1551,6 +1559,7 @@
 				EDB1376EC6AD1F723408159F /* FieldNoteMatcherTests.swift in Sources */,
 				C0DF8632A117D8C2600B0B6E /* FileSafetyTests.swift in Sources */,
 				3F61FCC5962A450C64F153F5 /* HDRAlignmentSanityTests.swift in Sources */,
+				B9D49C0AB96E35A1DB9FD528 /* HDRCompareMetricsTests.swift in Sources */,
 				29DCC8B9068D44AAD47804C4 /* HDRLogTests.swift in Sources */,
 				A1ACA8D7D447CB0C835BAF90 /* HDRReEnhanceTests.swift in Sources */,
 				98399BF36088B56B87D09100 /* HDRWriterTIFFTests.swift in Sources */,
@@ -1681,6 +1690,7 @@
 				C1D8FDBAFCF129CC58F38DF1 /* FieldNoteMatcher.swift in Sources */,
 				9814CBC0E96361BA1DAFE613 /* FileSafety.swift in Sources */,
 				C43DA861284AEBFBDD8F6047 /* HDRAlignment.swift in Sources */,
+				6D05BEA1CBC3D2668FBBBFD3 /* HDRCompareMetrics.swift in Sources */,
 				0A254571BE69397054E47C89 /* HDREngine.swift in Sources */,
 				6B1BE61674959138552BFE8C /* HDRImageOps.swift in Sources */,
 				A46840B3B2DC451700441BC9 /* HDRLog.swift in Sources */,
