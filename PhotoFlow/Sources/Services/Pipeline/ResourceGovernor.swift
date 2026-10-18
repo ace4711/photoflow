@@ -79,7 +79,7 @@ nonisolated enum ResourceGovernor {
         let side = Double(maxDimension > 0 ? maxDimension : fullResolutionLongSide)
         let scale = max(0.1, (side / 6000) * (side / 6000))
         var bytes = Double(hdrBytesAt6000px)
-        if method == .radiance {
+        if method.isRadiance {
             // Radians håller alla ramar (inkl. gruppens mörkaste) i minnet samtidigt.
             bytes = max(bytes, Double(radianceBaseBytesAt6000px) + Double(max(frames, 2)) * Double(radianceFrameBytesAt6000px))
         }

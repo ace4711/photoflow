@@ -37,6 +37,21 @@ nonisolated enum RadianceMerge {
         var ghostBlur = 3
 
         init() {}
+
+        /// Sätter en parameter efter namn (utvärdering: `photoflow-cli hdr --radiance nyckel=värde`).
+        mutating func set(_ key: String, _ value: Double) -> Bool {
+            let f = Float(value)
+            switch key {
+            case "clipStart": clipStart = f
+            case "clipEnd": clipEnd = f
+            case "darkStart": darkStart = f
+            case "darkEnd": darkEnd = f
+            case "ghostLowEV": ghostLowEV = f
+            case "ghostHighEV": ghostHighEV = f
+            default: return false
+            }
+            return true
+        }
     }
 
     struct Result {

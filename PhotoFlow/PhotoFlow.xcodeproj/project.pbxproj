@@ -112,6 +112,7 @@
 		3A7EECA578355D1C038CEBFA /* ReelPlayerModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A06835453C8AF2B1D27AD7D /* ReelPlayerModel.swift */; };
 		3B19DBA03EEC64D96A32902D /* SessionManifestStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4A38FD1EFF2B96F70EF36FA /* SessionManifestStore.swift */; };
 		3B6C8C5AA84C228065687213 /* FieldLocationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADC2D16642244E60D511C976 /* FieldLocationService.swift */; };
+		3B9D02E9D10C2A7B3616E047 /* SceneLinearLocalTone.swift in Sources */ = {isa = PBXBuildFile; fileRef = 494B484F45ED98514D4E898C /* SceneLinearLocalTone.swift */; };
 		3BBF8E3F46F0CD6290363EB0 /* PreflightModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE874F40F63AB440BD8C72E6 /* PreflightModel.swift */; };
 		3C63456D893D367FDF2474C4 /* ReelTransitionStyleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2965BF8EAB3ADDA902702B5F /* ReelTransitionStyleTests.swift */; };
 		3D05C8D89538E5AAC7F88111 /* ReelSyncMergerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 619F544EAB6D20AB1A02E1CD /* ReelSyncMergerTests.swift */; };
@@ -237,6 +238,7 @@
 		858050BFEFDD9F632CE822B5 /* ReelMotionEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC631062CE2777F4AB6250A5 /* ReelMotionEditor.swift */; };
 		85B5CBAD80A706F7C0AE7083 /* ReelCandidateFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C68E4EFBD3436133A30B1B01 /* ReelCandidateFilter.swift */; };
 		8638BC686B7C67BCBAC4C2FD /* ReelWebParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 047A4F34D1248758CFABEBF3 /* ReelWebParityTests.swift */; };
+		871F737CCED2B4F8E28B0312 /* RadianceCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E5CE6B306E94CD9EDB890F1 /* RadianceCache.swift */; };
 		87C31168908BAB2F262EB099 /* VisionTaggingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C75DCF5203EC0F7258AF011 /* VisionTaggingService.swift */; };
 		8998BCF97C56B038DA8BDFE3 /* SendableAudioBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC8847514CC4525E567967E4 /* SendableAudioBuffer.swift */; };
 		89BC4F5B43DCA138E6ABB560 /* PhotoFlowShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9C613A5C0AB46074022ED10 /* PhotoFlowShortcuts.swift */; };
@@ -268,6 +270,7 @@
 		97EF9ACE9D5B4C5205DA9C51 /* EditSuggestionRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D68D6579CF100A09DC55ABF /* EditSuggestionRunner.swift */; };
 		9814CBC0E96361BA1DAFE613 /* FileSafety.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3179C516B7035D66EE62DB1 /* FileSafety.swift */; };
 		98399BF36088B56B87D09100 /* HDRWriterTIFFTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFD5B346502FAFFEF722B677 /* HDRWriterTIFFTests.swift */; };
+		99226D8B4D1046020F8968F2 /* RadianceCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E5CE6B306E94CD9EDB890F1 /* RadianceCache.swift */; };
 		9A39D384C36C421A9AD03B63 /* ReelShareModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C82C2BDAB6D09BCF42D1B28 /* ReelShareModelTests.swift */; };
 		9A4636EA257ACAC3AE3AED76 /* NotesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A744F8E9CC36AC9DFDE19C79 /* NotesManager.swift */; };
 		9AA1BE8F5191A2308C941071 /* ReelRenderWorkerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E1526D6953FEB80DD59046B /* ReelRenderWorkerTests.swift */; };
@@ -407,6 +410,7 @@
 		EA4E5832C8F7898B5BD863E6 /* PipelineRunner+SortFolders.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0B3F0C52E9F93DB7285FCE3 /* PipelineRunner+SortFolders.swift */; };
 		EC286CA3261DDF91E667C80C /* EnhancementParameters.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6CC67D978B6273ED4F88364 /* EnhancementParameters.swift */; };
 		EC45D31CD45B1472B2657EF9 /* AddressFolderLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8487E9F676AFEA6DF4FFAE0B /* AddressFolderLayout.swift */; };
+		ECED3CE302E7F5A73BE24FEA /* SceneLinearLocalTone.swift in Sources */ = {isa = PBXBuildFile; fileRef = 494B484F45ED98514D4E898C /* SceneLinearLocalTone.swift */; };
 		EDA2AF016D99ADFB56B95846 /* PipelineRunner+HDR.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07F438E24E4E1E4884E9C260 /* PipelineRunner+HDR.swift */; };
 		EDB1376EC6AD1F723408159F /* FieldNoteMatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35FBC4BAC7ED6F6C2846AB8F /* FieldNoteMatcherTests.swift */; };
 		EEA965919C6A34FDFB9D47D4 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE146C5A991E7A096F9FA81 /* KeychainStore.swift */; };
@@ -509,6 +513,7 @@
 		2C5178E7FDBFF282DF4C28EC /* ReelShareModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelShareModel.swift; sourceTree = "<group>"; };
 		2D99FDEF959E4935CE75045A /* HDRCompareLightroomSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRCompareLightroomSheet.swift; sourceTree = "<group>"; };
 		2E0BE15516725FAFEF16188D /* SkyReplacement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkyReplacement.swift; sourceTree = "<group>"; };
+		2E5CE6B306E94CD9EDB890F1 /* RadianceCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RadianceCache.swift; sourceTree = "<group>"; };
 		2E7E0B2966513FA5BB31ADEB /* ReelEditorModel+Panels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ReelEditorModel+Panels.swift"; sourceTree = "<group>"; };
 		2FB4B0BD9A6392975829D662 /* bracket3_subsec.expected.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = bracket3_subsec.expected.json; sourceTree = "<group>"; };
 		32B258E880659DF266524420 /* PipelineRunner+Overlap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PipelineRunner+Overlap.swift"; sourceTree = "<group>"; };
@@ -541,6 +546,7 @@
 		42F332C340AA32CD463089F3 /* HDRCompareModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRCompareModel.swift; sourceTree = "<group>"; };
 		446A39077D50EA9167EF9C75 /* ResourceGovernorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceGovernorTests.swift; sourceTree = "<group>"; };
 		4813AE42A017B14A7983958F /* VerticalCorrection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalCorrection.swift; sourceTree = "<group>"; };
+		494B484F45ED98514D4E898C /* SceneLinearLocalTone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneLinearLocalTone.swift; sourceTree = "<group>"; };
 		4A06835453C8AF2B1D27AD7D /* ReelPlayerModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelPlayerModel.swift; sourceTree = "<group>"; };
 		4BF4AE0F3AE8CFB935462DEC /* ReelShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelShareSheet.swift; sourceTree = "<group>"; };
 		4C6481123891E543351CFB0B /* two_brackets_and_gap.expected.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = two_brackets_and_gap.expected.json; sourceTree = "<group>"; };
@@ -805,8 +811,10 @@
 				701FB4D645D0284EBA3E75BA /* HDRImageOps.swift */,
 				F896F86D7D0B66BC08B64A95 /* HDRLog.swift */,
 				153B93145B4921E4F181418C /* HDRWriter.swift */,
+				2E5CE6B306E94CD9EDB890F1 /* RadianceCache.swift */,
 				B32C2ABC8EA42D3E4D0B7F33 /* RadianceMerge.swift */,
 				8873C4CE06787497464EE6E6 /* RAWRenderer.swift */,
+				494B484F45ED98514D4E898C /* SceneLinearLocalTone.swift */,
 				79D8604C5336FF5602852717 /* SceneLinearTone.swift */,
 				3E94D2C83EC5B743F0B4E467 /* WindowPull.swift */,
 				A02F70B6B4D8ECBFAA932DFF /* WindowPullMetrics.swift */,
@@ -1546,6 +1554,7 @@
 				9CB32BEAE0C03C881B5FD714 /* Preflight.swift in Sources */,
 				8D888A2F93B7586DCC33CC3D /* ProcessRunner.swift in Sources */,
 				710CAFE052054BA4E77C6E87 /* RAWRenderer.swift in Sources */,
+				871F737CCED2B4F8E28B0312 /* RadianceCache.swift in Sources */,
 				612BD4EC654B02CCC64EC817 /* RadianceMerge.swift in Sources */,
 				66756CAF8E82E026249F1C18 /* ReelChoiceSummary.swift in Sources */,
 				D19228024949B33E0D646A1F /* ReelCollage.swift in Sources */,
@@ -1577,6 +1586,7 @@
 				C430019C7AC35FEEBBD62559 /* ReviewImageSelection.swift in Sources */,
 				2C7B27705AA8FB2133F722F2 /* ReviewNavigation.swift in Sources */,
 				2D5FDB3256985B79B94995A2 /* ReviewRating.swift in Sources */,
+				3B9D02E9D10C2A7B3616E047 /* SceneLinearLocalTone.swift in Sources */,
 				958496984D59C0F50D1F7F7C /* SceneLinearTone.swift in Sources */,
 				53B0EF4E6986FAE42C3A7111 /* SendFolderSync.swift in Sources */,
 				A7BB36146294F0ED6765B284 /* SendableAudioBuffer.swift in Sources */,
@@ -1818,6 +1828,7 @@
 				65BF33C26FC4038D88720266 /* PreviewCullView.swift in Sources */,
 				141C35E348C121F5A5419E43 /* ProcessRunner.swift in Sources */,
 				27554CDFAA48F1DB3AD0F72F /* RAWRenderer.swift in Sources */,
+				99226D8B4D1046020F8968F2 /* RadianceCache.swift in Sources */,
 				B62AC0109159F7CBDB47B197 /* RadianceMerge.swift in Sources */,
 				85B5CBAD80A706F7C0AE7083 /* ReelCandidateFilter.swift in Sources */,
 				0A8438D6F796DA429FEAFB32 /* ReelChoiceSummary.swift in Sources */,
@@ -1867,6 +1878,7 @@
 				D3BE3986E526987E5D243F73 /* ReviewImageSelection.swift in Sources */,
 				9DF431EAEE01AD8C3EB207A8 /* ReviewNavigation.swift in Sources */,
 				251EE09C3487526F4F766FAD /* ReviewRating.swift in Sources */,
+				ECED3CE302E7F5A73BE24FEA /* SceneLinearLocalTone.swift in Sources */,
 				97466A1E73D2482CE39AD312 /* SceneLinearTone.swift in Sources */,
 				133130C215AC0F73A3E880D5 /* SendFolderSync.swift in Sources */,
 				8B3D05261E6FF57ED247EE14 /* SendableAudioBuffer.swift in Sources */,

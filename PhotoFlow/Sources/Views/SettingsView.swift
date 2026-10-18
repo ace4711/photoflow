@@ -243,11 +243,14 @@ struct PipelineTab: View {
 
                         Picker("Metod", selection: $settings.hdrMethod) {
                             Text("Radians (alla exponeringar, standard)").tag(HDREngine.Method.radiance.rawValue)
+                            Text("Radians v8 (Lightroom-lik framkallning, test)").tag(HDREngine.Method.radianceV8.rawValue)
                             Text("Basram (en exponering + högdagrar)").tag(HDREngine.Method.baseFrame.rawValue)
                             Text("Exposure fusion (Mertens)").tag(HDREngine.Method.fusion.rawValue)
                         }
                         .pickerStyle(.menu)
-                        Text(settings.hdrMethodValue == .radiance
+                        Text(settings.hdrMethodValue == .radianceV8
+                             ? "Radians v8: samma sammanslagning som Radians, men framkallad med lokal tonkompression (fönster med utsikt utan masker, riktiga svärtor, textur) — mål: Lightrooms HDR med Auto Settings. Under utvärdering."
+                             : settings.hdrMethodValue == .radiance
                              ? "Radians: alla exponeringar slås ihop till en scenlinjär bild (som Lightrooms HDR-sammanslagning) med spökskydd för rörliga löv och gardiner, och tonsätts sedan. Rena fönster utan masker — window pull används inte."
                              : "Basram: en ljus exponering som bas, bara klippta högdagrar hämtas ur mörkare exponeringar — jämnt ljusa tak och väggar utan fusionens skuggor. Fönstren hämtas ur den mörkaste exponeringen.")
                             .font(.caption)

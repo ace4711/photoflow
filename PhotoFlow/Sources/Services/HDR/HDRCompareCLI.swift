@@ -22,6 +22,15 @@ nonisolated enum HDRCompareCLI {
         var jpeg: String?
         var windowSource: String?
         var debugDir: String?
+        /// Lång sida (px) för renderingen; nil = motorns standard (6000).
+        var maxDimension: Int? = nil
+        /// Radianscache (`RadianceCache`): läses om den finns, skrivs annars.
+        var radianceCache: String? = nil
+        var sharpen = true
+        /// Överstyrda parametrar för den lokala tonsättningen (`--tone nyckel=värde,…`).
+        var toneOverrides: [String: Double] = [:]
+        /// Överstyrda parametrar för radianssammanslagningen (`--radiance clipStart=…,clipEnd=…`).
+        var radianceOverrides: [String: Double] = [:]
 
         /// JPEG-sökvägen: den angivna, annars TIFF-sökvägen med `.jpg`.
         var resolvedJPEG: String {
@@ -34,6 +43,9 @@ nonisolated enum HDRCompareCLI {
         var frames: [String] = []
         var method = HDREngine.Method.radiance
         var out: String?, jpeg: String?, windowSource: String?, debugDir: String?
+        var maxDimension: Int?, radianceCache: String?
+        var sharpen = true
+        var toneOverrides: [String: Double] = [:], radianceOverrides: [String: Double] = [:]
         var idx = 0
         func value(_ flag: String) throws -> String {
             idx += 1
@@ -54,13 +66,22 @@ nonisolated enum HDRCompareCLI {
             case "--method":
                 let raw = try value(arg)
                 guard let parsed = HDREngine.Method(rawValue: raw) else {
-                    throw ParseError(message: "--method kräver radiance, base eller fusion")
+                    throw ParseError(message: "--method kräver radiance, radiance-v8, base eller fusion")
                 }
                 method = parsed
             case "--out": out = try value(arg)
             case "--jpeg": jpeg = try value(arg)
             case "--window-source": windowSource = try value(arg)
             case "--hdr-debug": debugDir = try value(arg)
+            case "--max-dimension":
+                guard let n = Int(try value(arg)), n >= 0 else { throw ParseError(message: "--max-dimension kräver ett heltal ≥ 0") }
+                maxDimension = n
+            case "--radiance-cache": radianceCache = try value(arg)
+            case "--no-sharpen": sharpen = false
+            case "--tone":
+                for (key, v) in try parseToneOverrides(try value(arg)) { toneOverrides[key] = v }
+            case "--radiance":
+                for (key, v) in try parseRadianceOverrides(try value(arg)) { radianceOverrides[key] = v }
             default: throw ParseError(message: "Okänd flagga för hdr: \(arg)")
             }
             idx += 1
@@ -68,7 +89,107 @@ nonisolated enum HDRCompareCLI {
         guard frames.count >= 2 else { throw ParseError(message: "--frames kräver minst två ramar") }
         guard let out else { throw ParseError(message: "--out krävs") }
         return HDRArguments(frames: frames, method: method, out: out, jpeg: jpeg,
-                            windowSource: windowSource, debugDir: debugDir)
+                            windowSource: windowSource, debugDir: debugDir, maxDimension: maxDimension,
+                            radianceCache: radianceCache, sharpen: sharpen, toneOverrides: toneOverrides,
+                            radianceOverrides: radianceOverrides)
+    }
+
+    /// `nyckel=värde,nyckel=värde` → ordbok; nycklarna måste finnas i `SceneLinearLocalTone.Options`.
+    static func parseToneOverrides(_ text: String) throws -> [String: Double] {
+        var out: [String: Double] = [:]
+        for part in text.split(separator: ",") where !part.isEmpty {
+            let kv = part.split(separator: "=", maxSplits: 1).map(String.init)
+            guard kv.count == 2, let v = Double(kv[1]) else { throw ParseError(message: "--tone: ogiltigt par \(part)") }
+            var probe = SceneLinearLocalTone.Options()
+            guard probe.set(kv[0], v) else { throw ParseError(message: "--tone: okänd parameter \(kv[0])") }
+            out[kv[0]] = v
+        }
+        return out
+    }
+
+    static func parseRadianceOverrides(_ text: String) throws -> [String: Double] {
+        var out: [String: Double] = [:]
+        for part in text.split(separator: ",") where !part.isEmpty {
+            let kv = part.split(separator: "=", maxSplits: 1).map(String.init)
+            guard kv.count == 2, let v = Double(kv[1]) else { throw ParseError(message: "--radiance: ogiltigt par \(part)") }
+            var probe = RadianceMerge.Options()
+            guard probe.set(kv[0], v) else { throw ParseError(message: "--radiance: okänd parameter \(kv[0])") }
+            out[kv[0]] = v
+        }
+        return out
+    }
+
+    // MARK: - hdr-compare
+
+    struct CompareArguments: Equatable {
+        var manifest: String
+        /// Varianter i tabellen (och de som räknas om); tom = alla.
+        var variants: [String]
+        var against: String
+        var force: Bool
+        /// Tabell per grupp (utöver medianerna).
+        var perGroup: Bool
+    }
+
+    static func parseCompare(_ args: [String]) throws -> CompareArguments {
+        var manifest: String?, against = "lr-auto"
+        var variants: [String] = []
+        var force = false, perGroup = false
+        var idx = 0
+        func value(_ flag: String) throws -> String {
+            idx += 1
+            guard idx < args.count, !args[idx].hasPrefix("--") else { throw ParseError(message: "\(flag) kräver ett värde") }
+            return args[idx]
+        }
+        while idx < args.count {
+            let arg = args[idx]
+            switch arg {
+            case "--manifest": manifest = try value(arg)
+            case "--variants": variants = try value(arg).split(separator: ",").map(String.init).filter { !$0.isEmpty }
+            case "--against": against = try value(arg)
+            case "--force": force = true
+            case "--per-group": perGroup = true
+            default: throw ParseError(message: "Okänd flagga för hdr-compare: \(arg)")
+            }
+            idx += 1
+        }
+        guard let manifest else { throw ParseError(message: "--manifest krävs") }
+        return CompareArguments(manifest: manifest, variants: variants, against: against, force: force, perGroup: perGroup)
+    }
+
+    /// Kolumnerna i poängtabellen mot `lr-auto` (måtten i `HDRCompareMetrics`).
+    static let scoreColumns: [HDRCompareSummary.Column] = [
+        .init(id: "dEvsLR", title: "ΔE", decimals: 2),
+        .init(id: "dEp95vsLR", title: "ΔE p95", decimals: 1),
+        .init(id: "winClip", title: "Fönst klipp", decimals: 1, percent: true),
+        .init(id: "winCorr", title: "Fönst strukt", decimals: 2),
+        .init(id: "clipHi", title: "Klipp hö", decimals: 1, percent: true),
+        .init(id: "clipLo", title: "Klipp sk", decimals: 1, percent: true),
+        .init(id: "median", title: "Median", decimals: 3),
+        .init(id: "p5", title: "p5", decimals: 3),
+        .init(id: "p95", title: "p95", decimals: 3),
+        .init(id: "contrast", title: "Lok kontr", decimals: 3),
+        .init(id: "castA", title: "a*", decimals: 2),
+        .init(id: "castB", title: "b*", decimals: 2),
+    ]
+
+    /// Poängtabellen (medianer över grupperna) som fast bredd-text.
+    static func scoreTable(_ rows: [HDRCompareSummary.MetricRow], columns: [HDRCompareSummary.Column] = scoreColumns) -> String {
+        let nameWidth = max(10, (rows.map(\.variant.count).max() ?? 0) + 1)
+        func pad(_ s: String, _ w: Int, left: Bool = false) -> String {
+            let fill = String(repeating: " ", count: max(0, w - s.count))
+            return left ? s + fill : fill + s
+        }
+        var lines = [pad("variant", nameWidth, left: true) + pad("n", 4) + columns.map { pad($0.title, max(9, $0.title.count + 1)) }.joined()]
+        for row in rows {
+            var line = pad(row.variant, nameWidth, left: true) + pad("\(row.groups)", 4)
+            for (col, cell) in zip(columns, row.cells) {
+                let text = cell.map { HDRCompareSummary.format($0.median, col).replacingOccurrences(of: " %", with: "%") } ?? "–"
+                line += pad(text, max(9, col.title.count + 1))
+            }
+            lines.append(line)
+        }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - lr-trigger

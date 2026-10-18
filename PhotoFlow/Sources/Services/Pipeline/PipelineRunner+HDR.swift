@@ -106,7 +106,7 @@ extension PipelineRunner {
         let policy = HDRLog.RedoPolicy(setting: AppSettings.shared.hdrRedoOnEngineUpdate)
         // Gruppens mörkaste exponering skickas med för window pull — och alltid för radians, som
         // använder alla exponeringar (fönstren kommer ur de mörka ramarna).
-        let windowPullOn = engine != "opencv" && (AppSettings.shared.hdrWindowPullEnabled || AppSettings.shared.hdrMethodValue == .radiance)
+        let windowPullOn = engine != "opencv" && (AppSettings.shared.hdrWindowPullEnabled || AppSettings.shared.hdrMethodValue.isRadiance)
         var adopted = 0
         var groupsToMerge: [HDRMergeJob] = []
         for group in bracketGroups {

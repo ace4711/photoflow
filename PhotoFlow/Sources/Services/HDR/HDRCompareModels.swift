@@ -71,7 +71,7 @@ nonisolated struct HDRCompareManifest: Codable, Equatable, Sendable {
 
 nonisolated extension HDRCompareManifest.Group {
     /// Ordning varianterna visas i i väljarna; okända id:n kommer efter, alfabetiskt.
-    static let knownVariantOrder = ["pf-radiance", "pf-radiance-enh", "pf-base", "pf-fusion", "lr-auto", "lr-plain", "ref"]
+    static let knownVariantOrder = ["pf-radiance", "pf-radiance-enh", "pf-v8", "pf-v8-enh", "pf-base", "pf-fusion", "lr-auto", "lr-plain", "ref"]
 
     /// Id för fotografens referens bland varianterna.
     static let referenceID = "ref"

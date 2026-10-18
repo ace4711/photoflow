@@ -45,6 +45,8 @@ struct PhotoFlowCLI {
             await enhanceCommand(Array(arguments.dropFirst()))
         case "hdr":
             await hdrCommand(Array(arguments.dropFirst()))
+        case "hdr-compare":
+            await hdrCompareCommand(Array(arguments.dropFirst()))
         case "lr-trigger":
             await lrTriggerCommand(Array(arguments.dropFirst()))
         case "--help", "-h", "help":
@@ -64,7 +66,9 @@ struct PhotoFlowCLI {
                     photoflow-cli reel --input <mapp> --output <mapp> [flaggor]
                     photoflow-cli reel-panels <bild-eller-mapp>... [--list <fil>]
                     photoflow-cli enhance --input <fil> --output <mapp> [--enhance-profile <id>] [--upright on|off] [--mask <png>]
-                    photoflow-cli hdr --frames <nef>... --method radiance|base|fusion --out <tiff> [--jpeg <jpg>] [--window-source <nef>] [--hdr-debug <mapp>]
+                    photoflow-cli hdr --frames <nef>... --method radiance|radiance-v8|base|fusion --out <tiff> [--jpeg <jpg>] [--window-source <nef>] [--hdr-debug <mapp>]
+                                      [--max-dimension <px>] [--radiance-cache <fil>] [--no-sharpen] [--tone nyckel=värde,...]
+                    photoflow-cli hdr-compare --manifest <fil> [--variants a,b] [--against lr-auto] [--force] [--per-group]
                     photoflow-cli lr-trigger --manifest <fil> [--wait] [--collect] [--bridge-dir <mapp>] [--timeout <s>]
 
         "run" kör hela PhotoFlow-pipelinen (NEF -> DNG -> previews ->
@@ -91,7 +95,7 @@ struct PhotoFlowCLI {
                              maklarstil eller en egen profils id). Standard: maklarstil.
           --upright on|off  Räta lodlinjer i förbättringen (standard on).
           --sky on|off      Syntetisk blå himmel i exteriörer, Mäklarstil (standard off).
-          --hdr-method radiance|base|fusion
+          --hdr-method radiance|radiance-v8|base|fusion
                             HDR-metod: radians (alla exponeringar, scenlinjärt, standard),
                              basram med högdageråtervinning eller
                              Mertens exposure fusion.
@@ -169,7 +173,14 @@ struct PhotoFlowCLI {
         "hdr" slår ihop en given ramlista (alla ramar, valfri ordning, exponeringstid ur EXIF) med
         HDREngine.merge direkt — utan bracket-detektering — till en TIFF (och JPEG). Underlag för
         jämförelsen mot Lightroom (docs/plan-hdr-jamforelse.md). --window-source är mörkaste ramen
-        om den inte ingår i --frames; --hdr-debug skriver mask och mått i en mapp.
+        om den inte ingår i --frames; --hdr-debug skriver mask och mått i en mapp. --method radiance-v8
+        är radians med lokal, Lightroom-lik framkallning (docs/plan-hdr-v8-framkallning.md); --tone
+        överstyr dess parametrar (SceneLinearLocalTone.Options) och --radiance-cache sparar/återanvänder
+        den scenlinjära sammanslagningen så att bara tonsättningen körs om.
+
+        "hdr-compare" räknar mått för manifestets varianter (metrics.json bredvid manifestet, samma
+        cache som HDR-jämförelsefönstret; bara ändrade bilder räknas om) och skriver en poängtabell
+        (medianer över grupperna) mot --against (standard lr-auto) till terminalen och score.txt.
 
         "lr-trigger" skriver Lightroom-triggern (experimentläge) för alla grupper i en
         hdr-lr-manifest.json och för in resultatet i manifestet. Det startar Lightroom-körningen
@@ -242,7 +253,7 @@ struct PhotoFlowCLI {
                 calendarMatchesPath = args[idx]
             case "--hdr-method":
                 idx += 1
-                guard idx < args.count, HDREngine.Method(rawValue: args[idx]) != nil else { fail("--hdr-method kräver radiance, base eller fusion") }
+                guard idx < args.count, HDREngine.Method(rawValue: args[idx]) != nil else { fail("--hdr-method kräver radiance, radiance-v8, base eller fusion") }
                 hdrMethod = args[idx]
             case "--window-pull":
                 idx += 1
@@ -621,6 +632,11 @@ struct PhotoFlowCLI {
             }
             var options = HDREngine.Options()
             options.method = parsed.method
+            if let maxDimension = parsed.maxDimension { options.maxDimension = maxDimension }
+            options.sharpenEnabled = parsed.sharpen
+            options.radianceCacheURL = parsed.radianceCache.map { URL(fileURLWithPath: $0) }
+            for (key, value) in parsed.toneOverrides { _ = options.localTone.set(key, value) }
+            for (key, value) in parsed.radianceOverrides { _ = options.radiance.set(key, value) }
             let tiffURL = URL(fileURLWithPath: parsed.out)
             let jpegURL = URL(fileURLWithPath: parsed.resolvedJPEG)
             for url in [tiffURL, jpegURL] {
@@ -640,10 +656,48 @@ struct PhotoFlowCLI {
             if let radiance = result.radiance {
                 print(String(format: "  spökandel: %.4f, exponeringar (EV): %@", radiance.ghostFraction,
                              radiance.exposuresEV.map { String(format: "%.2f", $0) }.joined(separator: " ")))
+                if let local = radiance.localTone {
+                    print(String(format: "  lokal ton: förstärkning %.2f EV, svart %.4f, vit %.3f, median %.3f, basomfång %.1f → %.1f EV",
+                                 local.gainEV, local.black, local.white, local.calibratedMedian, local.baseRangeEV, local.compressedRangeEV))
+                }
             }
         } catch {
             fail("HDR misslyckades: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - hdr-compare
+
+    /// Mått för manifestets varianter (`metrics.json` bredvid manifestet, samma cache som
+    /// jämförelsefönstret) och en poängtabell mot `--against` (standard lr-auto).
+    private static func hdrCompareCommand(_ args: [String]) async {
+        let parsed: HDRCompareCLI.CompareArguments
+        do { parsed = try HDRCompareCLI.parseCompare(args) } catch { fail(error.localizedDescription) }
+        let manifestURL = URL(fileURLWithPath: parsed.manifest)
+        let manifest: HDRCompareManifest
+        do { manifest = try HDRCompareManifest.load(from: manifestURL) } catch { fail("Kunde inte läsa manifestet: \(error.localizedDescription)") }
+        let started = Date()
+        let only = parsed.variants.isEmpty ? nil : Set(parsed.variants + [parsed.against, HDRCompareManifest.Group.referenceID])
+        let file = await HDRCompareRunner.compute(manifest: manifest, manifestURL: manifestURL, force: parsed.force,
+                                                  only: only, against: parsed.against) { done, total in
+            if done < total { FileHandle.standardError.write(Data("\r  mått: grupp \(done + 1)/\(total)".utf8)) }
+        }
+        standardError(String(format: "\r  mått klara på %.0f s            \n", Date().timeIntervalSince(started)))
+        let rows = HDRCompareSummary.metricRows(manifest: manifest, metrics: file, columns: HDRCompareCLI.scoreColumns,
+                                                variants: parsed.variants.isEmpty ? nil : parsed.variants + [parsed.against])
+        print("Medianer över grupperna (ΔE mot \(parsed.against), efter registrering):")
+        print(HDRCompareCLI.scoreTable(rows))
+        if parsed.perGroup {
+            for group in manifest.groups {
+                let sub = HDRCompareManifest(version: manifest.version, created: nil, groups: [group])
+                let groupRows = HDRCompareSummary.metricRows(manifest: sub, metrics: file, columns: HDRCompareCLI.scoreColumns,
+                                                             variants: parsed.variants.isEmpty ? nil : parsed.variants + [parsed.against])
+                print("\n\(group.id) (\(HDRCompareCategory.title(group.category)))")
+                print(HDRCompareCLI.scoreTable(groupRows))
+            }
+        }
+        let summaryURL = manifestURL.deletingLastPathComponent().appendingPathComponent("score.txt")
+        try? (HDRCompareCLI.scoreTable(rows) + "\n").write(to: summaryURL, atomically: true, encoding: .utf8)
     }
 
     // MARK: - lr-trigger

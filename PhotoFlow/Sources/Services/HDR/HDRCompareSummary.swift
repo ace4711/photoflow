@@ -91,6 +91,9 @@ nonisolated enum HDRCompareSummary {
         case "contrast": return m.tone.localContrast
         case "dEvsLR": return r.vsLR?.deltaEMean
         case "dEvsRef": return r.vsRef?.deltaEMean
+        case "dEp95vsLR": return r.vsLR?.deltaEP95
+        case "p5": return m.tone.p5
+        case "p95": return m.tone.p95
         default: return nil
         }
     }
@@ -132,11 +135,13 @@ nonisolated enum HDRCompareSummary {
             columns: columns, metrics: metricRows(manifest: manifest, metrics: metrics))
     }
 
-    static func metricRows(manifest: HDRCompareManifest, metrics: HDRCompareMetricsFile?) -> [MetricRow] {
+    static func metricRows(manifest: HDRCompareManifest, metrics: HDRCompareMetricsFile?,
+                           columns: [Column] = columns, variants only: [String]? = nil) -> [MetricRow] {
         guard let metrics else { return [] }
         let groupIDs = Set(manifest.groups.map(\.id))
         var variants = Set<String>()
         for (gid, perVariant) in metrics.groups where groupIDs.contains(gid) { variants.formUnion(perVariant.keys) }
+        if let only, !only.isEmpty { variants = variants.intersection(only) }
         func rank(_ id: String) -> Int { HDRCompareManifest.Group.knownVariantOrder.firstIndex(of: id) ?? 99 }
         return variants.sorted { (rank($0), $0) < (rank($1), $1) }.map { variant in
             let results = metrics.groups.filter { groupIDs.contains($0.key) }.compactMap { $0.value[variant] }

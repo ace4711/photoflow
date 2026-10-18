@@ -14,6 +14,9 @@ nonisolated struct HDRCompareMetricsFile: Codable, Equatable, Sendable {
         /// och när registreringen är dålig.
         var vsLR: HDRCompareMetrics.PairMetrics?
         var vsRef: HDRCompareMetrics.PairMetrics?
+        /// Variantens egen signatur (fil, ändringstid, storlek; plus jämförelsebildens) — för
+        /// `photoflow-cli hdr-compare --variants`, som bara räknar om valda varianter.
+        var signature: String?
     }
 
     static func url(forManifest manifest: URL) -> URL {
@@ -63,14 +66,26 @@ nonisolated enum HDRCompareRunner {
 
     /// Ändras när en variantfil byts ut eller ramlistan ändras.
     static func signature(of group: HDRCompareManifest.Group, base: URL) -> String {
-        let fm = FileManager.default
         var parts: [String] = group.frames.map { $0.file }
         for (id, path) in group.allImages.sorted(by: { $0.key < $1.key }) {
-            let attrs = try? fm.attributesOfItem(atPath: resolve(path, base: base).path)
-            let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-            let size = (attrs?[.size] as? Int) ?? 0
-            parts.append("\(id)=\(path)@\(Int(mtime)):\(size)")
+            parts.append(fileSignature(id: id, path: path, base: base))
         }
+        return parts.joined(separator: "|")
+    }
+
+    static func fileSignature(id: String, path: String, base: URL) -> String {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: resolve(path, base: base).path)
+        let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        let size = (attrs?[.size] as? Int) ?? 0
+        return "\(id)=\(path)@\(Int(mtime)):\(size)"
+    }
+
+    /// En variants signatur: den egna filen plus jämförelsebilden och ramlistan.
+    static func variantSignature(_ id: String, in group: HDRCompareManifest.Group, against: String, base: URL) -> String? {
+        let images = group.allImages
+        guard let path = images[id] else { return nil }
+        var parts = group.frames.map { $0.file } + [fileSignature(id: id, path: path, base: base)]
+        if id != against, let other = images[against] { parts.append(fileSignature(id: against, path: other, base: base)) }
         return parts.joined(separator: "|")
     }
 
@@ -91,8 +106,9 @@ nonisolated enum HDRCompareRunner {
 
     /// Mått för alla varianter i en grupp. Utan ramar används lr-auto (annars första varianten) som referens
     /// och fönstermåtten utgår.
-    static func computeGroup(_ group: HDRCompareManifest.Group, base: URL) -> [String: HDRCompareMetricsFile.VariantResult] {
-        let images = group.allImages
+    static func computeGroup(_ group: HDRCompareManifest.Group, base: URL, only: Set<String>? = nil,
+                             against: String = "lr-auto") -> [String: HDRCompareMetricsFile.VariantResult] {
+        let images = group.allImages.filter { only?.contains($0.key) ?? true }
         var loaded: [String: HDRCompareMetrics.Image] = [:]
         for (id, path) in images {
             if let img = loadImage(resolve(path, base: base)) { loaded[id] = img }
@@ -103,7 +119,7 @@ nonisolated enum HDRCompareRunner {
         var reference = frames.reference
         var dark = frames.dark
         if reference == nil {
-            let fallbackID = loaded["lr-auto"] != nil ? "lr-auto" : loaded.keys.sorted()[0]
+            let fallbackID = loaded[against] != nil ? against : loaded.keys.sorted()[0]
             reference = loaded[fallbackID]
             dark = nil
         }
@@ -122,19 +138,24 @@ nonisolated enum HDRCompareRunner {
             let metrics = HDRCompareMetrics.analyze(reg, reference: reference, dark: dark, mask: mask)
             var vsLR: HDRCompareMetrics.PairMetrics?, vsRef: HDRCompareMetrics.PairMetrics?
             if let me = usable(id) {
-                if id != "lr-auto", let lr = usable("lr-auto") { vsLR = HDRCompareMetrics.pairMetrics(me, lr, windowMask: mask) }
+                if id != against, let lr = usable(against) { vsLR = HDRCompareMetrics.pairMetrics(me, lr, windowMask: mask) }
                 if id != HDRCompareManifest.Group.referenceID, let ref = usable(HDRCompareManifest.Group.referenceID) {
                     vsRef = HDRCompareMetrics.pairMetrics(me, ref, windowMask: mask)
                 }
             }
-            out[id] = HDRCompareMetricsFile.VariantResult(metrics: metrics, vsLR: vsLR, vsRef: vsRef)
+            out[id] = HDRCompareMetricsFile.VariantResult(metrics: metrics, vsLR: vsLR, vsRef: vsRef,
+                                                          signature: variantSignature(id, in: group, against: against, base: base))
         }
         return out
     }
 
     /// Räknar om de grupper vars signatur ändrats (alla vid `force`) och sparar `metrics.json` efter varje grupp.
     @concurrent
+    ///
+    /// `only` (CLI:t): bara de varianterna räknas om — när deras egna signaturer ändrats — och läggs in
+    /// bland gruppens befintliga resultat; gruppsignaturen rörs inte. `against` är bilden som ΔE mäts mot.
     static func compute(manifest: HDRCompareManifest, manifestURL: URL, force: Bool = false,
+                        only: Set<String>? = nil, against: String = "lr-auto",
                         progress: @Sendable (Int, Int) -> Void = { _, _ in }) async -> HDRCompareMetricsFile {
         let base = manifestURL.deletingLastPathComponent()
         var file = (force ? nil : HDRCompareMetricsFile.load(forManifest: manifestURL)) ?? HDRCompareMetricsFile()
@@ -144,6 +165,22 @@ nonisolated enum HDRCompareRunner {
         for (i, group) in manifest.groups.enumerated() {
             if Task.isCancelled { break }
             progress(i, manifest.groups.count)
+            if let only {
+                let existing = file.groups[group.id] ?? [:]
+                let stale = group.allImages.keys.filter { id in
+                    only.contains(id) && (force || existing[id] == nil
+                        || existing[id]?.signature != variantSignature(id, in: group, against: against, base: base))
+                }
+                guard !stale.isEmpty else { continue }
+                // Jämförelsebilden och referensen laddas alltid (registrering, ΔE), men skrivs bara in när de var inaktuella.
+                let result = computeGroup(group, base: base, only: Set(stale).union([against, HDRCompareManifest.Group.referenceID]),
+                                          against: against)
+                var merged = existing
+                for (id, value) in result where stale.contains(id) { merged[id] = value }
+                file.groups[group.id] = merged
+                try? file.save(forManifest: manifestURL)
+                continue
+            }
             let sig = signature(of: group, base: base)
             if file.signatures[group.id] == sig, file.groups[group.id] != nil { continue }
             let result = computeGroup(group, base: base)
