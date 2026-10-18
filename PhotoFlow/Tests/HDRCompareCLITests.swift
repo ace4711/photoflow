@@ -105,4 +105,53 @@ struct HDRCompareCLITests {
         #expect((groups[1]["variants"] as? [String: Any])?["lr-auto"] == nil)
         #expect(manifest["lrRun"] != nil)
     }
+
+    @Test("hdr: v8-flaggor (metod, upplösning, radianscache, skärpning, ton- och radiansparametrar)")
+    func parsesV8Flags() throws {
+        let parsed = try HDRCompareCLI.parseHDR([
+            "--frames", "a", "b", "--out", "o.tiff", "--method", "radiance-v8", "--max-dimension", "2000",
+            "--radiance-cache", "/c/g.pfrad", "--no-sharpen", "--tone", "detail=1.4,blackClip=0.01",
+            "--radiance", "clipStart=0.7",
+        ])
+        #expect(parsed.method == .radianceV8)
+        #expect(parsed.method.isRadiance)
+        #expect(parsed.maxDimension == 2000)
+        #expect(parsed.radianceCache == "/c/g.pfrad")
+        #expect(parsed.sharpen == false)
+        #expect(parsed.toneOverrides == ["detail": 1.4, "blackClip": 0.01])
+        #expect(parsed.radianceOverrides == ["clipStart": 0.7])
+        #expect(throws: HDRCompareCLI.ParseError.self) {
+            try HDRCompareCLI.parseHDR(["--frames", "a", "b", "--out", "o", "--tone", "okänd=1"])
+        }
+        #expect(throws: HDRCompareCLI.ParseError.self) {
+            try HDRCompareCLI.parseHDR(["--frames", "a", "b", "--out", "o", "--tone", "detail"])
+        }
+    }
+
+    @Test("hdr-compare: flaggor och standardvärden")
+    func parsesCompare() throws {
+        let parsed = try HDRCompareCLI.parseCompare(["--manifest", "m.json", "--variants", "pf-v8,pf-radiance", "--per-group"])
+        #expect(parsed.manifest == "m.json")
+        #expect(parsed.variants == ["pf-v8", "pf-radiance"])
+        #expect(parsed.against == "lr-auto")
+        #expect(parsed.perGroup && !parsed.force)
+        #expect(try HDRCompareCLI.parseCompare(["--manifest", "m", "--against", "ref", "--force"]).against == "ref")
+        #expect(throws: HDRCompareCLI.ParseError.self) { try HDRCompareCLI.parseCompare(["--variants", "a"]) }
+        #expect(throws: HDRCompareCLI.ParseError.self) { try HDRCompareCLI.parseCompare(["--manifest", "m", "--nej"]) }
+    }
+
+    @Test("hdr-compare: poängtabellen har en rad per variant och medianer")
+    func scoreTable() {
+        let cells: [HDRCompareSummary.Cell?] = HDRCompareCLI.scoreColumns.map { _ in HDRCompareSummary.Cell(mean: 0.5, median: 0.25, count: 2) }
+        let rows = [HDRCompareSummary.MetricRow(variant: "pf-v8", groups: 2, badRegistrations: 0, cells: cells),
+                    HDRCompareSummary.MetricRow(variant: "lr-auto", groups: 2, badRegistrations: 0,
+                                                cells: HDRCompareCLI.scoreColumns.map { _ in nil })]
+        let table = HDRCompareCLI.scoreTable(rows)
+        let lines = table.split(separator: "\n")
+        #expect(lines.count == 3)
+        #expect(lines[1].hasPrefix("pf-v8"))
+        #expect(lines[1].contains("0,25"))
+        #expect(lines[1].contains("25,0%"))
+        #expect(lines[2].contains("–"))
+    }
 }

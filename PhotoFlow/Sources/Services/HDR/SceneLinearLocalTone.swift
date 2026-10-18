@@ -424,9 +424,10 @@ nonisolated enum SceneLinearLocalTone {
                     baseRangeEV: Double(rangeBefore), compressedRangeEV: Double(rangeAfter))
     }
 
-    static func apply(linear: [Float], width: Int, height: Int, options: Options = Options()) -> (pixels: [Float], info: Info) {
+    static func apply(linear: [Float], width: Int, height: Int, clipCeiling: Float? = nil,
+                      options: Options = Options()) -> (pixels: [Float], info: Info) {
         var pixels = linear
-        let info = applyInPlace(&pixels, width: width, height: height, options: options)
+        let info = applyInPlace(&pixels, width: width, height: height, clipCeiling: clipCeiling, options: options)
         return (pixels, info)
     }
 }

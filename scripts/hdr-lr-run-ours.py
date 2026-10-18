@@ -6,6 +6,8 @@
   pf-base          photoflow-cli hdr --method base
   pf-fusion        photoflow-cli hdr --method fusion
   pf-radiance-enh  photoflow-cli enhance på pf-radiance.tiff (Förbättra, standardprofilen)
+  pf-v8            photoflow-cli hdr --method radiance-v8 (Lightroom-lik framkallning, docs/plan-hdr-v8-framkallning.md)
+  pf-v8-enh        photoflow-cli enhance på pf-v8.tiff
 
 Resultat: <root>/out/<id>/<variant>.tiff (+ .jpg). Alla ramar i gruppen används.
 Redan klara varianter hoppas över (--force gör om). Manifestet skrivs om efter varje
@@ -27,8 +29,10 @@ import sys
 import tempfile
 import time
 
-ALLA = ["pf-radiance", "pf-base", "pf-fusion", "pf-radiance-enh"]
-METOD = {"pf-radiance": "radiance", "pf-base": "base", "pf-fusion": "fusion"}
+ALLA = ["pf-radiance", "pf-base", "pf-fusion", "pf-radiance-enh", "pf-v8", "pf-v8-enh"]
+METOD = {"pf-radiance": "radiance", "pf-base": "base", "pf-fusion": "fusion", "pf-v8": "radiance-v8"}
+# Förbättra-varianter: källvarianten de bygger på.
+KALLA = {"pf-radiance-enh": "pf-radiance", "pf-v8-enh": "pf-v8"}
 SKYDDADE = ["/Volumes/photo-ingestion", "/Users/fredrik/Desktop/ptohotagraphy-test"]
 
 
@@ -89,16 +93,16 @@ def main():
                 cmd = [cli, "hdr", "--frames", *frames, "--method", METOD[v], "--out", tiff]
                 r, sek = kor(cmd)
             else:
-                kalla = os.path.join(ut, "pf-radiance.tiff")
+                kalla = os.path.join(ut, KALLA[v] + ".tiff")
                 if not os.path.exists(kalla):
-                    print(f"{g['id']:<28} {v:<16} SAKNAR pf-radiance.tiff")
+                    print(f"{g['id']:<28} {v:<16} SAKNAR {KALLA[v]}.tiff")
                     fel += 1
                     continue
                 tmp = tempfile.mkdtemp(prefix="hdr-lr-enh-", dir=ut)
                 r, sek = kor([cli, "enhance", "--input", kalla, "--output", tmp])
                 if r.returncode == 0:
-                    shutil.move(os.path.join(tmp, "pf-radiance_enh.tiff"), tiff)
-                    shutil.move(os.path.join(tmp, "pf-radiance_enh.jpg"), os.path.join(ut, v + ".jpg"))
+                    shutil.move(os.path.join(tmp, KALLA[v] + "_enh.tiff"), tiff)
+                    shutil.move(os.path.join(tmp, KALLA[v] + "_enh.jpg"), os.path.join(ut, v + ".jpg"))
                 shutil.rmtree(tmp, ignore_errors=True)
                 # Förbättra-tiden läggs ovanpå HDR-tiden så att "total tid" blir rimlig.
             if r.returncode != 0 or not os.path.exists(tiff):
