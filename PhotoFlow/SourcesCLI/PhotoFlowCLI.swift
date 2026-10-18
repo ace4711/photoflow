@@ -43,6 +43,10 @@ struct PhotoFlowCLI {
             reelPanelsCommand(Array(arguments.dropFirst()))
         case "enhance":
             await enhanceCommand(Array(arguments.dropFirst()))
+        case "hdr":
+            await hdrCommand(Array(arguments.dropFirst()))
+        case "lr-trigger":
+            await lrTriggerCommand(Array(arguments.dropFirst()))
         case "--help", "-h", "help":
             printUsage()
             exit(0)
@@ -60,6 +64,8 @@ struct PhotoFlowCLI {
                     photoflow-cli reel --input <mapp> --output <mapp> [flaggor]
                     photoflow-cli reel-panels <bild-eller-mapp>... [--list <fil>]
                     photoflow-cli enhance --input <fil> --output <mapp> [--enhance-profile <id>] [--upright on|off] [--mask <png>]
+                    photoflow-cli hdr --frames <nef>... --method radiance|base|fusion --out <tiff> [--jpeg <jpg>] [--window-source <nef>] [--hdr-debug <mapp>]
+                    photoflow-cli lr-trigger --manifest <fil> [--wait] [--collect] [--bridge-dir <mapp>] [--timeout <s>]
 
         "run" kör hela PhotoFlow-pipelinen (NEF -> DNG -> previews ->
         bracket-analys -> [HDR] -> [förbättra bilder] -> [kalendermatchning] -> [AI-taggning] ->
@@ -156,6 +162,20 @@ struct PhotoFlowCLI {
         något: en rad per bild med träff (ränna/kant) och rutor, tid per bild, och sist
         antal träffar och de bilder som låg närmast att träffa. Bilder anges som filer,
         mappar (JPEG/PNG/TIFF/HEIC, inte rekursivt) eller med --list <fil> (en sökväg per rad).
+
+        "enhance" tar en enskild fil (NEF/DNG eller en färdig TIFF/JPEG, t.ex. en HDR-TIFF) och skriver
+        <namn>_enh.tiff och <namn>_enh.jpg i --output.
+
+        "hdr" slår ihop en given ramlista (alla ramar, valfri ordning, exponeringstid ur EXIF) med
+        HDREngine.merge direkt — utan bracket-detektering — till en TIFF (och JPEG). Underlag för
+        jämförelsen mot Lightroom (docs/plan-hdr-jamforelse.md). --window-source är mörkaste ramen
+        om den inte ingår i --frames; --hdr-debug skriver mask och mått i en mapp.
+
+        "lr-trigger" skriver Lightroom-triggern (experimentläge) för alla grupper i en
+        hdr-lr-manifest.json och för in resultatet i manifestet. Det startar Lightroom-körningen
+        (pluginet styr Lightrooms GUI) — kör bara själv. Med --wait väntas på lr_done.json, med
+        --collect läses bara en redan klar lr_status.json in. Bryggmappen kan överstyras med
+        --bridge-dir eller PHOTOFLOW_LR_BRIDGE_DIR (test).
 
         Avslutar med exit-kod 0 om alla steg/kontroller lyckades, annars 1.
         Exit-kod 2 vid felaktiga argument.
@@ -575,6 +595,111 @@ struct PhotoFlowCLI {
             print("  parametrar: \(outcome.parameters.summary)")
         } catch {
             fail("Förbättra misslyckades: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - hdr
+
+    private static func hdrCommand(_ args: [String]) async {
+        let parsed: HDRCompareCLI.HDRArguments
+        do { parsed = try HDRCompareCLI.parseHDR(args) } catch { fail(error.localizedDescription) }
+        guard let exiftool = ToolLocator.exiftool else { fail("exiftool saknas (krävs för exponeringstiderna). brew install exiftool") }
+        let frameURLs = parsed.frames.map { URL(fileURLWithPath: $0) }
+        for url in frameURLs where !FileManager.default.fileExists(atPath: url.path) {
+            fail("Ramen finns inte: \(url.path)")
+        }
+        let windowURL = parsed.windowSource.map { URL(fileURLWithPath: $0) }
+        do {
+            let records = try await ExifReader.readAll(nefFiles: frameURLs + (windowURL.map { [$0] } ?? []), exiftoolPath: exiftool)
+            let secondsByName = Dictionary(records.map { ($0.filename, $0.exposureSeconds) }, uniquingKeysWith: { a, _ in a })
+            func frame(_ url: URL) -> HDREngine.Frame {
+                HDREngine.Frame(url: url, exposureSeconds: secondsByName[url.lastPathComponent] ?? 0)
+            }
+            let frames = frameURLs.map(frame)
+            if let missing = frames.first(where: { $0.exposureSeconds <= 0 }) {
+                standardError("Varning: exponeringstid saknas för \(missing.url.lastPathComponent) (ordningen behålls)\n")
+            }
+            var options = HDREngine.Options()
+            options.method = parsed.method
+            let tiffURL = URL(fileURLWithPath: parsed.out)
+            let jpegURL = URL(fileURLWithPath: parsed.resolvedJPEG)
+            for url in [tiffURL, jpegURL] {
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            }
+            if let debug = parsed.debugDir {
+                let debugURL = URL(fileURLWithPath: debug)
+                options.debugDir = debugURL
+                try FileManager.default.createDirectory(at: debugURL, withIntermediateDirectories: true)
+            }
+            let started = Date()
+            let result = try await HDREngine.merge(
+                frames: frames, windowSource: windowURL.map(frame), options: options,
+                tiffURL: tiffURL, jpegURL: jpegURL, exiftoolPath: exiftool)
+            let seconds = Date().timeIntervalSince(started)
+            print(String(format: "HDR (%@, %d ramar) klar på %.1f s: %@", parsed.method.rawValue, frames.count, seconds, tiffURL.path))
+            if let radiance = result.radiance {
+                print(String(format: "  spökandel: %.4f, exponeringar (EV): %@", radiance.ghostFraction,
+                             radiance.exposuresEV.map { String(format: "%.2f", $0) }.joined(separator: " ")))
+            }
+        } catch {
+            fail("HDR misslyckades: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - lr-trigger
+
+    private static func lrTriggerCommand(_ args: [String]) async {
+        let parsed: HDRCompareCLI.LRTriggerArguments
+        do { parsed = try HDRCompareCLI.parseLRTrigger(args) } catch { fail(error.localizedDescription) }
+        let manifestURL = URL(fileURLWithPath: parsed.manifest).standardizedFileURL
+        let root = manifestURL.deletingLastPathComponent()
+        let bridge = HDRCompareCLI.bridgeDirectory(override: parsed.bridgeDir)
+        let triggerURL = bridge.appendingPathComponent("lr_trigger.json")
+        let doneURL = bridge.appendingPathComponent("lr_done.json")
+        let statusURL = bridge.appendingPathComponent("lr_status.json")
+        let fm = FileManager.default
+        do {
+            var manifest = try HDRCompareCLI.readJSON(manifestURL)
+            let groupCount = (manifest["groups"] as? [[String: Any]])?.count ?? 0
+            if !parsed.collect {
+                let payload = try HDRCompareCLI.triggerPayload(manifest: manifest, root: root)
+                try fm.createDirectory(at: bridge, withIntermediateDirectories: true)
+                for group in payload["groups"] as? [[String: Any]] ?? [] {
+                    if let dir = group["export_dir"] as? String {
+                        try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+                    }
+                }
+                // Gamla svar får inte tas för att höra till den här körningen.
+                try? fm.removeItem(at: doneURL)
+                try? fm.removeItem(at: statusURL)
+                try HDRCompareCLI.writeJSON(payload, to: triggerURL)
+                print("Trigger skriven: \(triggerURL.path) (\(groupCount) grupper)")
+                print("Pluginet läser den inom några sekunder och styr Lightroom (ta inte över tangentbordet under körningen).")
+                guard parsed.wait else {
+                    print("Kör \"photoflow-cli lr-trigger --manifest \(parsed.manifest) --collect\" när lr_done.json finns.")
+                    return
+                }
+            }
+            let timeout = parsed.timeoutSeconds ?? Double(groupCount) * 240 + 600
+            let deadline = Date().addingTimeInterval(timeout)
+            var lastReported = -1
+            while !fm.fileExists(atPath: doneURL.path) {
+                if parsed.collect { fail("lr_done.json saknas i \(bridge.path) — körningen är inte klar") }
+                guard Date() < deadline else { fail("Tidsgräns (\(Int(timeout)) s) utan lr_done.json") }
+                if let status = try? HDRCompareCLI.readJSON(statusURL), let results = status["results"] as? [[String: Any]],
+                   results.count != lastReported {
+                    lastReported = results.count
+                    print("  \(results.count)/\(groupCount) grupper klara")
+                }
+                try await Task.sleep(for: .seconds(2))
+            }
+            let status = try HDRCompareCLI.readJSON(statusURL)
+            let ok = HDRCompareCLI.merge(status: status, into: &manifest, root: root)
+            try HDRCompareCLI.writeJSON(manifest, to: manifestURL)
+            print("Manifestet uppdaterat: \(ok)/\(groupCount) grupper lyckades (\(manifestURL.path))")
+            if ok < groupCount { exit(1) }
+        } catch {
+            fail("lr-trigger misslyckades: \(error.localizedDescription)")
         }
     }
 
