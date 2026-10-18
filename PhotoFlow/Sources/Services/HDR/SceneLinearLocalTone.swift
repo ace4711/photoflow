@@ -28,38 +28,47 @@ import Foundation
 nonisolated enum SceneLinearLocalTone {
     typealias Plane = ExposureFusion.Plane
 
+    /// Standardvärdena är framtagna mot Lightroom (HDR + Auto Settings) på de 20 grupperna i
+    /// `~/PhotoFlowBenchmark/hdr-lr/` — se docs/plan-hdr-v8-framkallning.md, avsnitt 4.
     struct Options: Sendable, Equatable {
-        /// Hela bildens medianluma efter tonsättningen (gammakodad).
+        /// Hela bildens medianluma efter tonsättningen (gammakodad). Lightroom Auto: ≈ 0,47.
         var targetMedian: Float = 0.47
         /// Basens arbetsupplösning (lång sida) och guided filtrets radie som andel av den.
         var baseDimension = 1024
         var baseRadiusFraction: Float = 0.03
-        /// Guided filtrets eps i (EV)²: variation under ≈ √eps EV räknas som detalj.
-        var baseEps: Float = 0.25
-        /// Basens högdagerskuldra (EV över målmedianen): knä och största tillägg ovanför knät.
-        var highlightStart: Float = 0.7
-        var highlightRange: Float = 1.6
-        /// Basens skuggtak (EV under målmedianen): skuggorna närmar sig −shadowRange.
-        var shadowRange: Float = 4.5
-        /// Detaljförstärkning (1 = oförändrad).
+        /// Guided filtrets eps i (EV)²: variation under ≈ √eps EV räknas som detalj. Stort (1 EV) så
+        /// att utsikten som helhet hamnar i basen och solpaneler mot snö stannar i detaljen (full kontrast).
+        var baseEps: Float = 1.0
+        /// Den fina basens radie relativt den grova (haloskydd, `combinedBase`); 0 = bara den grova.
+        var fineRadiusRatio: Float = 0.1
+        var haloSoftEV: Float = 0.5
+        /// Basens högdagerskuldra (EV över 18 % grå): knä och största tillägg ovanför knät.
+        var highlightStart: Float = 0.8
+        var highlightRange: Float = 1.0
+        /// Basens skuggtak (EV under 18 % grå): skuggorna närmar sig −shadowRange (stort = lite lyft).
+        var shadowRange: Float = 12
+        /// Detaljförstärkning (1 = oförändrad), "Texture/Clarity".
         var detail: Float = 1.25
+        /// Förstärkningen av ljus detalj (över basen) där basen ligger 1,5 EV eller mer över `highlightStart`.
+        var detailHighlight: Float = 0.6
         /// Under så här många EV under medianen tonas detaljförstärkningen ut (brus i djupa skuggor).
         var detailShadowEV: ClosedRange<Float> = -5 ... -3
-        /// Andel pixlar som får bli helt svarta resp. når 1.
-        var blackClip: Double = 0.002
-        var whiteClip: Double = 0.004
+        /// Andel pixlar som får bli helt svarta resp. når 1 (LR: Blacks −22, Whites +15).
+        var blackClip: Double = 0.008
+        var whiteClip: Double = 0.003
         /// Vitpunktens tak: basens kompressionstak (`highlightStart + highlightRange`) plus så här många
-        /// EV — fönster och himmel hamnar under vitt med detaljen kvar, i stället för att percentilen
-        /// lägger dem på 1 när de är en stor del av bilden.
-        var whiteMarginEV: Float = 0.5
+        /// EV. Ett lägre tak (≈ 0,5) håller fönstren under vitt men klipper ljus detalj hårt; 2 = i praktiken
+        /// bara percentilen.
+        var whiteMarginEV: Float = 2.0
         /// Skuldrans knä (linjär luminans) före vitpunkten.
         var shoulderKnee: Float = 0.6
         /// Global S-kurva i gammakodat: styrka och vändpunkt.
-        var contrast: Float = 0.18
+        var contrast: Float = 0.3
         var contrastPivot: Float = 0.45
-        /// Mättnad (multiplikativ, 1 = oförändrad) och vibrance (extra för omättade färger).
-        var saturation: Float = 1.03
-        var vibrance: Float = 0.15
+        /// Mättnad (multiplikativ, 1 = oförändrad) och vibrance (extra för omättade färger). Högre än LR:s
+        /// reglage (Saturation +3, Vibrance +15) eftersom Adobe Standard i sig är mättnare än CIRAWFilter.
+        var saturation: Float = 1.15
+        var vibrance: Float = 0.25
         /// Exponeringens gränser (EV, relativt interiörens median → 18 % grå).
         var maxCalibrationEV: Float = 3
         /// Färgkantsdämpning (LR: Defringe) i ljusa partier: lila/magenta (min(R,B) > G) dras mot
@@ -67,11 +76,17 @@ nonisolated enum SceneLinearLocalTone {
         /// himmel bakom löv syns först när fönstren inte längre klipps. 0 = av.
         var defringe: Float = 1
         var defringeEV: ClosedRange<Float> = 1.0 ... 2.0
-        /// Slöjborttagning i radiansen före tonsättningen (`SceneLinearTone.dehaze`, utsikten genom
-        /// glaset): andel av den skattade slöjan. 0 = av.
+        /// Slöjborttagning i radiansen före tonsättningen (`SceneLinearTone.dehaze`): andel av den skattade
+        /// slöjan. 0 = av (gav mättade, orange grenar i utsikten — den lokala tonsättningen behöver den inte).
         var dehaze: Float = 0
+        /// Värme (linjärt, före tonsättningen): R × (1 + w), B × (1 − w), luminansen bevarad. Lightrooms
+        /// Adobe Standard återger samma As Shot-vitbalans något varmare än CIRAWFilter. 0 = av.
+        var warmth: Float = 0.01
+        var tint: Float = 0
+        /// Andel av vägen mot vitt för pixlar vars luminans ligger vid radiansens tak (klippta i alla ramar).
+        var clippedToWhite: Float = 1
         /// Mättnadsexponent där basen tryckts ned (1,5 EV över `highlightStart` och uppåt): 1 = kromat bevaras.
-        var highlightSaturation: Float = 0.7
+        var highlightSaturation: Float = 0.6
 
         init() {}
 
@@ -84,10 +99,13 @@ nonisolated enum SceneLinearLocalTone {
             case "baseDimension": baseDimension = Int(value)
             case "baseRadiusFraction": baseRadiusFraction = f
             case "baseEps": baseEps = f
+            case "fineRadiusRatio": fineRadiusRatio = f
+            case "haloSoftEV": haloSoftEV = f
             case "highlightStart": highlightStart = f
             case "highlightRange": highlightRange = f
             case "shadowRange": shadowRange = f
             case "detail": detail = f
+            case "detailHighlight": detailHighlight = f
             case "blackClip": blackClip = value
             case "whiteClip": whiteClip = value
             case "whiteMarginEV": whiteMarginEV = f
@@ -98,6 +116,9 @@ nonisolated enum SceneLinearLocalTone {
             case "vibrance": vibrance = f
             case "defringe": defringe = f
             case "dehaze": dehaze = f
+            case "warmth": warmth = f
+            case "tint": tint = f
+            case "clippedToWhite": clippedToWhite = f
             case "highlightSaturation": highlightSaturation = f
             default: return false
             }
@@ -153,8 +174,16 @@ nonisolated enum SceneLinearLocalTone {
         let cb = compressBase(base, highlightStart: o.highlightStart, highlightRange: o.highlightRange, shadowRange: o.shadowRange)
         let lo = o.detailShadowEV.lowerBound, hi = o.detailShadowEV.upperBound
         let t = min(max((base - lo) / max(hi - lo, 1e-3), 0), 1)
-        let gain = 1 + (o.detail - 1) * t * t * (3 - 2 * t)
-        return midGray * exp2f(cb + gain * (l - base))
+        var gain = 1 + (o.detail - 1) * t * t * (3 - 2 * t)
+        // I sammanpressade högdagrar (fönster, himmel): egen förstärkning av den *ljusa* detaljen, så
+        // att himmel och snö inte trycks mot vitt — den mörka detaljen (solpaneler, stammar, karmar)
+        // behåller full kontrast, annars blir utsikten grå och platt.
+        let d = l - base
+        if d > 0 {
+            let hu = min(max((base - o.highlightStart) / 1.5, 0), 1)
+            gain += (o.detailHighlight - gain) * hu * hu * (3 - 2 * hu)
+        }
+        return midGray * exp2f(cb + gain * d)
     }
 
     /// Från `Y'` (linjär) till slutlig gammakodad luma: tå, skuldra, gamma, S-kurva.
@@ -172,9 +201,19 @@ nonisolated enum SceneLinearLocalTone {
     // MARK: - Basen
 
     /// Guided filter-koefficienter för log-luminansen på en nedskalad bild. `logSmall` är log2-luminansen.
-    static func baseCoefficients(logSmall: Plane, options: Options) -> (a: Plane, b: Plane) {
-        let radius = max(2, Int((Float(max(logSmall.width, logSmall.height)) * options.baseRadiusFraction).rounded()))
+    static func baseCoefficients(logSmall: Plane, options: Options, radiusScale: Float = 1) -> (a: Plane, b: Plane) {
+        let radius = max(1, Int((Float(max(logSmall.width, logSmall.height)) * options.baseRadiusFraction * radiusScale).rounded()))
         return HDRImageOps.guidedCoefficients(guide: logSmall, input: logSmall, radius: radius, eps: options.baseEps)
+    }
+
+    /// Haloskydd: vid starka kanter (fönsterkarm mot utsikt) ligger den grova basen långt från `l` på
+    /// kantens båda sidor — där tas den fina basen (mindre radie), så att halon blir smal. Mjuk
+    /// övergång över `haloSoftEV`.
+    @inline(__always) static func combinedBase(l: Float, coarse: Float, fine: Float, soft: Float) -> Float {
+        let d = abs(l - coarse) - abs(l - fine)
+        guard d > 0 else { return coarse }
+        let u = min(d / max(soft, 1e-3), 1)
+        return coarse + (fine - coarse) * (u * u * (3 - 2 * u))
     }
 
     @inline(__always) static func logLuminance(_ r: Float, _ g: Float, _ b: Float) -> Float {
@@ -187,7 +226,7 @@ nonisolated enum SceneLinearLocalTone {
     ///
     /// - Parameter clipCeiling: radiansens tak (den mörkaste ramens klippnivå i bildens skala, `1 / kvot`).
     ///   Pixlar nära taket är klippta i alla ramar; där en kanal klippt före de andra blir kulören fel
-    ///   (rosa kanter runt utblåst himmel) — de avmättas mot max-kanalen (vitt) när de närmar sig taket.
+    ///   (rosa kanter runt utblåst himmel) — de avmättas mot luminansen när de närmar sig taket.
     @discardableResult
     static func applyInPlace(_ linear: inout [Float], width: Int, height: Int, clipCeiling: Float? = nil,
                              options o: Options = Options()) -> Info {
@@ -213,7 +252,11 @@ nonisolated enum SceneLinearLocalTone {
         // Förstärkning så att interiörens median hamnar på 18 % grå (startpunkt för kalibreringen).
         let startOffset = log2f(midGray / max(interior, 1e-7))
 
-        let coeffs = baseCoefficients(logSmall: Plane(width: s.width, height: s.height, data: logSmall), options: o)
+        let logPlane = Plane(width: s.width, height: s.height, data: logSmall)
+        let coeffs = baseCoefficients(logSmall: logPlane, options: o)
+        let useFine = o.fineRadiusRatio > 0
+        let fine = useFine ? baseCoefficients(logSmall: logPlane, options: o, radiusScale: o.fineRadiusRatio) : coeffs
+        let soft = o.haloSoftEV
         // Glest urval för kalibreringen (l och bas, i log2 utan förstärkning).
         let step = max(1, sn / 120_000)
         var calL: [Float] = [], calB: [Float] = []
@@ -221,7 +264,9 @@ nonisolated enum SceneLinearLocalTone {
         var i = 0
         while i < sn {
             calL.append(logSmall[i])
-            calB.append(coeffs.a.data[i] * logSmall[i] + coeffs.b.data[i])
+            let coarse = coeffs.a.data[i] * logSmall[i] + coeffs.b.data[i]
+            let fineBase = fine.a.data[i] * logSmall[i] + fine.b.data[i]
+            calB.append(useFine ? combinedBase(l: logSmall[i], coarse: coarse, fine: fineBase, soft: soft) : coarse)
             i += step
         }
         // En förstärkning (EV) → svartpunkt, vitpunkt och resulterande medianluma.
@@ -258,12 +303,21 @@ nonisolated enum SceneLinearLocalTone {
         let sw = s.width, sh = s.height
         let sx = Float(sw) / Float(width), sy = Float(sh) / Float(height)
         let vib = o.vibrance, sat = o.saturation
+        // Värme/tint som kanalförstärkningar med bevarad luminans för grått.
+        var wr = 1 + o.warmth, wg = 1 - o.tint, wb = 1 - o.warmth
+        let wy = SceneLinearTone.luminance(wr, wg, wb)
+        wr /= wy; wg /= wy; wb /= wy
         let dfr = min(max(o.defringe, 0), 1), dfLo = o.defringeEV.lowerBound, dfHi = max(o.defringeEV.upperBound, o.defringeEV.lowerBound + 0.01)
         let ceilLo = (clipCeiling ?? .infinity) * 0.70, ceilHi = (clipCeiling ?? .infinity) * 0.92
+        let whiteLo = (clipCeiling ?? .infinity) * 0.80, whiteHi = (clipCeiling ?? .infinity) * 0.97
+        let clipWhite = min(max(o.clippedToWhite, 0), 1)
         linear.withUnsafeMutableBufferPointer { buf in
             coeffs.a.data.withUnsafeBufferPointer { aBuf in
                 coeffs.b.data.withUnsafeBufferPointer { bBuf in
+                  fine.a.data.withUnsafeBufferPointer { faBuf in
+                   fine.b.data.withUnsafeBufferPointer { fbBuf in
                     let px = HDRImageOps.Shared(buf), ca = HDRImageOps.Shared(aBuf), cb = HDRImageOps.Shared(bBuf)
+                    let fa = HDRImageOps.Shared(faBuf), fb = HDRImageOps.Shared(fbBuf)
                     DispatchQueue.concurrentPerform(iterations: height) { y in
                         let fy = max(0, (Float(y) + 0.5) * sy - 0.5)
                         let y0 = min(Int(fy), sh - 1), y1 = min(y0 + 1, sh - 1)
@@ -276,16 +330,29 @@ nonisolated enum SceneLinearLocalTone {
                             let a = (ca[i00] * (1 - tx) + ca[i01] * tx) * (1 - ty) + (ca[i10] * (1 - tx) + ca[i11] * tx) * ty
                             let b = (cb[i00] * (1 - tx) + cb[i01] * tx) * (1 - ty) + (cb[i10] * (1 - tx) + cb[i11] * tx) * ty
                             let p = (y * width + x) * 4
-                            var r = max(px[p], 0), g = max(px[p + 1], 0), bl = max(px[p + 2], 0)
+                            var r = max(px[p], 0) * wr, g = max(px[p + 1], 0) * wg, bl = max(px[p + 2], 0) * wb
                             let m0 = max(r, g, bl)
+                            // Klippt i alla ramar (luminansen vid taket): ingen information — blir vitt
+                            // som i Lightroom, i stället för en grå, tryckt himmel.
+                            var whiteMix: Float = 0
                             if m0 > ceilLo {
                                 let u = min((m0 - ceilLo) / (ceilHi - ceilLo), 1)
                                 let t = u * u * (3 - 2 * u)
-                                r += (m0 - r) * t; g += (m0 - g) * t; bl += (m0 - bl) * t
+                                // Mot luminansen (inte max-kanalen): ingen ljushetsskillnad mot grannarna,
+                                // annars blir delvis klippta partier (snö, fasad) hårda vita fläckar.
+                                let y0 = SceneLinearTone.luminance(r, g, bl)
+                                r += (y0 - r) * t; g += (y0 - g) * t; bl += (y0 - bl) * t
+                                let w = min(max((y0 - whiteLo) / (whiteHi - whiteLo), 0), 1)
+                                whiteMix = clipWhite * w * w * (3 - 2 * w)
                             }
                             var yIn = max(SceneLinearTone.luminance(r, g, bl), 1e-6)
                             let l = log2f(yIn)
-                            let base = a * l + b
+                            var base = a * l + b
+                            if useFine {
+                                let a2 = (fa[i00] * (1 - tx) + fa[i01] * tx) * (1 - ty) + (fa[i10] * (1 - tx) + fa[i11] * tx) * ty
+                                let b2 = (fb[i00] * (1 - tx) + fb[i01] * tx) * (1 - ty) + (fb[i10] * (1 - tx) + fb[i11] * tx) * ty
+                                base = combinedBase(l: l, coarse: base, fine: a2 * l + b2, soft: soft)
+                            }
                             if dfr > 0 {
                                 let m = min(r, bl) - g
                                 if m > 0 {
@@ -340,10 +407,15 @@ nonisolated enum SceneLinearLocalTone {
                                 f = min(f, up, down)
                                 gr = gl + (gr - gl) * f; gg = gl + (gg - gl) * f; gb = gl + (gb - gl) * f
                             }
+                            if whiteMix > 0 {
+                                gr += (1 - gr) * whiteMix; gg += (1 - gg) * whiteMix; gb += (1 - gb) * whiteMix
+                            }
                             px[p] = min(max(gr, 0), 1); px[p + 1] = min(max(gg, 0), 1); px[p + 2] = min(max(gb, 0), 1)
                             px[p + 3] = 1
                         }
                     }
+                   }
+                  }
                 }
             }
         }
