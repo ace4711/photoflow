@@ -49,6 +49,7 @@ struct PhotoFlowApp: App {
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 1400, height: 900)
+        .commands { HDRCompareCommands() }
 
         // Objektfilm: eget fönster per källa. Öppnas från dashboardens verktygsfält och Historik
         // med `openWindow(id: "reel", value: ReelLaunchRequest)`.
@@ -69,6 +70,12 @@ struct PhotoFlowApp: App {
             if let request { ReelPlayerView(request: request) }
         }
         .windowResizability(.contentMinSize)
+
+        // Jämförelse av vår HDR mot Lightrooms på ett testmanifest (docs/plan-hdr-jamforelse.md).
+        WindowGroup("HDR-jämförelse", id: HDRCompareWindow.id) {
+            HDRCompareView()
+        }
+        .defaultSize(width: 1500, height: 950)
 
         Settings {
             SettingsView()
@@ -120,6 +127,20 @@ struct PhotoFlowApp: App {
         // ska skickas (i praktiken: första gången pipeline-läget används).
         NotificationService.shared.onReviewNowRequested = { [weak pipeline] in
             pipeline?.reviewRequestedFromNotification = true
+        }
+    }
+}
+
+/// Menyn Fönster → HDR-jämförelse.
+private struct HDRCompareCommands: Commands {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(after: .windowArrangement) {
+            Button("HDR-jämförelse") {
+                openWindow(id: HDRCompareWindow.id)
+            }
+            .keyboardShortcut("h", modifiers: [.command, .option, .shift])
         }
     }
 }
