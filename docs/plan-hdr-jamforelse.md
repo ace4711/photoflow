@@ -108,13 +108,13 @@ Mot `ref` är ΔE bara vägledande: fotografens bild har manuell framkallning, b
 ## 7. Faser (commit-stora steg)
 
 **Fas 1 – underlag (headless, inget GUI)**
-1. `photoflow-cli hdr --frames <nef…> --method radiance|base|fusion --out <tiff> [--jpeg <jpg>] [--window-source <nef>] [--hdr-debug <mapp>]` som anropar `HDREngine.merge` direkt (exponeringstid via `ExifReader`). Enhetstest av argumenttolkningen.
-2. `scripts/hdr-lr-testset.py`: väljer 20 grupper enligt avsnitt 2, kopierar NEF:er och fotografreferenser, skriver `manifest.json` (assert att inget skrivs under testdatamapparna).
-3. `scripts/hdr-lr-run-ours.sh`: kör `pf-*`-varianterna för alla grupper i manifestet och uppdaterar manifestet.
+1. `photoflow-cli hdr --frames <nef…> --method radiance|base|fusion --out <tiff> [--jpeg <jpg>] [--window-source <nef>] [--hdr-debug <mapp>]` som anropar `HDREngine.merge` direkt (exponeringstid via `ExifReader`). Enhetstest av argumenttolkningen. **KLAR** (`hdr`, `HDRCompareCLI`, `HDRCompareCLITests`; `enhance` tar redan en enskild TIFF och ger `pf-radiance-enh`).
+2. `scripts/hdr-lr-testset.py`: väljer 20 grupper enligt avsnitt 2, kopierar NEF:er och fotografreferenser, skriver `manifest.json` (assert att inget skrivs under testdatamapparna). **KLAR** – 20 grupper, 89 NEF, ~/PhotoFlowBenchmark/hdr-lr/.
+3. `scripts/hdr-lr-run-ours.sh`: kör `pf-*`-varianterna för alla grupper i manifestet och uppdaterar manifestet. **KLAR** som `scripts/hdr-lr-run-ours.py`; körd för alla 20 grupper (radiance 65 s, base 98 s, fusion 116 s, enh 30 s totalt, Release-bygge).
 
 **Fas 2 – Lightroom-resultat (kräver Fredrik)**
-4. Plugin: experimentläge, väntan på ny DNG, export via `LrExportSession`, framkallningsinställningar i status (avsnitt 4). Versionen höjs till 1.4.
-5. Appen/CLI: `photoflow-cli lr-trigger --manifest <fil>` skriver triggern och väntar på `lr_done.json`, för in sökvägar och inställningar i manifestet.
+4. Plugin: experimentläge, väntan på ny DNG, export via `LrExportSession`, framkallningsinställningar i status (avsnitt 4). Versionen höjs till 1.4. **KLAR** (ej provkörd i Lightroom; Lua-syntax och ren logik testade utanför LR).
+5. Appen/CLI: `photoflow-cli lr-trigger --manifest <fil>` skriver triggern och väntar på `lr_done.json`, för in sökvägar och inställningar i manifestet. **KLAR** (även `--collect`, `--bridge-dir`/`PHOTOFLOW_LR_BRIDGE_DIR`; testad mot tillfällig bryggmapp).
 6. **Fredrik:** skapar testkatalogen, ställer in HDR-dialogen, startar körningen (eller lämnar datorn). Kontrollerar 2–3 grupper manuellt i Lightroom.
 
 **Fas 3 – mått**
