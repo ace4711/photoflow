@@ -107,7 +107,7 @@ nonisolated enum HDRCompareCategory {
     static func title(_ id: String?) -> String {
         switch id {
         case "interior-window": return "Interiör med fönster"
-        case "interior-dark": return "Mörkt rum"
+        case "interior-dark", "dark-room": return "Mörkt rum"
         case "interior": return "Interiör"
         case "exterior": return "Exteriör"
         case "exterior-window": return "Exteriör med fönster"
