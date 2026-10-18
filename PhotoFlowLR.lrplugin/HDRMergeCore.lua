@@ -22,11 +22,16 @@ local LrLogger = import 'LrLogger'
 local LrFunctionContext = import 'LrFunctionContext'
 local LrProgressScope = import 'LrProgressScope'
 local LrPrefs = import 'LrPrefs'
+local LrExportSession = import 'LrExportSession'
 
 local logger = LrLogger('PhotoFlowHDR')
 logger:enable("print")
 
 local M = {}
+
+--- Pluginversion (samma som Info.lua) — skrivs i lr_status.json så att appen/CLI:t ser vilken
+--- version som kördes.
+M.VERSION = "1.4"
 
 -- MARK: - Bridge folder ------------------------------------------------------
 --
@@ -317,33 +322,72 @@ function M.parseTrigger(content)
                 groups[#groups + 1] = {
                     group_id = tonumber(rawGroup.group_id) or (#groups + 1),
                     files = files,
-                    output_dir = type(rawGroup.output_dir) == "string" and rawGroup.output_dir or ""
+                    output_dir = type(rawGroup.output_dir) == "string" and rawGroup.output_dir or "",
+                    -- Experimentläget (docs/plan-hdr-jamforelse.md, avsnitt 4):
+                    id = type(rawGroup.id) == "string" and rawGroup.id or nil,
+                    export_dir = type(rawGroup.export_dir) == "string" and rawGroup.export_dir or nil,
                 }
             end
         end
     end
-    return { groups = groups }, nil
+    return {
+        groups = groups,
+        mode = decoded.mode == "experiment" and "experiment" or "normal",
+        export_format = decoded.export_format == "JPEG" and "JPEG" or "TIFF",
+        -- false = hoppa över Ctrl+Shift+H och använd bara Ctrl+H + Retur.
+        headless = decoded.headless ~= false,
+    }, nil
 end
 
 -- MARK: - Status file ---------------------------------------------------------
 
+local ESCAPES = { ['"'] = '\\"', ["\\"] = "\\\\", ["\n"] = "\\n", ["\r"] = "\\r", ["\t"] = "\\t" }
+
+--- Riktig JSON-kodare (ersätter den gamla som bara escapade `"` och `\n`): strängar escapas
+--- fullständigt (citattecken, backslash, styrtecken som \u00XX), icke-ändliga tal blir null,
+--- tabeller med 1..n-nycklar (och tomma tabeller) blir arrayer, övriga objekt med sorterade
+--- nycklar. UTF-8 skickas vidare oförändrat.
+local function encodeJSON(value)
+    local t = type(value)
+    if t == "nil" then
+        return "null"
+    elseif t == "boolean" then
+        return value and "true" or "false"
+    elseif t == "number" then
+        if value ~= value or value == math.huge or value == -math.huge then return "null" end
+        if value == math.floor(value) and math.abs(value) < 1e15 then return string.format("%d", value) end
+        return string.format("%.10g", value)
+    elseif t == "string" then
+        local escaped = value:gsub('[%c"\\]', function(c)
+            return ESCAPES[c] or string.format("\\u%04x", c:byte())
+        end)
+        return '"' .. escaped .. '"'
+    elseif t == "table" then
+        local parts = {}
+        local n = #value
+        if n > 0 or next(value) == nil then
+            for i = 1, n do parts[#parts + 1] = encodeJSON(value[i]) end
+            return "[" .. table.concat(parts, ",") .. "]"
+        end
+        local keys = {}
+        for k in pairs(value) do keys[#keys + 1] = tostring(k) end
+        table.sort(keys)
+        for _, k in ipairs(keys) do
+            parts[#parts + 1] = encodeJSON(k) .. ":" .. encodeJSON(value[k])
+        end
+        return "{" .. table.concat(parts, ",") .. "}"
+    end
+    return "null"
+end
+
+M.encodeJSON = encodeJSON
+
+--- Skriver `lr_status.json`: `{status, plugin_version, results:[…]}`. Resultatobjekten får vara
+--- vilka tabeller som helst (i experimentläget även id, export, dng och develop).
 local function writeStatus(status, results)
     local file = io.open(M.statusPath(), "w")
     if file then
-        file:write('{"status":"' .. status .. '","results":[')
-        if results then
-            local parts = {}
-            for _, r in ipairs(results) do
-                local msg = (r.message or ""):gsub('"', '\\"'):gsub('\n', '\\n')
-                table.insert(parts,
-                    '{"group_id":' .. r.group_id ..
-                    ',"status":"' .. r.status ..
-                    '","message":"' .. msg .. '"}'
-                )
-            end
-            file:write(table.concat(parts, ","))
-        end
-        file:write(']}')
+        file:write(encodeJSON({ status = status, plugin_version = M.VERSION, results = results or {} }))
         file:close()
     end
 end
@@ -358,7 +402,216 @@ end
 -- Lightroom's own log (`~/Library/Application Support/Adobe/Lightroom/
 -- lrc_console.log`, via `LrLogger:enable("print")`) instead of just silently
 -- taking longer than expected.
-local function processGroup(catalog, group, groupIndex, totalGroups, progress)
+
+-- MARK: - Experimentläge (docs/plan-hdr-jamforelse.md, avsnitt 4) ----------------------
+--
+-- Som det normala flödet, men: (1) väntar på att Lightrooms `<ram>-HDR.dng` faktiskt dyker upp i
+-- källmappen (polling) i stället för fasta väntetider, (2) provar först den huvudlösa
+-- genvägen Ctrl+Skift+H (sammanslagning med senaste inställningarna, ingen dialog) och faller
+-- tillbaka på Ctrl+H + Retur, (3) exporterar resultatet med Lightrooms egen exportmotor som
+-- 16-bitars sRGB-TIFF ("lr-auto") och (4) rapporterar framkallningsinställningarna och
+-- DNG-sökvägen i statusen, så att man ser om Auto Settings verkligen användes.
+
+M.HEADLESS_TIMEOUT_SECONDS = 90
+M.DIALOG_TIMEOUT_SECONDS = 120
+M.FIND_PHOTO_TIMEOUT_SECONDS = 30
+
+-- Inställningar som är intressanta att jämföra (Auto Settings sätter dem).
+local DEVELOP_KEYS = {
+    "ProcessVersion", "CameraProfile", "WhiteBalance", "Temperature", "Tint",
+    "Exposure2012", "Contrast2012", "Highlights2012", "Shadows2012", "Whites2012", "Blacks2012",
+    "Texture", "Clarity2012", "Dehaze", "Vibrance", "Saturation",
+}
+
+local LR_PROCESS = "Adobe Lightroom Classic"
+
+local function osascript(script)
+    return LrTasks.pcall(function()
+        LrTasks.execute("osascript -e '" .. script .. "'")
+    end)
+end
+
+local function activateLightroom()
+    osascript('tell application "' .. LR_PROCESS .. '" to activate')
+end
+
+local function sendKeys(keystrokeScript)
+    return osascript('tell application "System Events" to tell process "' .. LR_PROCESS .. '" to ' .. keystrokeScript)
+end
+
+--- Mängden `*-HDR*.dng` i en mapp (sökväg → true).
+local function hdrDngsIn(dir)
+    local found = {}
+    for path in LrFileUtils.files(dir) do
+        local leaf = LrPathUtils.leafName(path):lower()
+        if leaf:match("%-hdr[^/]*%.dng$") then found[path] = true end
+    end
+    return found
+end
+
+local function fileSize(path)
+    local attrs = LrFileUtils.fileAttributes(path)
+    return attrs and attrs.fileSize or nil
+end
+
+--- Pollar tills en ny `*-HDR*.dng` finns i `dir` (jämfört med `before`) och har slutat växa.
+--- Returnerar sökvägen eller nil vid tidsgräns.
+local function waitForNewDng(dir, before, timeoutSeconds)
+    local waited = 0
+    while waited < timeoutSeconds do
+        LrTasks.sleep(1)
+        waited = waited + 1
+        for path in pairs(hdrDngsIn(dir)) do
+            if not before[path] then
+                -- Klar när storleken är oförändrad i två avläsningar med en sekunds mellanrum.
+                local size = fileSize(path)
+                LrTasks.sleep(1)
+                waited = waited + 1
+                if size and size > 0 and size == fileSize(path) then return path end
+            end
+        end
+    end
+    return nil
+end
+
+local function findPhotoInCatalog(catalog, path)
+    local waited = 0
+    while waited < M.FIND_PHOTO_TIMEOUT_SECONDS do
+        local ok, photo = LrTasks.pcall(function() return catalog:findPhotoByPath(path) end)
+        if ok and photo then return photo end
+        LrTasks.sleep(1)
+        waited = waited + 1
+    end
+    return nil
+end
+
+local function readDevelopSettings(photo)
+    local ok, settings = LrTasks.pcall(function() return photo:getDevelopSettings() end)
+    local out = {}
+    if ok and type(settings) == "table" then
+        for _, key in ipairs(DEVELOP_KEYS) do
+            local value = settings[key]
+            if type(value) == "number" or type(value) == "string" or type(value) == "boolean" then
+                out[key] = value
+            end
+        end
+    end
+    return out
+end
+
+--- Exporterar `photo` med Lightrooms egen exportmotor: 16-bitars sRGB-TIFF (eller JPEG),
+--- ingen storleksbegränsning, ingen utskärpning, filnamn `lr-auto`. Returnerar filens sökväg.
+local function exportPhoto(photo, exportDir, format)
+    LrFileUtils.createAllDirectories(exportDir)
+    local extensions = format == "JPEG" and { "jpg", "jpeg" } or { "tif", "tiff" }
+    for _, ext in ipairs(extensions) do
+        LrFileUtils.delete(LrPathUtils.child(exportDir, "lr-auto." .. ext))
+    end
+    local settings = {
+        LR_export_destinationType = "specificFolder",
+        LR_export_destinationPathPrefix = exportDir,
+        LR_export_useSubfolder = false,
+        LR_format = format,
+        LR_size_doConstrain = false,
+        LR_outputSharpeningOn = false,
+        LR_renamingTokensOn = true,
+        LR_tokens = "lr-auto",
+        LR_collisionHandling = "overwrite",
+        LR_reimportExportedPhoto = false,
+        LR_export_colorSpace = "sRGB",
+    }
+    if format == "JPEG" then
+        settings.LR_jpeg_quality = 1
+    else
+        settings.LR_export_bitDepth = 16
+    end
+    local session = LrExportSession({ photosToExport = { photo }, exportSettings = settings })
+    session:doExportOnCurrentTask()
+    for _, ext in ipairs(extensions) do
+        local path = LrPathUtils.child(exportDir, "lr-auto." .. ext)
+        if LrFileUtils.exists(path) then return path end
+    end
+    return nil
+end
+
+--- Sammanslagningen för en grupp i experimentläget. `photos` är redan importerade och markerade.
+local function experimentMerge(catalog, group, photos, trigger, firstFile)
+    local started = os.time()
+    local label = group.id or tostring(group.group_id)
+    local result = { group_id = group.group_id, id = group.id, status = "error", message = "" }
+    local sourceDir = LrPathUtils.parent(firstFile)
+    local before = hdrDngsIn(sourceDir)
+    local dngPath = nil
+
+    activateLightroom()
+    LrTasks.sleep(1)
+
+    if trigger.headless then
+        logger:trace("Grupp " .. label .. ": Ctrl+Skift+H (huvudlös sammanslagning)")
+        sendKeys('keystroke "h" using {control down, shift down}')
+        dngPath = waitForNewDng(sourceDir, before, M.HEADLESS_TIMEOUT_SECONDS)
+        if dngPath then
+            result.mergeMethod = "headless"
+        else
+            logger:warn("Grupp " .. label .. ": ingen DNG efter Ctrl+Skift+H, faller tillbaka på dialogen")
+            -- Stäng en eventuell dialog som genvägen råkade öppna innan reservvägen provas.
+            sendKeys("key code 53")
+            LrTasks.sleep(1)
+            activateLightroom()
+        end
+    end
+
+    if not dngPath then
+        logger:trace("Grupp " .. label .. ": Ctrl+H, väntar på dialogen, Retur")
+        sendKeys('keystroke "h" using {control down}')
+        LrTasks.sleep(M.hdrPreviewWaitSeconds())
+        sendKeys("keystroke return")
+        dngPath = waitForNewDng(sourceDir, before, M.DIALOG_TIMEOUT_SECONDS)
+        if dngPath then result.mergeMethod = "dialog" end
+    end
+
+    if not dngPath then
+        result.message = "Ingen ny -HDR.dng dök upp i " .. sourceDir
+        return result
+    end
+    logger:trace("Grupp " .. label .. ": ny DNG " .. dngPath)
+
+    local photo = findPhotoInCatalog(catalog, dngPath)
+    if not photo then
+        result.message = "DNG:n hittades inte i katalogen: " .. dngPath
+        result.sourceDng = dngPath
+        return result
+    end
+    result.develop = readDevelopSettings(photo)
+
+    local exportDir = group.export_dir or group.output_dir
+    if not exportDir or exportDir == "" then
+        result.message = "Triggern saknar export_dir"
+        result.sourceDng = dngPath
+        return result
+    end
+
+    -- DNG:n sparas också (bredvid exporten) för senare analys.
+    LrFileUtils.createAllDirectories(exportDir)
+    local copiedDng = LrPathUtils.child(exportDir, "lr.dng")
+    LrFileUtils.delete(copiedDng)
+    local copied = LrFileUtils.copy(dngPath, copiedDng)
+    result.sourceDng = dngPath
+    result.dng = copied and copiedDng or dngPath
+
+    local exportOK, exported = LrTasks.pcall(function() return exportPhoto(photo, exportDir, trigger.export_format) end)
+    if not exportOK or not exported then
+        result.message = "Exporten misslyckades: " .. tostring(exportOK and "ingen fil" or exported)
+        return result
+    end
+    result.export = exported
+    result.status = "ok"
+    result.seconds = os.time() - started
+    result.message = "HDR klar (" .. (result.mergeMethod or "?") .. "), " .. #photos .. " ramar"
+    return result
+end
+
+local function processGroup(catalog, group, groupIndex, totalGroups, progress, trigger)
     progress:setCaption("Grupp " .. groupIndex .. "/" .. totalGroups)
     logger:trace("Grupp " .. group.group_id .. ": " .. #group.files .. " fil(er)")
 
@@ -427,6 +680,10 @@ local function processGroup(catalog, group, groupIndex, totalGroups, progress)
 
     LrTasks.yield()
     LrTasks.sleep(M.selectSettleDelaySeconds())
+
+    if trigger and trigger.mode == "experiment" then
+        return experimentMerge(catalog, group, photos, trigger, validFiles[1])
+    end
 
     -- Trigger HDR Merge via Ctrl+H
     local mergeOK, mergeErr = LrTasks.pcall(function()
@@ -520,8 +777,10 @@ function M.runOnce(opts)
             end
 
             progress:setPortionComplete(i - 1, totalGroups)
-            local result = processGroup(catalog, group, i, totalGroups, progress)
+            local result = processGroup(catalog, group, i, totalGroups, progress, trigger)
             table.insert(results, result)
+            -- Experimentläget: löpande status, så att `photoflow-cli lr-trigger --wait` kan visa förlopp.
+            if trigger.mode == "experiment" then writeStatus("running", results) end
             logger:trace("Grupp " .. group.group_id .. " resultat: " .. result.status .. " — " .. result.message)
 
             LrTasks.sleep(M.betweenGroupsDelaySeconds())
@@ -541,7 +800,8 @@ function M.runOnce(opts)
 
     local doneFile = io.open(M.donePath(), "w")
     if doneFile then
-        doneFile:write('{"status":"complete","groups":' .. totalGroups .. ',"ok":' .. okCount .. '}')
+        doneFile:write(encodeJSON({ status = "complete", groups = totalGroups, ok = okCount,
+                                    mode = trigger.mode, plugin_version = M.VERSION }))
         doneFile:close()
     end
 
