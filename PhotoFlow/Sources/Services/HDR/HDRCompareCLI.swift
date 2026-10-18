@@ -161,7 +161,10 @@ nonisolated enum HDRCompareCLI {
                 "export_dir": exportDir,
             ])
         }
-        return ["mode": "experiment", "export_format": "TIFF", "groups": triggerGroups]
+        // headless = false: Ctrl+Skift+H gav ingen sammanslagning i Lightroom Classic (provkört
+        // 2026-10-18, 90 s väntan per grupp i onödan). Dialogen (Ctrl+H + Retur) fungerar och
+        // använder de inställningar som senast valdes i den.
+        return ["mode": "experiment", "export_format": "TIFF", "headless": false, "groups": triggerGroups]
     }
 
     /// För in pluginets `lr_status.json` i manifestet: varianterna `lr-auto` (Lightrooms egen export)

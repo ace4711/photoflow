@@ -439,6 +439,36 @@ local function sendKeys(keystrokeScript)
     return osascript('tell application "System Events" to tell process "' .. LR_PROCESS .. '" to ' .. keystrokeScript)
 end
 
+--- Väntar (i AppleScript, högst `timeoutSeconds`) tills HDR-dialogens förhandsvisning är klar
+--- ("… successfully merged" och Merge aktiv) och klickar Merge. En fast väntan följd av Retur
+--- räckte inte för stora grupper: med 11 ramar var förhandsvisningen inte klar efter 5 s, Retur
+--- föll bort och dialogen blev stående (provkört 2026-10-18). Returnerar true om Merge klickades.
+local function clickMergeWhenReady(timeoutSeconds)
+    local script = table.concat({
+        'tell application "System Events" to tell process "' .. LR_PROCESS .. '"',
+        '  repeat ' .. math.floor(timeoutSeconds) .. ' times',
+        '    if exists window "HDR Merge Preview" then',
+        '      set w to window "HDR Merge Preview"',
+        '      set t to ""',
+        '      repeat with s in (every static text of w)',
+        '        set t to t & (value of s as text)',
+        '      end repeat',
+        '      if t contains "successfully merged" and (enabled of button "Merge" of w) then',
+        '        click button "Merge" of w',
+        '        return',
+        '      end if',
+        '    end if',
+        '    delay 1',
+        '  end repeat',
+        'end tell',
+        'error "Merge inte klickad"',
+    }, "\n")
+    local ok, status = LrTasks.pcall(function()
+        return LrTasks.execute("osascript -e '" .. script .. "'")
+    end)
+    return ok and status == 0
+end
+
 --- Mängden `*-HDR*.dng` i en mapp (sökväg → true).
 local function hdrDngsIn(dir)
     local found = {}
@@ -562,10 +592,13 @@ local function experimentMerge(catalog, group, photos, trigger, firstFile)
     end
 
     if not dngPath then
-        logger:trace("Grupp " .. label .. ": Ctrl+H, väntar på dialogen, Retur")
+        logger:trace("Grupp " .. label .. ": Ctrl+H, väntar på förhandsvisningen, Merge")
         sendKeys('keystroke "h" using {control down}')
         LrTasks.sleep(M.hdrPreviewWaitSeconds())
-        sendKeys("keystroke return")
+        if not clickMergeWhenReady(M.DIALOG_TIMEOUT_SECONDS) then
+            logger:warn("Grupp " .. label .. ": Merge kunde inte klickas, provar Retur")
+            sendKeys("keystroke return")
+        end
         dngPath = waitForNewDng(sourceDir, before, M.DIALOG_TIMEOUT_SECONDS)
         if dngPath then result.mergeMethod = "dialog" end
     end
