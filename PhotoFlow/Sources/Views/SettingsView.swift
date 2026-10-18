@@ -3,62 +3,50 @@ import ServiceManagement
 import EventKit
 import CoreLocation
 
+/// Vilken flik Inställningar visar. Delas av kugghjulet, stegkortens
+/// "Öppna inställningar" och startkontrollens åtgärder, som alla öppnar
+/// samma Inställningar-fönster (appens `Settings`-scen) på rätt flik.
+@MainActor @Observable
+final class SettingsNavigation {
+    static let shared = SettingsNavigation()
+    var selectedTab: Int = 0
+}
+
+/// Inställningar är ett enda fönster, appens `Settings`-scen (⌘, och
+/// kugghjulet i verktygsfältet). `TabView` ligger överst så att flikarna
+/// blir macOS vanliga verktygsfältsflikar; förut låg den i en `VStack` med en
+/// Klar-knapp, vilket i scenen gav en hoptryckt flikrad i titeln.
 struct SettingsView: View {
     @ObservedObject var settings = AppSettings.shared
-    @Environment(\.dismiss) private var dismiss
-    // Fas 9: låter infopopovern på ett stegkort (StepCardView) hoppa direkt
-    // till rätt flik ("Öppna inställningar") i stället för att bara öppna
-    // Inställningar på den flik som råkade vara öppen sist.
-    @State private var selectedTab: Int
-
-    init(initialTab: Int = 0) {
-        _selectedTab = State(initialValue: initialTab)
-    }
+    @Bindable private var navigation = SettingsNavigation.shared
 
     var body: some View {
-        VStack(spacing: 0) {
-            TabView(selection: $selectedTab) {
-                DirectoriesTab(settings: settings)
-                    .tabItem { Label("Mappar", systemImage: "folder") }
-                    .tag(0)
+        TabView(selection: $navigation.selectedTab) {
+            DirectoriesTab(settings: settings)
+                .tabItem { Label("Mappar", systemImage: "folder") }
+                .tag(0)
 
-                PipelineTab(settings: settings)
-                    .tabItem { Label("Pipeline", systemImage: "gearshape.2") }
-                    .tag(1)
+            PipelineTab(settings: settings)
+                .tabItem { Label("Pipeline", systemImage: "gearshape.2") }
+                .tag(1)
 
-                WatchTab(settings: settings)
-                    .tabItem { Label("Bevakning", systemImage: "eye") }
-                    .tag(2)
+            WatchTab(settings: settings)
+                .tabItem { Label("Bevakning", systemImage: "eye") }
+                .tag(2)
 
-                AudioTab(settings: settings)
-                    .tabItem { Label("Ljud & notiser", systemImage: "speaker.wave.2") }
-                    .tag(3)
+            AudioTab(settings: settings)
+                .tabItem { Label("Ljud & notiser", systemImage: "speaker.wave.2") }
+                .tag(3)
 
-                ObjektfilmTab()
-                    .tabItem { Label("Objektfilm", systemImage: "film") }
-                    .tag(5)
+            ObjektfilmTab()
+                .tabItem { Label("Objektfilm", systemImage: "film") }
+                .tag(5)
 
-                SystemCheckTab()
-                    .tabItem { Label("System", systemImage: "checkmark.shield") }
-                    .tag(4)
-            }
-            .padding(.top, 8)
-
-            Divider()
-
-            HStack {
-                Spacer()
-                Button("Klar") { dismiss() }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .keyboardShortcut(.return)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
-            // Fas 5: regularMaterial i stället för en solid platta — samma
-            // tidsenliga stil som resten av appen sedan Fas 3g.
-            .background(.regularMaterial)
+            SystemCheckTab()
+                .tabItem { Label("System", systemImage: "checkmark.shield") }
+                .tag(4)
         }
+        .frame(width: 700, height: 620)
     }
 }
 
@@ -109,8 +97,8 @@ struct DirectoriesTab: View {
             guard panel.runModal() == .OK, let url = panel.url else { return }
             if fix == .chooseInput { settings.inputDirectory = url } else { settings.outputDirectory = url }
             Task { await preflight.run() }
-        case .openSettings:
-            return
+        case .openSettings(let tab, _):
+            SettingsNavigation.shared.selectedTab = tab
         default:
             Task { await preflight.perform(fix) }
         }

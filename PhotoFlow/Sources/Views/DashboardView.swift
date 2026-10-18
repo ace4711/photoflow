@@ -8,10 +8,9 @@ struct DashboardView: View {
     @ObservedObject private var preflight = PreflightModel.shared
     @State private var showLog: Bool = true
     @State private var showReview: Bool = false
-    @State private var showSettings: Bool = false
+    @Environment(\.openSettings) private var openSettings
     // Fas 9: vilken flik Inställningar ska öppnas på — satt av ett stegkorts
     // infopopover ("Öppna inställningar"), 0 (Mappar) annars.
-    @State private var settingsInitialTab: Int = 0
     // Fas 6: "Historik" i verktygsfältet — se SessionHistoryView.
     @State private var showHistory: Bool = false
     @Environment(\.openWindow) private var openWindow
@@ -38,10 +37,6 @@ struct DashboardView: View {
             }
         }
         .navigationSubtitle(showReview ? "" : dashboardSubtitle)
-        .sheet(isPresented: $showSettings) {
-            SettingsView(initialTab: settingsInitialTab)
-                .frame(width: 700, height: 620)
-        }
         .sheet(isPresented: $preflight.isPresented) {
             PreflightView(model: preflight, onFix: handlePreflightFix)
         }
@@ -83,9 +78,6 @@ struct DashboardView: View {
         .onChange(of: pipeline.isRunning) { _, _ in refreshFileCount() }
         .onChange(of: pipeline.stepStatuses[.copyToInput]?.phase) { _, _ in refreshFileCount() }
         .onChange(of: preflight.lastRun) { _, _ in refreshFileCount() }
-        .onChange(of: showSettings) { _, showing in
-            if !showing { refreshFileCount() }
-        }
     }
 
     // MARK: - Dashboard content
@@ -120,10 +112,7 @@ struct DashboardView: View {
                         cullStats: (step == .manualReview && !pipeline.allPhotos.isEmpty)
                             ? CullStats(accepted: pipeline.acceptedCount, rejected: pipeline.rejectedCount, unreviewed: pipeline.unreviewedCount)
                             : nil,
-                        onOpenSettings: { tab in
-                            settingsInitialTab = tab
-                            showSettings = true
-                        }
+                        onOpenSettings: { tab in openSettingsWindow(tab: tab) }
                     )
                 }
             }
@@ -259,7 +248,7 @@ struct DashboardView: View {
             }
             .help("Importera fältanteckningar… (.photoflownotes från PhotoFlow Fält)")
 
-            Button(action: { showSettings = true }) {
+            Button(action: { openSettingsWindow(tab: nil) }) {
                 Image(systemName: "gearshape")
             }
             .help("Inställningar")
@@ -695,14 +684,16 @@ struct DashboardView: View {
             Task { await preflight.run() }
         case .openSettings(let tab, _):
             preflight.isPresented = false
-            // Ett ark i taget: vänta tills startkontrollen hunnit stängas.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                settingsInitialTab = tab
-                showSettings = true
-            }
+            openSettingsWindow(tab: tab)
         default:
             Task { await preflight.perform(fix) }
         }
+    }
+
+    /// Öppnar Inställningar-fönstret (samma som ⌘,), på fliken `tab` om den anges.
+    private func openSettingsWindow(tab: Int?) {
+        if let tab { SettingsNavigation.shared.selectedTab = tab }
+        openSettings()
     }
 
     private func refreshFileCount() {
