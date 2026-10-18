@@ -137,7 +137,7 @@ nonisolated enum HDRCompareMetrics {
 
         var reg = Registration(transform: rowMajor(vis), residualPixels: 0, ok: false)
         let warped = warp(fl, with: vis, width: w, height: h, fill: reference)
-        reg.residualPixels = translationResidual(warped.image, reference: reference) ?? .infinity
+        reg.residualPixels = translationResidual(warped.image, reference: reference) ?? 0
         reg.ok = reg.residualPixels <= maxRegistrationResidual
         return reg
     }
@@ -202,17 +202,45 @@ nonisolated enum HDRCompareMetrics {
         return (Image(width: width, height: height, pixels: out), valid)
     }
 
-    /// Kvarvarande translation (px) mellan två redan warpade bilder, via Visions translationsregistrering.
-    private static func translationResidual(_ image: Image, reference: Image) -> Double? {
-        let w = reference.width, h = reference.height
-        let refLuma = lumaPlane(reference).data
-        let flLuma = HDRAlignment.matchHistogram(lumaPlane(image).data, to: refLuma)
-        guard let refCG = grayCGImage(refLuma, width: w, height: h),
-              let flCG = grayCGImage(flLuma, width: w, height: h) else { return nil }
-        let request = VNTranslationalImageRegistrationRequest(targetedCGImage: flCG, options: [:], completionHandler: nil)
-        guard (try? VNImageRequestHandler(cgImage: refCG, options: [:]).perform([request])) != nil,
-              let t = request.results?.first?.alignmentTransform else { return nil }
-        return Double(hypot(t.tx, t.ty))
+    /// Kvarvarande förskjutning (px) mellan en warpad bild och referensen: sökning ±`searchRadius` px på ett
+    /// centralt utsnitt, korrelation mellan högpassfiltrerad luma. Heltalssteg. Begränsad sökning (i stället för
+    /// Visions translationsregistrering) ger aldrig falska jättestora förskjutningar på periodiska mönster.
+    static func translationResidual(_ image: Image, reference: Image, searchRadius r: Int = 6) -> Double? {
+        guard image.width == reference.width, image.height == reference.height else { return nil }
+        let w = image.width, h = image.height
+        let cw = min(w - 2 * r - 2, 480), ch = min(h - 2 * r - 2, 480)
+        guard cw >= 32, ch >= 32 else { return nil }
+        let x0 = (w - cw) / 2, y0 = (h - ch) / 2
+        func highpass(_ img: Image) -> Plane {
+            let l = lumaPlane(img)
+            let blur = HDRImageOps.boxMean(l, radius: 3)
+            return Plane(width: w, height: h, data: zip(l.data, blur.data).map { $0 - $1 })
+        }
+        let hpRef = highpass(reference)
+        let matched = HDRAlignment.matchHistogram(lumaPlane(image).data, to: lumaPlane(reference).data)
+        let blurM = HDRImageOps.boxMean(Plane(width: w, height: h, data: matched), radius: 3)
+        let hpImg = zip(matched, blurM.data).map { $0 - $1 }
+        func corr(_ dx: Int, _ dy: Int) -> Double {
+            var sab = 0.0, saa = 0.0, sbb = 0.0
+            for y in y0..<(y0 + ch) {
+                for x in x0..<(x0 + cw) {
+                    let a = Double(hpRef.data[y * w + x]), b = Double(hpImg[(y + dy) * w + x + dx])
+                    sab += a * b; saa += a * a; sbb += b * b
+                }
+            }
+            return saa > 1e-9 && sbb > 1e-9 ? sab / (saa * sbb).squareRoot() : 0
+        }
+        let zero = corr(0, 0)
+        var best = (dx: 0, dy: 0, c: zero)
+        for dy in -r...r {
+            for dx in -r...r where dx != 0 || dy != 0 {
+                let c = corr(dx, dy)
+                if c > best.c { best = (dx, dy, c) }
+            }
+        }
+        // Obetydlig förbättring räknas som ingen förskjutning (platta utsnitt, brus).
+        if best.c - zero < 0.02 { return 0 }
+        return Double(hypot(Double(best.dx), Double(best.dy)))
     }
 
     private static func grayCGImage(_ luma: [Float], width: Int, height: Int) -> CGImage? {

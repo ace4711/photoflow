@@ -67,6 +67,14 @@ struct HDRCompareMetricsTests {
         #expect(reg.residualPixels < 1)
     }
 
+    @Test func kvarvarandeForskjutningMatsMedBegransadSokning() throws {
+        let ref = make { x, y in let v = scene(x, y); return (v, v, v) }
+        let off = make { x, y in let v = scene(x - 3, y + 2) * 0.8; return (v, v, v) }
+        #expect(M.translationResidual(ref, reference: ref) == 0)
+        let r = try #require(M.translationResidual(off, reference: ref))
+        #expect(abs(r - 13.0.squareRoot()) < 0.01, "residual \(r)")
+    }
+
     // MARK: - Klippning och ton
 
     @Test func klippningRaknarHogdagrarOchSkuggor() {
