@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import ImageIO
 
 extension PipelineRunner {
     // MARK: - Steg: Förbättra bilder
@@ -29,6 +30,46 @@ extension PipelineRunner {
         var identity: [URL] = []
         /// Fönstermasken från window pull (bara HDR; filen behöver inte finnas).
         var windowMask: URL? = nil
+        /// HDR-gruppens JPEG-förhandsvisning (bara HDR) — kopieras vidare när Förbättra hoppas över.
+        var hdrJPEG: URL? = nil
+    }
+
+    /// Lightroom-renderade HDR-bilder hoppar över Förbättra (inställningen
+    /// `enhanceSkipForLightroomHDR`): filen kopieras vidare som den är till `enhanced/`, så att
+    /// sorteringen och resten av kedjan får samma filer som vid en riktig förbättring.
+    static func isLightroomPassthrough(_ job: EnhanceJob, hdrLog: HDRLog?, skipSetting: Bool) -> Bool {
+        skipSetting && job.kind == .hdr && hdrLog?.entries[job.key]?.engine == HDRLog.lightroomEngine
+    }
+
+    /// "Förbättringen" av en Lightroom-HDR: kopierar TIFF och JPEG oförändrade till de förväntade
+    /// `_enh`-filerna och skriver samma metadata som en riktig förbättring skulle (EXIF från HDR-filen).
+    nonisolated static func passThroughEnhancement(job: EnhanceJob, request req: EnhancementEngine.Request,
+                                                   exiftoolPath: String?) throws -> EnhancementEngine.Outcome {
+        let fm = FileManager.default
+        for dest in [req.tiffURL, req.jpegURL] {
+            try? fm.removeItem(at: dest)
+            try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
+        try fm.copyItem(at: job.source, to: req.tiffURL)
+        if let jpeg = job.hdrJPEG, fm.fileExists(atPath: jpeg.path) {
+            try fm.copyItem(at: jpeg, to: req.jpegURL)
+        } else {
+            try HDRWriter.writeJPEG(fromImageAt: job.source, to: req.jpegURL, maxDimension: 4000, quality: 0.92)
+        }
+        var width = 0, height = 0
+        if let source = CGImageSourceCreateWithURL(job.source as CFURL, nil),
+           let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] {
+            width = props[kCGImagePropertyPixelWidth] as? Int ?? 0
+            height = props[kCGImagePropertyPixelHeight] as? Int ?? 0
+        }
+        var written = false
+        if let exiftoolPath {
+            written = HDRWriter.writeMetadata(from: job.source,
+                                              outputs: [(req.tiffURL, req.tiffMetadata), (req.jpegURL, req.jpegMetadata)],
+                                              exiftoolPath: exiftoolPath)
+        }
+        return EnhancementEngine.Outcome(analysis: EnhancementAnalysis(), autoParameters: .identity, parameters: .identity,
+                                         width: width, height: height, metadataWritten: written)
     }
 
     /// Exteriör enligt AI-taggarna (Vision): taggen "Exteriör" och ingen "Interiör".
@@ -54,7 +95,8 @@ extension PipelineRunner {
                 let merged = photos.contains(where: \.accepted) ? photos.filter(\.accepted) : photos
                 jobs.append(EnhanceJob(key: "hdr_group_\(group.id)", kind: .hdr, source: tiff, label: "HDR grupp \(group.id)",
                                       isExterior: Self.isExterior(photos), identity: merged.map(\.nefURL),
-                                      windowMask: Self.hdrMaskURL(outputDir: outputDir, groupId: group.id)))
+                                      windowMask: Self.hdrMaskURL(outputDir: outputDir, groupId: group.id),
+                                      hdrJPEG: hdrFiles[group.id]?.jpeg))
             } else {
                 for photo in photos {
                     if photo.rejected { rejected += 1; continue }
@@ -88,7 +130,7 @@ extension PipelineRunner {
     /// Per-bild-fingerprint: original-NEF:ernas namn och storlek (de skrivs aldrig
     /// till — se `EnhanceJob.identity`) + profilens innehåll + motorns version + det
     /// som ändrar källan (HDR-motorns version och inställningar, DNG-renderingens storlek).
-    func enhanceFingerprint(job: EnhanceJob, profile: EnhancementProfile) -> String {
+    func enhanceFingerprint(job: EnhanceJob, profile: EnhancementProfile, passthrough: Bool = false) -> String {
         let settings = AppSettings.shared
         return SessionManifestStore.fingerprint(fileURLs: job.identity.isEmpty ? [job.source] : job.identity, settings: [
             "profile": profile.canonicalJSON,
@@ -99,7 +141,8 @@ extension PipelineRunner {
             "sky": "\(settings.enhanceSkyEnabled)",
             "maxDimension": "\(settings.hdrMaxDimension)",
             "hdr": job.kind == .hdr ? "v\(HDREngine.version) align=\(settings.hdrAlignEnabled) sharpen=\(settings.hdrSharpenEnabled)" : "-",
-            "windowMask": Self.windowMaskDigest(job.windowMask)
+            "windowMask": Self.windowMaskDigest(job.windowMask),
+            "lightroomPassthrough": "\(passthrough)"
         ])
     }
 
@@ -156,6 +199,10 @@ extension PipelineRunner {
         guard !existing.isEmpty || log?.entries[key] != nil else { return [] }
         guard let job = enhanceJobs(outputDir: outputDir).jobs.first(where: { $0.key == key }) else { return [] }
 
+        // Omsammanslagningen i granskningen görs alltid med den inbyggda motorn och ersätter då
+        // Lightroom-posten, så detta är bara ett skydd: en Lightroom-HDR förbättras aldrig här.
+        let passthrough = Self.isLightroomPassthrough(job, hdrLog: HDRLog.load(from: outputDir), skipSetting: settings.enhanceSkipForLightroomHDR)
+        if passthrough { return [] }
         let profile = EnhancementProfileStore.shared.profile(id: settings.enhanceProfileID)
         let stagingDir = AddressFolderLayout.enhancedStagingDir(in: outputDir)
         let tiff = existing.first { ["tiff", "tif"].contains($0.pathExtension.lowercased()) }
@@ -180,7 +227,7 @@ extension PipelineRunner {
             var updated = log ?? EnhancementLog(engineVersion: EnhancementEngine.version, profileID: profile.id)
             updated.entries[key] = EnhancementLog.Entry(
                 kind: job.kind.rawValue, source: job.source.lastPathComponent,
-                fingerprint: enhanceFingerprint(job: job, profile: profile), profileID: profile.id, profile: profile,
+                fingerprint: enhanceFingerprint(job: job, profile: profile, passthrough: passthrough), profileID: profile.id, profile: profile,
                 analysis: outcome.analysis, autoParameters: outcome.autoParameters, parameters: outcome.parameters,
                 outputs: [tiff.lastPathComponent, jpeg.lastPathComponent],
                 width: outcome.width, height: outcome.height, seconds: Date().timeIntervalSince(started), date: Date()
@@ -222,8 +269,11 @@ extension PipelineRunner {
         var fingerprints: [String: String] = [:]
         var pending: [EnhanceJob] = []
         var migrated = 0
+        let passthroughKeys = Set(jobs.filter {
+            Self.isLightroomPassthrough($0, hdrLog: hdrLog, skipSetting: settings.enhanceSkipForLightroomHDR)
+        }.map(\.key))
         for job in jobs {
-            let fingerprint = enhanceFingerprint(job: job, profile: profile)
+            let fingerprint = enhanceFingerprint(job: job, profile: profile, passthrough: passthroughKeys.contains(job.key))
             fingerprints[job.key] = fingerprint
             let files = existing[job.key] ?? []
             let hasTiff = files.contains { ["tiff", "tif"].contains($0.pathExtension.lowercased()) }
@@ -320,6 +370,13 @@ extension PipelineRunner {
                 let req = request(for: job)
                 state.statusMessage = "Förbättrar \(job.label) (\(idx + 1)/\(pending.count))..."
                 state.currentFileIndex = idx
+                if passthroughKeys.contains(job.key) {
+                    return {
+                        let started = Date()
+                        let outcome = try Self.passThroughEnhancement(job: job, request: req, exiftoolPath: exiftoolPath)
+                        return EnhanceJobOutcome(outcome: outcome, seconds: Date().timeIntervalSince(started))
+                    }
+                }
                 return {
                     let started = Date()
                     let outcome = try await PipelineMetrics.jobAsync(
@@ -353,7 +410,9 @@ extension PipelineRunner {
                     log.save(to: outputDir)
                     done += 1
                     state.appendStepLog(.enhancePhotos,
-                        "\(job.label) [\(profile.name)]: \(outcome.parameters.summary) — \(StepTiming.formatExact(seconds))",
+                        passthroughKeys.contains(job.key)
+                            ? "\(job.label): Lightroom-HDR, förbättring hoppas över (filen kopierad som den är)"
+                            : "\(job.label) [\(profile.name)]: \(outcome.parameters.summary) — \(StepTiming.formatExact(seconds))",
                         type: .success)
                 case .failure(let error):
                     failed += 1
