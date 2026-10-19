@@ -78,6 +78,10 @@ class AppSettings: ObservableObject {
     /// (HDR-TIFF per bracket, DNG-rendering per singel) efter HDR-steget.
     /// Skriver nya filer i `enhanced/` — originalen rörs aldrig.
     @AppStorage("enhanceEnabled") var enhanceEnabled: Bool = true
+    /// Lightroom-renderade HDR-bilder (motorn "lightroom") hoppar över Förbättra: Lightrooms
+    /// egen framkallning är redan färdig, och vår förbättring la dimma ovanpå. Filen kopieras
+    /// vidare som den är (till `enhanced/`), så att resten av kedjan får samma filer som vanligt.
+    @AppStorage("enhanceSkipForLightroomHDR") var enhanceSkipForLightroomHDR: Bool = true
     /// Id för den stilprofil som styr förbättringen (`EnhancementProfileStore`).
     /// "Filmförslag": efter sorteringen skapas ett automatiskt filmförslag (Objektfilm, 9:16,
     /// 5 bilder) per kalendermatchad adress i `<adress> FILM/`. Rör aldrig en redigerad eller

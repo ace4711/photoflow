@@ -101,6 +101,7 @@ final class PreflightModel: ObservableObject {
             supportDir: Self.supportDirectory,
             lightroomPluginLink: Self.lightroomPluginLink,
             lightroomInstalled: FileManager.default.fileExists(atPath: Self.lightroomAppPath),
+            lightroomIsHDREngine: settings.hdrMergeEnabled && settings.hdrEngine == HDRLog.lightroomEngine,
             sdCards: settings.sdCardSearchPaths.map(\.lastPathComponent),
             calendar: gatherCalendar(settings),
             tools: gatherTools(settings),

@@ -31,6 +31,11 @@ extension PipelineRunner {
         var tiffURL: URL
         var jpegURL: URL
         var reason: String
+        /// Original-NEF:erna (identiteten i fingerprintet) — används för att räkna om fingerprintet
+        /// när en Lightroom-grupp faller tillbaka på Core Image.
+        var identity: [URL] = []
+        /// Filerna som skickas till Lightroom: NEF-originalen, annars DNG-kopian.
+        var lightroomFiles: [URL] = []
     }
 
     /// HDR-motorns inställningar som `HDREngine.Options` (mask/felsökning läggs till per grupp).
@@ -45,11 +50,13 @@ extension PipelineRunner {
     }
 
     /// Fingerprint för en grupps HDR med de nuvarande inställningarna (se `HDRLog.fingerprint`).
-    func currentHDRFingerprint(identity: [URL]) -> String {
+    /// `engine` överstyr inställningen (reservmotorn när en Lightroom-grupp faller tillbaka).
+    func currentHDRFingerprint(identity: [URL], engine overrideEngine: String? = nil) -> String {
         let settings = AppSettings.shared
-        return HDRLog.fingerprint(identity: identity, engine: settings.hdrEngine, maxDimension: settings.hdrMaxDimension,
+        let engine = overrideEngine ?? settings.hdrEngine
+        return HDRLog.fingerprint(identity: identity, engine: engine, maxDimension: settings.hdrMaxDimension,
                                   align: settings.hdrAlignEnabled, sharpen: settings.hdrSharpenEnabled,
-                                  windowPull: settings.hdrEngine == "opencv" ? WindowPull.Options(enabled: false) : settings.windowPullOptions,
+                                  windowPull: engine == "opencv" ? WindowPull.Options(enabled: false) : settings.windowPullOptions,
                                   method: settings.hdrMethodValue)
     }
 
@@ -78,15 +85,20 @@ extension PipelineRunner {
         let bracketGroups = groups.filter { ($0["is_bracket"] as? Bool) == true }
         guard !bracketGroups.isEmpty else { return }
 
-        let engine = AppSettings.shared.hdrEngine
+        // "lightroom" renderar grupperna i Lightroom Classic; de som misslyckas görs med Core Image
+        // (`engine` är därför aldrig "lightroom" i resten av steget — det är reservmotorn).
+        let configuredEngine = AppSettings.shared.hdrEngine
+        let useLightroom = configuredEngine == HDRLog.lightroomEngine
+        let engine = useLightroom ? "coreImage" : configuredEngine
         let engineLabel = engine == "opencv" ? "Mertens exposure fusion (OpenCV)" : "Exposure fusion (Core Image RAW)"
+        let startLabel = useLightroom ? "Lightroom Classic (reserv: \(engineLabel))" : engineLabel
 
         state.currentStep = .mergingHDR
-        state.statusMessage = "Slår ihop HDR-brackets (\(engineLabel))..."
+        state.statusMessage = "Slår ihop HDR-brackets (\(startLabel))..."
         state.totalFiles = bracketGroups.count
         state.currentFileIndex = 0
         state.progress = 0.0
-        state.appendLog("Startar HDR-sammanslagning med \(engineLabel) (\(bracketGroups.count) bracket-grupper)...", type: .info)
+        state.appendLog("Startar HDR-sammanslagning med \(startLabel) (\(bracketGroups.count) bracket-grupper)...", type: .info)
 
         // Recursive NEF lookup, used to resolve the RAW fallback when a file
         // hasn't been converted to DNG yet (same pattern as loadBracketGroups).
@@ -108,7 +120,7 @@ extension PipelineRunner {
         // använder alla exponeringar (fönstren kommer ur de mörka ramarna).
         let windowPullOn = engine != "opencv" && (AppSettings.shared.hdrWindowPullEnabled || AppSettings.shared.hdrMethodValue.isRadiance)
         var adopted = 0
-        var groupsToMerge: [HDRMergeJob] = []
+        var pendingJobs: [HDRMergeJob] = []
         for group in bracketGroups {
             let groupId = (group["group_id"] as? Int) ?? 0
             let key = HDRLog.key(groupId: groupId)
@@ -155,13 +167,15 @@ extension PipelineRunner {
                 }
             }
 
-            let usable = engine == "opencv" ? previewPaths.count : frames.count
+            // Lightroom tar NEF-originalen (annars DNG-kopian) — den behöver inga förberedda ramar.
+            let lightroomFiles = selectedFiles.compactMap { name in nefLookup[name] ?? rawURL(name) }
+            let usable = useLightroom ? lightroomFiles.count : (engine == "opencv" ? previewPaths.count : frames.count)
             guard usable >= 2 else { continue }
 
             // Identitet: original-NEF:erna (skrivs aldrig till).
             let identityNames = selectedFiles + (windowSourceName.map { selectedFiles.contains($0) ? [] : [$0] } ?? [])
             let identity = identityNames.compactMap { nefLookup[$0] }
-            let fingerprint = currentHDRFingerprint(identity: identity)
+            let fingerprint = currentHDRFingerprint(identity: identity, engine: configuredEngine)
             let existing = existingHDR[groupId]
             let decision = HDRLog.decide(fileExists: existing?.tiff != nil, entry: entry, fingerprint: fingerprint,
                                          currentVersion: HDREngine.version, policy: policy, force: forceAll,
@@ -175,14 +189,14 @@ extension PipelineRunner {
                 adopted += 1
                 continue
             case .merge(let reason):
-                groupsToMerge.append(HDRMergeJob(
+                pendingJobs.append(HDRMergeJob(
                     groupId: groupId, previewPaths: previewPaths, frames: frames, windowSource: windowSource,
                     frameNames: selectedFiles, windowSourceName: windowSourceName,
                     manualSelection: entry?.manualSelection ?? false,
                     firstPhotoDate: Self.firstPhotoDate(ofGroup: group), fingerprint: fingerprint,
                     tiffURL: existing?.tiff ?? hdrDir.appendingPathComponent("hdr_group_\(groupId).tiff"),
                     jpegURL: existing?.jpeg ?? hdrDir.appendingPathComponent("hdr_group_\(groupId).jpg"),
-                    reason: reason))
+                    reason: reason, identity: identity, lightroomFiles: lightroomFiles))
             }
         }
         if adopted > 0 || forceAll {
@@ -193,7 +207,7 @@ extension PipelineRunner {
             }
         }
 
-        if groupsToMerge.isEmpty {
+        if pendingJobs.isEmpty {
             logDecision(step: "hdr_merge", decision: "skipped", details: [
                 "reason": "all_complete"
             ])
@@ -226,8 +240,31 @@ extension PipelineRunner {
 
         var successCount = 0
         var failCount = 0
-        state.updateStepProgress(.createHDR, processed: 0, total: groupsToMerge.count)
-        if groupsToMerge.count < bracketGroups.count { state.markStepUntimed(.createHDR) }
+        let totalJobs = pendingJobs.count
+        state.updateStepProgress(.createHDR, processed: 0, total: totalJobs)
+        if totalJobs < bracketGroups.count { state.markStepUntimed(.createHDR) }
+
+        // Lightroom först: de som lyckas är klara, de övriga görs med Core Image nedan.
+        var finished = 0
+        var coreImageJobs = pendingJobs
+        if useLightroom {
+            let handled = try await renderHDRGroupsWithLightroom(
+                jobs: pendingJobs, outputDir: outputDir, exiftoolPath: exiftoolPath, metadataContext: metadataContext,
+                hdrLog: &hdrLog, baseOptions: baseOptions)
+            successCount += handled.succeeded.count
+            finished = handled.succeeded.count
+            coreImageJobs = handled.fallback
+            if !handled.fallback.isEmpty {
+                state.appendStepLog(.createHDR, "\(handled.fallback.count) grupper görs med Core Image i stället (Lightroom lyckades inte)", type: .warning)
+            }
+            state.progress = Double(finished) / Double(totalJobs)
+            state.updateStepProgress(.createHDR, processed: finished, total: totalJobs)
+        }
+        let groupsToMerge = coreImageJobs.map { job -> HDRMergeJob in
+            var job = job
+            if useLightroom { job.fingerprint = currentHDRFingerprint(identity: job.identity, engine: engine) }
+            return job
+        }
 
         // Fas 1c: flera grupper samtidigt (taket från `ResourceGovernor`, läst om före varje grupp
         // så att minnestryck sänker det). Grupperna är oberoende och skriver var sin fil; allt efter
@@ -238,7 +275,6 @@ extension PipelineRunner {
                 maxDimension: baseOptions.maxDimension, method: baseOptions.method,
                 // Största gruppen: ramarna plus den mörkaste som radians alltid tar med.
                 frames: groupsToMerge.map { $0.frames.count + ($0.windowSource == nil ? 0 : 1) }.max() ?? 4))
-        var finished = 0
 
         try await OrderedParallel.run(
             count: groupsToMerge.count,
@@ -355,7 +391,8 @@ extension PipelineRunner {
                             manualSelection: group.manualSelection,
                             reference: mergeResult.map { $0.referenceFrame.deletingPathExtension().lastPathComponent + ".NEF" },
                             windowSource: mergeResult?.windowSource == nil ? nil : group.windowSourceName,
-                            window: mergeResult?.window, radiance: mergeResult?.radiance, mergedAt: Date(), seconds: outcome.seconds)
+                            window: mergeResult?.window, radiance: mergeResult?.radiance, mergedAt: Date(), seconds: outcome.seconds,
+                            engine: engine)
                         hdrLog.updatedAt = Date()
                         hdrLog.save(to: outputDir)
                         if let radiance = mergeResult?.radiance {
@@ -373,7 +410,7 @@ extension PipelineRunner {
                         let sizeMB = String(format: "%.1f", Double(fileSize) / 1_048_576.0)
                         let took = StepTiming.formatExact(outcome.seconds)
                         state.appendStepLog(.createHDR, "HDR grupp \(group.groupId): klar på \(took) → hdr_group_\(group.groupId).tiff (\(sizeMB) MB)", type: .success)
-                        state.appendLog("HDR \(idx + 1)/\(groupsToMerge.count) klar på \(took)", type: .success)
+                        state.appendLog("HDR \(finished + 1)/\(totalJobs) klar på \(took)", type: .success)
                         // Show JPEG preview in UI
                         let showURL = FileManager.default.fileExists(atPath: previewPath)
                             ? URL(fileURLWithPath: previewPath)
@@ -393,8 +430,8 @@ extension PipelineRunner {
 
                 finished += 1
                 state.currentFileIndex = finished
-                state.progress = Double(finished) / Double(groupsToMerge.count)
-                state.updateStepProgress(.createHDR, processed: finished, total: groupsToMerge.count)
+                state.progress = Double(finished) / Double(totalJobs)
+                state.updateStepProgress(.createHDR, processed: finished, total: totalJobs)
             }
         )
 
@@ -450,7 +487,9 @@ extension PipelineRunner {
             ? groupPhotos.min(by: { $0.exposureSeconds < $1.exposureSeconds }) : nil
         let windowPhoto = AppSettings.shared.hdrWindowPullEnabled && AppSettings.shared.hdrEngine != "opencv" ? darkest : nil
 
-        let engine = AppSettings.shared.hdrEngine
+        // Granskningens omgörning går alltid med den inbyggda motorn (Lightroom styrs av en
+        // hel körning, inte per grupp) — "lightroom" ger här Core Image.
+        let engine = AppSettings.shared.hdrEngine == HDRLog.lightroomEngine ? "coreImage" : AppSettings.shared.hdrEngine
         let engineLabel = engine == "opencv" ? "Mertens exposure fusion (OpenCV)" : "Exposure fusion (Core Image RAW)"
         state.appendLog("Gör om HDR för grupp \(group.id) med \(selectedPhotos.count) bilder (\(engineLabel))...", type: .info)
 
@@ -527,11 +566,11 @@ extension PipelineRunner {
             var hdrLog = HDRLog.load(from: outputDir) ?? HDRLog()
             hdrLog.entries[HDRLog.key(groupId: group.id)] = HDRLog.Entry(
                 engineVersion: HDREngine.version,
-                fingerprint: currentHDRFingerprint(identity: identityNames.compactMap { nefByName[$0] }),
+                fingerprint: currentHDRFingerprint(identity: identityNames.compactMap { nefByName[$0] }, engine: engine),
                 frames: frameNames, manualSelection: true,
                 reference: mergeResult.map { $0.referenceFrame.deletingPathExtension().lastPathComponent + ".NEF" },
                 windowSource: windowName, window: mergeResult?.window, radiance: mergeResult?.radiance, mergedAt: Date(),
-                seconds: Date().timeIntervalSince(started))
+                seconds: Date().timeIntervalSince(started), engine: engine)
             hdrLog.updatedAt = Date()
             hdrLog.save(to: outputDir)
 

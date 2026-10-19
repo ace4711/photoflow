@@ -261,6 +261,8 @@ nonisolated enum Preflight {
         /// `~/Library/Application Support/Adobe/Lightroom/Modules/PhotoFlowLR.lrplugin`.
         var lightroomPluginLink: URL
         var lightroomInstalled: Bool
+        /// HDR-motorn är Lightroom Classic: då är både programmet och pluginet ett krav.
+        var lightroomIsHDREngine: Bool = false
         /// Namn på anslutna volymer som ser ut som minneskort.
         var sdCards: [String]
         var calendar: CalendarInput
@@ -649,6 +651,13 @@ nonisolated enum Preflight {
                 path: url.path, fix: .relinkLightroomPlugin
             )
         }
+        if input.lightroomIsHDREngine, !input.lightroomInstalled {
+            return Check(
+                id: "lightroom.app", section: .lightroom, status: .warning, title: "Lightroom Classic hittas inte",
+                detail: "HDR-motorn är inställd på Lightroom Classic, men programmet finns inte i Program. Grupperna görs med Core Image i stället.",
+                path: nil, fix: nil
+            )
+        }
         if link.exists {
             return Check(
                 id: "lightroom.plugin", section: .lightroom, status: .ok, title: "Lightroom-pluginet",
@@ -658,9 +667,11 @@ nonisolated enum Preflight {
         }
         return Check(
             id: "lightroom.plugin", section: .lightroom,
-            status: input.lightroomInstalled ? .warning : .info,
+            status: input.lightroomInstalled || input.lightroomIsHDREngine ? .warning : .info,
             title: "Lightroom-pluginet är inte installerat",
-            detail: input.lightroomInstalled
+            detail: input.lightroomIsHDREngine
+                ? "HDR-motorn är Lightroom Classic, men pluginet saknas — grupperna görs då med Core Image. Välj PhotoFlowLR.lrplugin så länkas det in (starta om Lightroom efteråt)."
+                : input.lightroomInstalled
                 ? "Behövs för att skicka bilder till Lightroom. Välj PhotoFlowLR.lrplugin så länkas det in."
                 : "Behövs bara om du använder Lightroom Classic.",
             path: url.path, fix: .relinkLightroomPlugin

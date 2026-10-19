@@ -165,6 +165,11 @@ struct EnhanceSettingsRows: View {
             }
             .pickerStyle(.menu)
 
+            Toggle("Hoppa över Förbättra för Lightroom-HDR", isOn: $settings.enhanceSkipForLightroomHDR)
+            Text("HDR-bilder som Lightroom renderat är redan färdigframkallade. Då kopieras de vidare som de är i stället för att få vår förbättring (som annars kan ge dimma).")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
             Toggle("Räta lodlinjer", isOn: $settings.enhanceUprightEnabled)
             Toggle("Blå himmel i exteriörer (syntetisk, Mäklarstil)", isOn: $settings.enhanceSkyEnabled)
             Text("Byter vit eller grå himmel mot en blå gradient, som redigeraren gör. Himlen kommer inte från dina exponeringar — använd med eftertanke.")
@@ -223,8 +228,15 @@ struct PipelineTab: View {
                     Picker("Motor", selection: $settings.hdrEngine) {
                         Text("Core Image RAW (Swift)").tag("coreImage")
                         Text("OpenCV (äldre, JPEG-förhandsbilder)").tag("opencv")
+                        Text("Lightroom Classic").tag("lightroom")
                     }
                     .pickerStyle(.menu)
+
+                    if settings.hdrEngine == "lightroom" {
+                        Text("Lightroom Classic måste vara igång med PhotoFlowLR-pluginet (Arkiv → Plugin-hanteraren). Använd inte datorn medan HDR körs: pluginet styr Lightroom med tangenttryckningar. Grupper som Lightroom inte klarar görs automatiskt med Core Image.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
 
                     if settings.hdrEngine == "coreImage" {
                         Text("Riktig exposure fusion på RAW-data (DNG/NEF) via Core Image, i ren Swift — bevarar RAW-dynamiken i stället för att fusionera 8-bitars JPEG-förhandsbilder.")

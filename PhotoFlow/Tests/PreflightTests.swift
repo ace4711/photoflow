@@ -52,6 +52,7 @@ struct PreflightTests {
         calendar: Preflight.CalendarInput? = nil,
         tools: [Preflight.ToolInput] = [],
         lightroomInstalled: Bool = true,
+        lightroomIsHDREngine: Bool = false,
         modelAvailable: Bool = false
     ) -> Preflight.Input {
         Preflight.Input(
@@ -60,6 +61,7 @@ struct PreflightTests {
             supportDir: URL(fileURLWithPath: "/Users/x/Library/Application Support/PhotoFlow"),
             lightroomPluginLink: URL(fileURLWithPath: "/Users/x/Library/Application Support/Adobe/Lightroom/Modules/PhotoFlowLR.lrplugin"),
             lightroomInstalled: lightroomInstalled,
+            lightroomIsHDREngine: lightroomIsHDREngine,
             sdCards: [],
             calendar: calendar ?? Self.calendarOK,
             tools: tools,
@@ -286,6 +288,18 @@ struct PreflightTests {
         disk.items["/Users/x/Library/Application Support/Adobe/Lightroom/Modules/PhotoFlowLR.lrplugin"] = nil
         let report = Preflight.evaluate(input(lightroomInstalled: false), probe: disk.probe)
         #expect(report.check("lightroom.plugin")?.status == .info)
+    }
+
+    @Test("Lightroom som HDR-motor: saknat plugin och saknat program varnar")
+    func lightroomEngine_warnsWhenMissing() {
+        let disk = healthyDisk()
+        disk.items["/Users/x/Library/Application Support/Adobe/Lightroom/Modules/PhotoFlowLR.lrplugin"] = nil
+        let noPlugin = Preflight.evaluate(input(lightroomIsHDREngine: true), probe: disk.probe)
+        #expect(noPlugin.check("lightroom.plugin")?.status == .warning)
+        let noApp = Preflight.evaluate(input(lightroomInstalled: false, lightroomIsHDREngine: true), probe: healthyDisk().probe)
+        #expect(noApp.check("lightroom.app")?.status == .warning)
+        let fine = Preflight.evaluate(input(lightroomIsHDREngine: true), probe: healthyDisk().probe)
+        #expect(fine.check("lightroom.plugin")?.status == .ok)
     }
 
     // MARK: - Övrigt

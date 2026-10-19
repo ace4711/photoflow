@@ -23,9 +23,9 @@ extension PipelineRunner {
         return dir
     }
 
-    private static var triggerFileURL: URL { lightroomBridgeDirectory.appendingPathComponent("lr_trigger.json") }
-    private static var doneFileURL: URL { lightroomBridgeDirectory.appendingPathComponent("lr_done.json") }
-    private static var statusFileURL: URL { lightroomBridgeDirectory.appendingPathComponent("lr_status.json") }
+    static var triggerFileURL: URL { lightroomBridgeDirectory.appendingPathComponent("lr_trigger.json") }
+    static var doneFileURL: URL { lightroomBridgeDirectory.appendingPathComponent("lr_done.json") }
+    static var statusFileURL: URL { lightroomBridgeDirectory.appendingPathComponent("lr_status.json") }
 
     /// Sends selected bracket groups to Lightroom Classic for HDR merge.
     /// Creates a staging folder with the selected files and opens Lightroom + Finder.

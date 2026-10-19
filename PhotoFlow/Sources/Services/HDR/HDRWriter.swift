@@ -82,6 +82,24 @@ nonisolated enum HDRWriter {
         }
     }
 
+    /// JPEG-förhandsvisning av en färdig bildfil (Lightroom-exporten): nedskalad till
+    /// `maxDimension` på långa sidan (0 = full storlek), sRGB, med EXIF-orienteringen tillämpad.
+    static func writeJPEG(fromImageAt url: URL, to jpegURL: URL, maxDimension: Int, quality: Double) throws {
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { throw WriterError.colorSpaceCreationFailed }
+        guard var image = CIImage(contentsOf: url, options: [.applyOrientationProperty: true]) else {
+            throw WriterError.cgImageCreationFailed
+        }
+        let longSide = max(image.extent.width, image.extent.height)
+        if maxDimension > 0, longSide > CGFloat(maxDimension) {
+            let scale = CGFloat(maxDimension) / longSide
+            image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        }
+        let context = CIContext(options: [.workingColorSpace: colorSpace])
+        try context.writeJPEGRepresentation(
+            of: image, to: jpegURL, colorSpace: colorSpace,
+            options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: quality])
+    }
+
     /// Unsharp mask på RGBA float32-pixlar (sRGB-kodade, som resten av
     /// skrivningen), utan färghantering. Kanterna förlängs (`clampedToExtent`)
     /// så att bildkanten inte får en ljus eller mörk ram.

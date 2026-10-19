@@ -41,7 +41,13 @@ nonisolated struct HDRLog: Codable, Sendable, Equatable {
         /// en förbättring som är äldre än så.
         var mergedAt: Date?
         var seconds: Double?
+        /// Motorn som gjorde filen: "coreImage", "opencv" eller "lightroom". nil = äldre post.
+        /// "Förbättra bilder" hoppar över "lightroom" när inställningen säger det.
+        var engine: String?
     }
+
+    /// Motorvärdet för Lightroom Classic (`AppSettings.hdrEngine`).
+    static let lightroomEngine = "lightroom"
 
     init(entries: [String: Entry] = [:]) {
         self.updatedAt = Date()
@@ -95,6 +101,11 @@ nonisolated struct HDRLog: Codable, Sendable, Equatable {
     /// motorversionen och inställningen "Gör om befintliga HDR när motorn uppdaterats".
     @MainActor static func fingerprint(identity: [URL], engine: String, maxDimension: Int, align: Bool, sharpen: Bool,
                             windowPull: WindowPull.Options, method: HDREngine.Method = .radiance) -> String {
+        // Lightroom renderar själv: upplösning, justering, skärpa, window pull och metod gäller inte,
+        // bara vilka ramar som slogs ihop (och att det var Lightroom — byte av motor gör om gruppen).
+        if engine == lightroomEngine {
+            return SessionManifestStore.fingerprint(fileURLs: identity, settings: ["engine": engine, "render": "lr-auto-1"])
+        }
         var settings: [String: String] = [
             "engine": engine, "maxDimension": "\(maxDimension)", "align": "\(align)", "sharpen": "\(sharpen)"
         ]

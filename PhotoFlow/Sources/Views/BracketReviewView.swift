@@ -82,7 +82,8 @@ struct BracketReviewView: View {
     /// `AppSettings.hdrEngine`) — previously hardcoded to "Mertens Exposure
     /// Fusion (OpenCV)" even after Fas 3a added the Core Image RAW engine.
     private var engineLabel: String {
-        settings.hdrEngine == "opencv" ? "Mertens Exposure Fusion (OpenCV)" : "Exposure Fusion (Core Image RAW)"
+        settings.hdrEngine == "opencv" ? "Mertens Exposure Fusion (OpenCV)"
+            : settings.hdrEngine == "lightroom" ? "Lightroom Classic (omgörning här: Core Image RAW)" : "Exposure Fusion (Core Image RAW)"
     }
 
     var body: some View {
