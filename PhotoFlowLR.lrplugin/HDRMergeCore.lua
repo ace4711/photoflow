@@ -31,7 +31,7 @@ local M = {}
 
 --- Pluginversion (samma som Info.lua) — skrivs i lr_status.json så att appen/CLI:t ser vilken
 --- version som kördes.
-M.VERSION = "1.4"
+M.VERSION = "1.5"
 
 -- MARK: - Bridge folder ------------------------------------------------------
 --
@@ -326,13 +326,17 @@ function M.parseTrigger(content)
                     -- Experimentläget (docs/plan-hdr-jamforelse.md, avsnitt 4):
                     id = type(rawGroup.id) == "string" and rawGroup.id or nil,
                     export_dir = type(rawGroup.export_dir) == "string" and rawGroup.export_dir or nil,
+                    -- Produktionsläget ("render"): exakt sökväg där den renderade bilden ska hamna.
+                    output_path = type(rawGroup.output_path) == "string" and rawGroup.output_path or nil,
                 }
             end
         end
     end
     return {
         groups = groups,
-        mode = decoded.mode == "experiment" and "experiment" or "normal",
+        mode = (decoded.mode == "experiment" or decoded.mode == "render") and decoded.mode or "normal",
+        -- Produktionsläget: ta bort de tillfälliga fotona (ramarna + HDR-DNG:n) ur katalogen efteråt.
+        cleanup_catalog = decoded.cleanup_catalog ~= false,
         export_format = decoded.export_format == "JPEG" and "JPEG" or "TIFF",
         -- false = hoppa över Ctrl+Shift+H och använd bara Ctrl+H + Retur.
         headless = decoded.headless ~= false,
@@ -384,10 +388,10 @@ M.encodeJSON = encodeJSON
 
 --- Skriver `lr_status.json`: `{status, plugin_version, results:[…]}`. Resultatobjekten får vara
 --- vilka tabeller som helst (i experimentläget även id, export, dng och develop).
-local function writeStatus(status, results)
+local function writeStatus(status, results, current)
     local file = io.open(M.statusPath(), "w")
     if file then
-        file:write(encodeJSON({ status = status, plugin_version = M.VERSION, results = results or {} }))
+        file:write(encodeJSON({ status = status, plugin_version = M.VERSION, results = results or {}, current = current }))
         file:close()
     end
 end
@@ -531,11 +535,12 @@ end
 
 --- Exporterar `photo` med Lightrooms egen exportmotor: 16-bitars sRGB-TIFF (eller JPEG),
 --- ingen storleksbegränsning, ingen utskärpning, filnamn `lr-auto`. Returnerar filens sökväg.
-local function exportPhoto(photo, exportDir, format)
+local function exportPhoto(photo, exportDir, format, baseName)
+    baseName = baseName or "lr-auto"
     LrFileUtils.createAllDirectories(exportDir)
     local extensions = format == "JPEG" and { "jpg", "jpeg" } or { "tif", "tiff" }
     for _, ext in ipairs(extensions) do
-        LrFileUtils.delete(LrPathUtils.child(exportDir, "lr-auto." .. ext))
+        LrFileUtils.delete(LrPathUtils.child(exportDir, baseName .. "." .. ext))
     end
     local settings = {
         LR_export_destinationType = "specificFolder",
@@ -545,7 +550,7 @@ local function exportPhoto(photo, exportDir, format)
         LR_size_doConstrain = false,
         LR_outputSharpeningOn = false,
         LR_renamingTokensOn = true,
-        LR_tokens = "lr-auto",
+        LR_tokens = baseName,
         LR_collisionHandling = "overwrite",
         LR_reimportExportedPhoto = false,
         LR_export_colorSpace = "sRGB",
@@ -558,7 +563,7 @@ local function exportPhoto(photo, exportDir, format)
     local session = LrExportSession({ photosToExport = { photo }, exportSettings = settings })
     session:doExportOnCurrentTask()
     for _, ext in ipairs(extensions) do
-        local path = LrPathUtils.child(exportDir, "lr-auto." .. ext)
+        local path = LrPathUtils.child(exportDir, baseName .. "." .. ext)
         if LrFileUtils.exists(path) then return path end
     end
     return nil
@@ -566,6 +571,7 @@ end
 
 --- Sammanslagningen för en grupp i experimentläget. `photos` är redan importerade och markerade.
 local function experimentMerge(catalog, group, photos, trigger, firstFile)
+    local render = trigger.mode == "render"
     local started = os.time()
     local label = group.id or tostring(group.group_id)
     local result = { group_id = group.group_id, id = group.id, status = "error", message = "" }
@@ -605,6 +611,11 @@ local function experimentMerge(catalog, group, photos, trigger, firstFile)
 
     if not dngPath then
         result.message = "Ingen ny -HDR.dng dök upp i " .. sourceDir
+        if render then
+            -- En dialog som blev stående får inte störa nästa grupp.
+            sendKeys("key code 53")
+            LrTasks.sleep(1)
+        end
         return result
     end
     logger:trace("Grupp " .. label .. ": ny DNG " .. dngPath)
@@ -616,6 +627,36 @@ local function experimentMerge(catalog, group, photos, trigger, firstFile)
         return result
     end
     result.develop = readDevelopSettings(photo)
+
+    if render then
+        -- Produktionsläget: exportera 16-bitars sRGB-TIFF och lägg filen exakt där appen bad om den.
+        local outputPath = group.output_path
+        if not outputPath or outputPath == "" then
+            result.message = "Triggern saknar output_path"
+            result.sourceDng = dngPath
+            return result, photo
+        end
+        local outputDir = LrPathUtils.parent(outputPath)
+        local baseName = "lr-render-" .. tostring(group.group_id) .. "-" .. tostring(os.time())
+        local exportOK, exported = LrTasks.pcall(function() return exportPhoto(photo, outputDir, "TIFF", baseName) end)
+        if not exportOK or not exported then
+            result.message = "Exporten misslyckades: " .. tostring(exportOK and "ingen fil" or exported)
+            return result, photo
+        end
+        -- Den gamla filen byts ut först när den nya är färdigexporterad.
+        LrFileUtils.delete(outputPath)
+        local moved = LrFileUtils.move(exported, outputPath)
+        if not moved and not LrFileUtils.exists(outputPath) then
+            result.message = "Kunde inte flytta " .. exported .. " till " .. outputPath
+            return result, photo
+        end
+        result.export = outputPath
+        result.sourceDng = dngPath
+        result.status = "ok"
+        result.seconds = os.time() - started
+        result.message = "HDR klar (" .. (result.mergeMethod or "?") .. "), " .. #photos .. " ramar"
+        return result, photo
+    end
 
     local exportDir = group.export_dir or group.output_dir
     if not exportDir or exportDir == "" then
@@ -641,7 +682,21 @@ local function experimentMerge(catalog, group, photos, trigger, firstFile)
     result.status = "ok"
     result.seconds = os.time() - started
     result.message = "HDR klar (" .. (result.mergeMethod or "?") .. "), " .. #photos .. " ramar"
-    return result
+    return result, photo
+end
+
+--- Tar bort de tillfälliga fotona (ramkopiorna och Lightrooms HDR-DNG) ur katalogen. Rör aldrig filerna
+--- på disk; appen städar mellanlagringsmappen. Misslyckas det är det bara kosmetiskt.
+local function cleanupCatalog(catalog, photos, hdrPhoto)
+    local toRemove = {}
+    for _, p in ipairs(photos) do toRemove[#toRemove + 1] = p end
+    if hdrPhoto then toRemove[#toRemove + 1] = hdrPhoto end
+    local ok, err = LrTasks.pcall(function()
+        catalog:withWriteAccessDo("PhotoFlow städa", function()
+            catalog:removePhotos(toRemove)
+        end)
+    end)
+    if not ok then logger:warn("Kunde inte städa katalogen: " .. tostring(err)) end
 end
 
 local function processGroup(catalog, group, groupIndex, totalGroups, progress, trigger)
@@ -714,8 +769,12 @@ local function processGroup(catalog, group, groupIndex, totalGroups, progress, t
     LrTasks.yield()
     LrTasks.sleep(M.selectSettleDelaySeconds())
 
-    if trigger and trigger.mode == "experiment" then
-        return experimentMerge(catalog, group, photos, trigger, validFiles[1])
+    if trigger and (trigger.mode == "experiment" or trigger.mode == "render") then
+        local result, hdrPhoto = experimentMerge(catalog, group, photos, trigger, validFiles[1])
+        if trigger.mode == "render" and trigger.cleanup_catalog then
+            cleanupCatalog(catalog, photos, hdrPhoto)
+        end
+        return result
     end
 
     -- Trigger HDR Merge via Ctrl+H
@@ -810,10 +869,13 @@ function M.runOnce(opts)
             end
 
             progress:setPortionComplete(i - 1, totalGroups)
+            if trigger.mode == "render" then
+                writeStatus("running", results, { group_id = group.group_id, index = i, total = totalGroups })
+            end
             local result = processGroup(catalog, group, i, totalGroups, progress, trigger)
             table.insert(results, result)
             -- Experimentläget: löpande status, så att `photoflow-cli lr-trigger --wait` kan visa förlopp.
-            if trigger.mode == "experiment" then writeStatus("running", results) end
+            if trigger.mode == "experiment" or trigger.mode == "render" then writeStatus("running", results) end
             logger:trace("Grupp " .. group.group_id .. " resultat: " .. result.status .. " — " .. result.message)
 
             LrTasks.sleep(M.betweenGroupsDelaySeconds())
